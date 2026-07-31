@@ -10,6 +10,10 @@ final class CompatibilityProxyServer {
     private let queue = DispatchQueue(label: "codex-model-switcher.compatibility-proxy")
     private var listener: NWListener?
     private var services: [String: CodexService] = [:]
+    /// Fallback cache for DeepSeek-style reasoning that must be replayed with tool calls.
+    /// Keyed by tool call id when available, otherwise by a stable fingerprint of the call.
+    private var reasoningByCallID: [String: String] = [:]
+    private let maxReasoningCacheEntries = 256
 
     func updateService(_ service: CodexService?) {
         let proxiedServices: [String: CodexService]
@@ -186,7 +190,27 @@ final class CompatibilityProxyServer {
             body["tool_choice"] = toolChoice
         }
 
+        // Map Responses reasoning controls onto Chat Completions / DeepSeek fields.
+        if let reasoning = root["reasoning"] as? [String: Any] {
+            if let effort = reasoning["effort"] as? String, !effort.isEmpty, effort != "none" {
+                body["reasoning_effort"] = effort
+                body["thinking"] = ["type": "enabled"]
+            } else if effortIsDisabled(reasoning["effort"]) {
+                body["thinking"] = ["type": "disabled"]
+            }
+        }
+        if let effort = root["reasoning_effort"] as? String, !effort.isEmpty {
+            body["reasoning_effort"] = effort
+        }
+
         return body
+    }
+
+    private func effortIsDisabled(_ value: Any?) -> Bool {
+        if let effort = value as? String {
+            return effort == "none"
+        }
+        return false
     }
 
     private func messages(from root: [String: Any]) -> [[String: Any]] {
@@ -205,41 +229,161 @@ final class CompatibilityProxyServer {
             return messages
         }
 
-        for item in input {
+        var pendingReasoning: String?
+        var index = 0
+        while index < input.count {
+            let item = input[index]
             let type = item["type"] as? String
+
+            if type == "reasoning" {
+                let text = reasoningText(from: item)
+                if !text.isEmpty {
+                    pendingReasoning = text
+                }
+                index += 1
+                continue
+            }
+
             if type == "function_call_output" {
                 messages.append([
                     "role": "tool",
                     "tool_call_id": item["call_id"] as? String ?? "",
                     "content": item["output"] as? String ?? ""
                 ])
+                index += 1
                 continue
             }
 
-            if type == "function_call" {
-                messages.append([
-                    "role": "assistant",
-                    "content": NSNull(),
-                    "tool_calls": [[
-                        "id": item["call_id"] as? String ?? item["id"] as? String ?? UUID().uuidString,
+            // DeepSeek expects one assistant message that may combine reasoning,
+            // text content, and tool_calls from a single model turn.
+            if type == "function_call" || isAssistantMessageItem(item) {
+                var content: Any = NSNull()
+                var reasoning = pendingReasoning
+                pendingReasoning = nil
+
+                if isAssistantMessageItem(item) {
+                    let text = textContent(from: item["content"])
+                    content = text.isEmpty ? NSNull() : text
+                    let fromItem = reasoningText(from: item)
+                    if !fromItem.isEmpty {
+                        reasoning = fromItem
+                    }
+                    index += 1
+                }
+
+                var toolCalls: [[String: Any]] = []
+                var firstCallID: String?
+                while index < input.count {
+                    let callItem = input[index]
+                    guard (callItem["type"] as? String) == "function_call" else { break }
+                    let callID = callItem["call_id"] as? String
+                        ?? callItem["id"] as? String
+                        ?? UUID().uuidString
+                    if firstCallID == nil {
+                        firstCallID = callID
+                    }
+                    toolCalls.append([
+                        "id": callID,
                         "type": "function",
                         "function": [
-                            "name": item["name"] as? String ?? "",
-                            "arguments": item["arguments"] as? String ?? "{}"
+                            "name": callItem["name"] as? String ?? "",
+                            "arguments": callItem["arguments"] as? String ?? "{}"
                         ]
-                    ]]
-                ])
+                    ])
+                    index += 1
+                }
+
+                if (reasoning == nil || reasoning?.isEmpty == true),
+                   let callID = firstCallID,
+                   let cached = reasoningByCallID[callID] {
+                    reasoning = cached
+                }
+
+                let hasContent = !(content is NSNull)
+                let hasTools = !toolCalls.isEmpty
+                let hasReasoning = !(reasoning?.isEmpty ?? true)
+                if hasContent || hasTools || hasReasoning {
+                    var assistantMessage: [String: Any] = [
+                        "role": "assistant",
+                        "content": content
+                    ]
+                    if hasTools {
+                        assistantMessage["tool_calls"] = toolCalls
+                    }
+                    if let reasoning, !reasoning.isEmpty {
+                        assistantMessage["reasoning_content"] = reasoning
+                    }
+                    messages.append(assistantMessage)
+                }
                 continue
             }
 
+            // User / system / other role messages.
             let role = chatRole(from: item["role"] as? String)
             let content = textContent(from: item["content"])
             if !content.isEmpty {
                 messages.append(["role": role, "content": content])
             }
+            index += 1
         }
 
         return messages
+    }
+
+    private func isAssistantMessageItem(_ item: [String: Any]) -> Bool {
+        if let type = item["type"] as? String {
+            if type == "message" {
+                return chatRole(from: item["role"] as? String) == "assistant"
+            }
+            // Non-message typed items are handled elsewhere.
+            if type == "function_call" || type == "function_call_output" || type == "reasoning" {
+                return false
+            }
+        }
+        return chatRole(from: item["role"] as? String) == "assistant"
+    }
+
+    private func reasoningText(from item: [String: Any]) -> String {
+        if let direct = item["reasoning_content"] as? String, !direct.isEmpty {
+            return direct
+        }
+
+        // Open Responses / OpenAI reasoning item shapes.
+        if let content = item["content"] as? [[String: Any]] {
+            let joined = content.compactMap { part -> String? in
+                let type = part["type"] as? String
+                if type == "reasoning_text" || type == "summary_text" || type == "output_text" || type == nil {
+                    return part["text"] as? String
+                }
+                return part["text"] as? String
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            if !joined.isEmpty {
+                return joined
+            }
+        }
+
+        if let summary = item["summary"] as? [[String: Any]] {
+            let joined = summary.compactMap { $0["text"] as? String }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            if !joined.isEmpty {
+                return joined
+            }
+        }
+
+        // Some clients store opaque reasoning so it can be round-tripped.
+        if let encrypted = item["encrypted_content"] as? String, !encrypted.isEmpty {
+            if let decoded = Data(base64Encoded: encrypted),
+               let text = String(data: decoded, encoding: .utf8),
+               !text.isEmpty {
+                return text
+            }
+            return encrypted
+        }
+
+        return ""
     }
 
     private func chatRole(from role: String?) -> String {
@@ -302,6 +446,41 @@ final class CompatibilityProxyServer {
         }
 
         var output: [[String: Any]] = []
+        let reasoningContent = (message["reasoning_content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasReasoning = !(reasoningContent?.isEmpty ?? true)
+        let toolCalls = message["tool_calls"] as? [[String: Any]] ?? []
+
+        // Preserve DeepSeek reasoning as a Responses reasoning item so Codex can
+        // send it back on subsequent turns (required when tools were used).
+        if let reasoningContent, hasReasoning {
+            let encoded = Data(reasoningContent.utf8).base64EncodedString()
+            output.append([
+                "id": "rs_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [[
+                    "type": "summary_text",
+                    "text": reasoningContent
+                ]],
+                "content": [[
+                    "type": "reasoning_text",
+                    "text": reasoningContent
+                ]],
+                // Round-trip aid if a client only keeps encrypted_content.
+                "encrypted_content": encoded
+            ])
+
+            // Cache against tool call ids for clients that drop reasoning items
+            // but still replay function_call / call_id history.
+            for toolCall in toolCalls {
+                let callID = toolCall["id"] as? String ?? ""
+                if !callID.isEmpty {
+                    storeReasoning(reasoningContent, forCallID: callID)
+                }
+            }
+        }
+
+        // Final assistant text only — never substitute reasoning_content here.
         let content = messageText(from: message)
         if !content.isEmpty {
             output.append([
@@ -317,18 +496,32 @@ final class CompatibilityProxyServer {
             ])
         }
 
-        if let toolCalls = message["tool_calls"] as? [[String: Any]] {
-            for toolCall in toolCalls {
-                let function = toolCall["function"] as? [String: Any] ?? [:]
-                output.append([
-                    "id": "fc_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
-                    "type": "function_call",
-                    "status": "completed",
-                    "call_id": toolCall["id"] as? String ?? UUID().uuidString,
-                    "name": function["name"] as? String ?? "",
-                    "arguments": function["arguments"] as? String ?? "{}"
-                ])
-            }
+        for toolCall in toolCalls {
+            let function = toolCall["function"] as? [String: Any] ?? [:]
+            output.append([
+                "id": "fc_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": toolCall["id"] as? String ?? UUID().uuidString,
+                "name": function["name"] as? String ?? "",
+                "arguments": function["arguments"] as? String ?? "{}"
+            ])
+        }
+
+        // If the model only returned reasoning (no text / tools), still surface it
+        // as assistant text so the turn is not empty.
+        if output.isEmpty, let reasoningContent, hasReasoning {
+            output.append([
+                "id": "msg_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [[
+                    "type": "output_text",
+                    "text": reasoningContent,
+                    "annotations": []
+                ]]
+            ])
         }
 
         return [
@@ -342,13 +535,23 @@ final class CompatibilityProxyServer {
         ]
     }
 
+    private func storeReasoning(_ reasoning: String, forCallID callID: String) {
+        reasoningByCallID[callID] = reasoning
+        if reasoningByCallID.count > maxReasoningCacheEntries {
+            let overflow = reasoningByCallID.count - maxReasoningCacheEntries
+            let keysToRemove = Array(reasoningByCallID.keys.prefix(overflow))
+            for key in keysToRemove {
+                reasoningByCallID.removeValue(forKey: key)
+            }
+        }
+    }
+
     private func messageText(from message: [String: Any]) -> String {
         if let content = message["content"] as? String, !content.isEmpty {
             return content
         }
-        if let content = message["reasoning_content"] as? String, !content.isEmpty {
-            return content
-        }
+        // Do not fall back to reasoning_content — that must stay a separate field
+        // so multi-turn tool calls can replay it as reasoning_content.
         if let content = message["content"] as? [[String: Any]] {
             return content.compactMap { part in
                 part["text"] as? String

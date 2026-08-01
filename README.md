@@ -2,7 +2,7 @@
 
 # Codex Model Switcher
 
-A small macOS menu bar app for managing Codex model provider configurations.
+A small macOS (13+) menu bar app for managing Codex model provider configurations.
 
 The app helps you add, edit, and switch between Codex providers such as OpenAI, OpenRouter, DeepSeek, or other OpenAI-compatible services. It writes the selected model and provider settings to `~/.codex/config.toml`, stores app data in `~/.codex/model-switcher.json`, and can manage provider API keys and saved OpenAI account credentials.
 
@@ -15,7 +15,7 @@ The app helps you add, edit, and switch between Codex providers such as OpenAI, 
 - Switch the active Codex model from the menu bar.
 - Manage multiple OpenAI accounts.
 - Write Codex config updates automatically.
-- Built-in compatibility proxy for Chat Completions providers.
+- Built-in compatibility proxy for Chat Completions providers (ie Deekseek).
 - Keep the app menu-bar only, without a Dock icon.
 
 ## Notes

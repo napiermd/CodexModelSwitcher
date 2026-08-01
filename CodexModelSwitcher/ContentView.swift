@@ -215,22 +215,18 @@ struct ContentView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             proxyStatusView
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            Button("config.toml") {
-                NSWorkspace.shared.open(AppPaths.codexConfig)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            FooterOptionsButton(
+                selectedReasoningEffort: store.data.modelReasoningEffort,
+                onSelectReasoningEffort: { store.setReasoningEffort($0) },
+                onOpenConfig: { NSWorkspace.shared.open(AppPaths.codexConfig) },
+                onQuit: { NSApplication.shared.terminate(nil) }
+            )
+            .frame(width: 22, height: 22)
+            .help("Settings")
         }
         .font(.caption)
     }
@@ -636,6 +632,128 @@ struct ServiceEditorView: View {
                 .foregroundStyle(.secondary)
             TextField(prompt, text: text)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+/// Ellipsis button that presents an AppKit menu (no disclosure chevron).
+private struct FooterOptionsButton: NSViewRepresentable {
+    let selectedReasoningEffort: ReasoningEffort
+    let onSelectReasoningEffort: (ReasoningEffort) -> Void
+    let onOpenConfig: () -> Void
+    let onQuit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            onSelectReasoningEffort: onSelectReasoningEffort,
+            onOpenConfig: onOpenConfig,
+            onQuit: onQuit
+        )
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(frame: .zero)
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.image = NSImage(
+            systemSymbolName: "ellipsis",
+            accessibilityDescription: "Settings"
+        )
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = .secondaryLabelColor
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.setButtonType(.momentaryChange)
+        button.focusRingType = .none
+        context.coordinator.button = button
+        return button
+    }
+
+    func updateNSView(_ nsView: NSButton, context: Context) {
+        context.coordinator.selectedReasoningEffort = selectedReasoningEffort
+        context.coordinator.onSelectReasoningEffort = onSelectReasoningEffort
+        context.coordinator.onOpenConfig = onOpenConfig
+        context.coordinator.onQuit = onQuit
+    }
+
+    final class Coordinator: NSObject {
+        var selectedReasoningEffort: ReasoningEffort = .medium
+        var onSelectReasoningEffort: (ReasoningEffort) -> Void
+        var onOpenConfig: () -> Void
+        var onQuit: () -> Void
+        weak var button: NSButton?
+
+        init(
+            onSelectReasoningEffort: @escaping (ReasoningEffort) -> Void,
+            onOpenConfig: @escaping () -> Void,
+            onQuit: @escaping () -> Void
+        ) {
+            self.onSelectReasoningEffort = onSelectReasoningEffort
+            self.onOpenConfig = onOpenConfig
+            self.onQuit = onQuit
+        }
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+
+            let header = NSMenuItem(
+                title: "Reasoning effort",
+                action: nil,
+                keyEquivalent: ""
+            )
+            header.isEnabled = false
+            menu.addItem(header)
+
+            for effort in ReasoningEffort.allCases {
+                let item = NSMenuItem(
+                    title: effort.displayName,
+                    action: #selector(selectReasoningEffort(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = effort.rawValue
+                item.state = effort == selectedReasoningEffort ? .on : .off
+                menu.addItem(item)
+            }
+
+            menu.addItem(.separator())
+
+            let openConfig = NSMenuItem(
+                title: "Open config.toml",
+                action: #selector(openConfig),
+                keyEquivalent: ""
+            )
+            openConfig.target = self
+            menu.addItem(openConfig)
+
+            let quit = NSMenuItem(
+                title: "Quit",
+                action: #selector(quitApp),
+                keyEquivalent: ""
+            )
+            quit.target = self
+            menu.addItem(quit)
+
+            let point = NSPoint(x: sender.bounds.maxX, y: sender.bounds.minY)
+            menu.popUp(positioning: nil, at: point, in: sender)
+        }
+
+        @objc private func selectReasoningEffort(_ sender: NSMenuItem) {
+            guard let raw = sender.representedObject as? String,
+                  let effort = ReasoningEffort(rawValue: raw) else {
+                return
+            }
+            onSelectReasoningEffort(effort)
+        }
+
+        @objc private func openConfig() {
+            onOpenConfig()
+        }
+
+        @objc private func quitApp() {
+            onQuit()
         }
     }
 }

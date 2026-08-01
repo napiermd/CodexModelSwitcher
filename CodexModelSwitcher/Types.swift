@@ -63,11 +63,39 @@ struct SelectedModel: Codable, Equatable {
     var modelID: String
 }
 
+enum ReasoningEffort: String, CaseIterable, Codable, Identifiable, Equatable {
+    case none
+    case minimal
+    case low
+    case medium
+    case high
+    case xhigh
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .none: return "None"
+        case .minimal: return "Minimal"
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .xhigh: return "Extra high"
+        }
+    }
+
+    static func from(rawValue: String?) -> ReasoningEffort? {
+        guard let rawValue else { return nil }
+        return ReasoningEffort(rawValue: rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+}
+
 struct AppData: Codable {
     var services: [CodexService]
     var selectedModel: SelectedModel?
     var openAIAccounts: [OpenAIAccount]
     var selectedOpenAIAccountID: String?
+    var modelReasoningEffort: ReasoningEffort
 
     static let empty = AppData(services: [], selectedModel: nil)
 
@@ -75,12 +103,14 @@ struct AppData: Codable {
         services: [CodexService],
         selectedModel: SelectedModel?,
         openAIAccounts: [OpenAIAccount] = [],
-        selectedOpenAIAccountID: String? = nil
+        selectedOpenAIAccountID: String? = nil,
+        modelReasoningEffort: ReasoningEffort = .medium
     ) {
         self.services = services
         self.selectedModel = selectedModel
         self.openAIAccounts = openAIAccounts
         self.selectedOpenAIAccountID = selectedOpenAIAccountID
+        self.modelReasoningEffort = modelReasoningEffort
     }
 
     enum CodingKeys: String, CodingKey {
@@ -88,6 +118,7 @@ struct AppData: Codable {
         case selectedModel
         case openAIAccounts
         case selectedOpenAIAccountID
+        case modelReasoningEffort
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +127,7 @@ struct AppData: Codable {
         selectedModel = try container.decodeIfPresent(SelectedModel.self, forKey: .selectedModel)
         openAIAccounts = try container.decodeIfPresent([OpenAIAccount].self, forKey: .openAIAccounts) ?? []
         selectedOpenAIAccountID = try container.decodeIfPresent(String.self, forKey: .selectedOpenAIAccountID)
+        modelReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .modelReasoningEffort) ?? .medium
     }
 }
 

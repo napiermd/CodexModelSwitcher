@@ -47,6 +47,7 @@ struct CodexConfigWriter {
 
         lines = removeTopLevelKey("model", from: lines)
         lines = removeTopLevelKey("model_provider", from: lines)
+        lines = removeTopLevelKey("model_reasoning_effort", from: lines)
         lines = removeTopLevelKey("cli_auth_credentials_store", from: lines)
         let managedProviderIDs = Set(data.services.map(\.id)).subtracting(["openai"])
         lines = removeModelProviderTables(from: lines, providerIDs: managedProviderIDs)
@@ -63,6 +64,10 @@ struct CodexConfigWriter {
         if selected.serviceID != "openai" {
             prefix.append(#"model_provider = "\#(tomlEscape(selected.serviceID))""#)
         }
+
+        prefix.append(
+            #"model_reasoning_effort = "\#(tomlEscape(data.modelReasoningEffort.rawValue))""#
+        )
 
         if !data.openAIAccounts.isEmpty {
             prefix.append(#"cli_auth_credentials_store = "file""#)

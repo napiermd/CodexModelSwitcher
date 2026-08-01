@@ -64,7 +64,66 @@ final class AppStore: ObservableObject {
             persist()
         }
 
+        // Seed from config.toml when upgrading from an older model-switcher.json
+        // that never stored this field.
+        if !hasStoredReasoningEffort,
+           let fromConfig = reasoningEffortFromConfig() {
+            data.modelReasoningEffort = fromConfig
+            persist()
+        }
+
         migrateOpenAIAccountEmails()
+    }
+
+    private var hasStoredReasoningEffort: Bool {
+        guard let stored = try? Data(contentsOf: AppPaths.appData),
+              let object = try? JSONSerialization.jsonObject(with: stored) as? [String: Any] else {
+            return false
+        }
+        return object["modelReasoningEffort"] != nil
+    }
+
+    private func reasoningEffortFromConfig() -> ReasoningEffort? {
+        guard let content = try? String(contentsOf: AppPaths.codexConfig, encoding: .utf8) else {
+            return nil
+        }
+
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                break
+            }
+            guard trimmed.hasPrefix("model_reasoning_effort") else { continue }
+            let parts = trimmed.split(separator: "=", maxSplits: 1).map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            guard parts.count == 2 else { continue }
+            let value = parts[1]
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return ReasoningEffort.from(rawValue: value)
+        }
+        return nil
+    }
+
+    func setReasoningEffort(_ effort: ReasoningEffort) {
+        guard data.modelReasoningEffort != effort else { return }
+        data.modelReasoningEffort = effort
+        persist()
+
+        guard let selected = data.selectedModel else {
+            statusMessage = "Reasoning effort saved. Choose a model to write config.toml."
+            errorMessage = ""
+            return
+        }
+
+        do {
+            try configWriter.applySelection(selected, in: data)
+            statusMessage = "Reasoning effort set to \(effort.displayName.lowercased()). Restart Codex to apply."
+            errorMessage = ""
+        } catch {
+            statusMessage = ""
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func migrateOpenAIAccountEmails() {

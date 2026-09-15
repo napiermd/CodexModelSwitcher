@@ -4,7 +4,7 @@ struct OpenAIAuthManager {
     func loginAccount(suggestedName: String) async throws -> OpenAIAccount {
         let loginID = UUID().uuidString
         let loginHome = AppPaths.loginDirectory.appendingPathComponent(loginID, isDirectory: true)
-        try FileManager.default.createDirectory(at: loginHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: loginHome, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
 
         defer {
             try? FileManager.default.removeItem(at: loginHome)
@@ -36,12 +36,8 @@ struct OpenAIAuthManager {
             return OpenAICredentialCheckResult(status: .valid, message: nil, authJSON: nil)
         }
 
-        do {
-            let refreshedAuthJSON = try await refreshAuthJSON(account.authJSON)
-            return OpenAICredentialCheckResult(status: .valid, message: nil, authJSON: refreshedAuthJSON)
-        } catch {
-            return OpenAICredentialCheckResult(status: .invalid, message: "Not valid. Please re-login.")
-        }
+        return OpenAICredentialCheckResult(status: .unchecked,
+            message: "Codex will refresh this account when used. Sign in again if Codex requests it.")
     }
 
     private func accessTokenIsUsable(_ authJSON: String) -> Bool {
@@ -54,45 +50,6 @@ struct OpenAIAuthManager {
         }
 
         return expirationDate.timeIntervalSinceNow > 300
-    }
-
-    private func refreshAuthJSON(_ authJSON: String) async throws -> String {
-        guard let data = authJSON.data(using: .utf8),
-              var auth = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var tokens = auth["tokens"] as? [String: Any],
-              let refreshToken = tokens["refresh_token"] as? String,
-              !refreshToken.isEmpty else {
-            throw AppError.openAIAccountLoginFailed
-        }
-
-        var request = URLRequest(url: URL(string: "https://auth.openai.com/oauth/token")!)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(OpenAIRefreshRequest(refreshToken: refreshToken))
-
-        let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            throw AppError.openAIAccountLoginFailed
-        }
-
-        let refreshResponse = try JSONDecoder().decode(OpenAIRefreshResponse.self, from: responseData)
-        if let idToken = refreshResponse.idToken {
-            tokens["id_token"] = idToken
-        }
-        if let accessToken = refreshResponse.accessToken {
-            tokens["access_token"] = accessToken
-        }
-        if let refreshToken = refreshResponse.refreshToken {
-            tokens["refresh_token"] = refreshToken
-        }
-
-        auth["tokens"] = tokens
-        auth["last_refresh"] = iso8601Now()
-
-        let updatedData = try JSONSerialization.data(withJSONObject: auth, options: [.sortedKeys])
-        return String(data: updatedData, encoding: .utf8) ?? authJSON
     }
 
     private func runCodexLogin(codeHome: URL) async throws {
@@ -118,9 +75,12 @@ struct OpenAIAuthManager {
     }
 
     private func codexExecutableURL() -> URL {
-        let bundled = URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex")
-        if FileManager.default.fileExists(atPath: bundled.path) {
-            return bundled
+        for path in ["/Applications/ChatGPT.app/Contents/Resources/codex",
+                     "/Applications/Codex.app/Contents/Resources/codex",
+                     "/opt/homebrew/bin/codex", "/usr/local/bin/codex"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
         }
         return URL(fileURLWithPath: "/usr/bin/env")
     }
@@ -202,30 +162,6 @@ struct OpenAIAuthManager {
 
     private func iso8601Now() -> String {
         ISO8601DateFormatter().string(from: Date())
-    }
-}
-
-private struct OpenAIRefreshRequest: Encodable {
-    let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-    let grantType = "refresh_token"
-    let refreshToken: String
-
-    enum CodingKeys: String, CodingKey {
-        case clientID = "client_id"
-        case grantType = "grant_type"
-        case refreshToken = "refresh_token"
-    }
-}
-
-private struct OpenAIRefreshResponse: Decodable {
-    let accessToken: String?
-    let idToken: String?
-    let refreshToken: String?
-
-    enum CodingKeys: String, CodingKey {
-        case accessToken = "access_token"
-        case idToken = "id_token"
-        case refreshToken = "refresh_token"
     }
 }
 

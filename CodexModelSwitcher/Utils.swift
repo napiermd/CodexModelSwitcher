@@ -1,8 +1,12 @@
 import Foundation
 
 enum AppPaths {
-    static let codexDirectory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".codex", isDirectory: true)
+    static let codexDirectory: URL = {
+        if let path = ProcessInfo.processInfo.environment["MODEL_SWITCHER_CONFIG_DIR"] {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+    }()
     static let codexConfig = codexDirectory.appendingPathComponent("config.toml")
     static let appData = codexDirectory.appendingPathComponent("model-switcher.json")
     static let loginDirectory = codexDirectory

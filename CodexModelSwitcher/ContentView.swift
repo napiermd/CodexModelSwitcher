@@ -344,6 +344,7 @@ private struct ServiceSectionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(service.id == "xai")
                     .padding(.vertical, 2)
                     .padding(.horizontal, 6)
                     .background(isSelected(model) ? Color.accentColor.opacity(0.14) : Color.clear)
@@ -351,6 +352,11 @@ private struct ServiceSectionView: View {
                 }
             }
 
+            if service.id == "xai" {
+                Text("Grok is configured. Codex tool compatibility is not ready yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if service.requiresAPIKey && service.apiKey.isEmpty {
                 Label("API key missing", systemImage: "key.slash")
                     .font(.caption)
@@ -401,6 +407,12 @@ private struct ServiceSectionView: View {
 
     private var openAIAccountActions: some View {
         HStack(spacing: 4) {
+            Button {
+                store.importCurrentOpenAIAccount()
+            } label: {
+                Image(systemName: "square.and.arrow.down")
+            }
+            .help("Save the current Codex account in Keychain")
             if store.isOpenAIAccountLoginRunning {
                 ProgressView()
                     .controlSize(.small)
@@ -440,7 +452,7 @@ private struct ServiceSectionView: View {
                 isOpenAIAccountDropdownOpen.toggle()
             } label: {
                 HStack(spacing: 5) {
-                    Text("OpenAI")
+                    Text("Codex")
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     Text(selectedOpenAIAccountName)
                         .font(.body)
@@ -593,8 +605,8 @@ struct ServiceEditorView: View {
                 GridRow {
                     Text("Proxy")
                         .foregroundStyle(.secondary)
-                    Toggle("Use compatibility proxy", isOn: $form.useCompatibilityProxy)
-                        .toggleStyle(.checkbox)
+                    Text("Unavailable pending compatibility checks")
+                        .font(.caption)
                 }
 
                 GridRow(alignment: .top) {
@@ -620,7 +632,7 @@ struct ServiceEditorView: View {
                 }
             }
 
-            Text("One model ID per line.")
+            Text("One model ID per line. New API keys are saved in macOS Keychain. Linked providers keep their existing authentication.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

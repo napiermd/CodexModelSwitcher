@@ -268,7 +268,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = cms.hieunguyen.xyz.CodexModelSwitcher;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.napier.CodexModelSwitcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -299,7 +299,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = cms.hieunguyen.xyz.CodexModelSwitcher;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.napier.CodexModelSwitcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;

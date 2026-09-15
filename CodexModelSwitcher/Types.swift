@@ -7,6 +7,8 @@ struct CodexService: Identifiable, Codable, Equatable {
     var envKey: String
     var apiKey: String
     var useCompatibilityProxy: Bool
+    var catalogPath: String?
+    var usesExistingProvider: Bool?
     var models: [CodexModel]
 
     var requiresAPIKey: Bool {
@@ -20,7 +22,9 @@ struct CodexService: Identifiable, Codable, Equatable {
         envKey: String,
         apiKey: String,
         useCompatibilityProxy: Bool = false,
-        models: [CodexModel]
+        models: [CodexModel],
+        catalogPath: String? = nil,
+        usesExistingProvider: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -29,6 +33,8 @@ struct CodexService: Identifiable, Codable, Equatable {
         self.apiKey = apiKey
         self.useCompatibilityProxy = useCompatibilityProxy
         self.models = models
+        self.catalogPath = catalogPath
+        self.usesExistingProvider = usesExistingProvider
     }
 
     enum CodingKeys: String, CodingKey {
@@ -39,6 +45,20 @@ struct CodexService: Identifiable, Codable, Equatable {
         case apiKey
         case useCompatibilityProxy
         case models
+        case catalogPath
+        case usesExistingProvider
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(baseURL, forKey: .baseURL)
+        try container.encode(envKey, forKey: .envKey)
+        try container.encode(useCompatibilityProxy, forKey: .useCompatibilityProxy)
+        try container.encode(models, forKey: .models)
+        try container.encode(catalogPath, forKey: .catalogPath)
+        try container.encode(usesExistingProvider, forKey: .usesExistingProvider)
     }
 
     init(from decoder: Decoder) throws {
@@ -47,9 +67,11 @@ struct CodexService: Identifiable, Codable, Equatable {
         name = try container.decode(String.self, forKey: .name)
         baseURL = try container.decode(String.self, forKey: .baseURL)
         envKey = try container.decode(String.self, forKey: .envKey)
-        apiKey = try container.decode(String.self, forKey: .apiKey)
+        apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         useCompatibilityProxy = try container.decodeIfPresent(Bool.self, forKey: .useCompatibilityProxy) ?? false
         models = try container.decode([CodexModel].self, forKey: .models)
+        catalogPath = try container.decodeIfPresent(String.self, forKey: .catalogPath)
+        usesExistingProvider = try container.decodeIfPresent(Bool.self, forKey: .usesExistingProvider)
     }
 }
 
@@ -176,11 +198,22 @@ struct OpenAIAccount: Identifiable, Codable, Equatable {
         case createdAt
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(accountID, forKey: .accountID)
+        try container.encode(email, forKey: .email)
+        try container.encode(credentialStatus, forKey: .credentialStatus)
+        try container.encode(credentialMessage, forKey: .credentialMessage)
+        try container.encode(createdAt, forKey: .createdAt)
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
-        authJSON = try container.decode(String.self, forKey: .authJSON)
+        authJSON = try container.decodeIfPresent(String.self, forKey: .authJSON) ?? ""
         accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
         email = try container.decodeIfPresent(String.self, forKey: .email)
         credentialStatus = try container.decodeIfPresent(

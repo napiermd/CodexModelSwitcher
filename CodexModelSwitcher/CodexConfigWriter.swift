@@ -6,21 +6,35 @@ struct CodexConfigWriter {
               let account = data.openAIAccounts.first(where: { $0.id == id }) else { return }
         guard let bytes = account.authJSON.data(using: .utf8),
               let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              object["tokens"] is [String: Any] else { throw AppError.openAIAccountLoginFailed }
+              let tokens = object["tokens"] as? [String: Any],
+              let token = tokens["access_token"] as? String, !token.isEmpty else { throw AppError.openAIAccountLoginFailed }
         try privateWrite(bytes, to: AppPaths.codexDirectory.appendingPathComponent("auth.json"))
     }
 
     func applySelection(_ selected: SelectedModel, in data: AppData) throws {
         guard let service = data.services.first(where: { $0.id == selected.serviceID }) else { throw AppError.missingService }
         guard service.models.contains(where: { $0.id == selected.modelID }) else { throw AppError.missingModel }
+        let lock = try ConfigLock(directory: AppPaths.codexDirectory)
+        defer { withExtendedLifetime(lock) {} }
         let current = try String(contentsOf: AppPaths.codexConfig, encoding: .utf8)
+        let authURL = AppPaths.codexDirectory.appendingPathComponent("auth.json")
+        let previousAuth = try? Data(contentsOf: authURL)
         let updated = try rewriteConfig(current, selected: selected, data: data)
         // Commit credentials before writing a config that references them.
         _ = try data.saveCredentialsAndEncodeMetadata()
         let backup = AppPaths.codexDirectory.appendingPathComponent("config.toml.backup-\(UUID().uuidString)")
         try privateWrite(Data(current.utf8), to: backup)
-        if selected.serviceID == "openai" { try restoreOpenAIAuth(from: data) }
-        try privateWrite(Data(updated.utf8), to: AppPaths.codexConfig)
+        guard try String(contentsOf: AppPaths.codexConfig, encoding: .utf8) == current,
+              (try? Data(contentsOf: authURL)) == previousAuth else {
+            throw NSError(domain: "Switcher", code: 5, userInfo: [NSLocalizedDescriptionKey: "Codex configuration or credentials changed during the switch. Try again."])
+        }
+        do {
+            if selected.serviceID == "openai" { try restoreOpenAIAuth(from: data) }
+            try privateWrite(Data(updated.utf8), to: AppPaths.codexConfig)
+        } catch {
+            if selected.serviceID == "openai", let previousAuth { try? privateWrite(previousAuth, to: authURL) }
+            throw error
+        }
     }
 
     func rewriteConfig(_ content: String, selected: SelectedModel, data: AppData) throws -> String {
@@ -37,7 +51,7 @@ struct CodexConfigWriter {
         }
         var prefix: [String] = []
         if selected.modelID != "__native__" { prefix.append("model = \"\(tomlEscape(selected.modelID))\"") }
-        if service.id != "openai" { prefix.append("model_provider = \"\(service.id)\"") }
+        if service.id != "openai" { prefix.append("model_provider = \"\(service.id == "xai" ? "xai-switcher" : service.id)\"") }
         if let catalog = service.catalogPath {
             guard FileManager.default.fileExists(atPath: catalog) else { throw AppError.missingModel }
             prefix.append("model_catalog_json = \"\(tomlEscape(catalog))\"")
@@ -83,14 +97,20 @@ struct CodexConfigWriter {
                 }
             }
         }
-        return prefix.joined(separator: "\n") + "\n" + lines.joined(separator: "\n")
+        let output = prefix.joined(separator: "\n") + "\n" + lines.joined(separator: "\n")
+        return try ConfigValidation.prepare(original: content, updated: output, provider: service.id,
+            linked: service.usesExistingProvider == true || service.id == "openai", grok: service.id == "xai")
     }
 
     func writeReasoningEffort(_ effort: ReasoningEffort) throws {
+        let lock = try ConfigLock(directory: AppPaths.codexDirectory)
+        defer { withExtendedLifetime(lock) {} }
         let current = try String(contentsOf: AppPaths.codexConfig, encoding: .utf8)
         let updated = replacingTopLevel("model_reasoning_effort", in: current.components(separatedBy: .newlines), with: "\"\(effort.rawValue)\"").joined(separator: "\n")
         try privateWrite(Data(current.utf8), to: AppPaths.codexDirectory.appendingPathComponent("config.toml.backup-\(UUID().uuidString)"))
-        try privateWrite(Data(updated.utf8), to: AppPaths.codexConfig)
+        let validated = try ConfigValidation.prepare(original: current, updated: updated, provider: "", linked: true, grok: false)
+        guard try String(contentsOf: AppPaths.codexConfig, encoding: .utf8) == current else { throw CocoaError(.fileWriteUnknown) }
+        try privateWrite(Data(validated.utf8), to: AppPaths.codexConfig)
     }
 
     private func replacingTopLevel(_ key: String, in lines: [String], with value: String) -> [String] {

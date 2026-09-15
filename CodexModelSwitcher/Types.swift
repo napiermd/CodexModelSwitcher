@@ -164,7 +164,7 @@ struct OpenAIAccount: Identifiable, Codable, Equatable {
     var createdAt: Date
 
     var displayName: String {
-        email ?? name
+        name.isEmpty || name == "Current Codex account" || name == "Codex account" ? (email ?? name) : name
     }
 
     init(

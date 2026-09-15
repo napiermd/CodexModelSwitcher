@@ -13,6 +13,7 @@ struct ContentView: View {
                 .padding(.vertical, 10)
             Divider()
             bodySection
+                .disabled(!store.storageReady)
             if editorSession == nil {
                 Divider()
                 footer
@@ -152,21 +153,16 @@ struct ContentView: View {
     }
 
     private var serviceList: some View {
-        ViewThatFits(in: .vertical) {
+        ScrollView {
             serviceStack
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-            ScrollView {
-                serviceStack
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-            }
         }
-        .frame(maxHeight: maxBodyHeight)
+        .frame(height: 300)
     }
 
     private var serviceStack: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(store.data.services.enumerated()), id: \.element.id) { index, service in
                 VStack(spacing: 0) {
                     ServiceSectionView(
@@ -253,7 +249,7 @@ struct ContentView: View {
                     .frame(width: 10, height: 10)
             }
 
-            Text("Proxy server \(CompatibilityProxyServer.address)")
+            Text("Grok connection: \(proxyStatusText)")
                 .foregroundStyle(.secondary)
         }
         .help(proxyStatusHelp)
@@ -275,13 +271,13 @@ struct ContentView: View {
     private var proxyStatusHelp: String {
         switch store.proxyStatus {
         case .starting:
-            return "Proxy server is starting"
+            return "Grok connection is starting"
         case .notRunning:
-            return "Proxy server is not running"
+            return "Grok connection is not running"
         case .active:
-            return "Proxy server is active"
+            return "Grok is ready. Keep this app open while using Grok."
         case .error:
-            return "Proxy server failed to start"
+            return "Grok connection failed. Reopen this app to retry."
         }
     }
 
@@ -344,7 +340,7 @@ private struct ServiceSectionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(service.id == "xai")
+                    .disabled(service.id == "xai" && store.proxyStatus != .active)
                     .padding(.vertical, 2)
                     .padding(.horizontal, 6)
                     .background(isSelected(model) ? Color.accentColor.opacity(0.14) : Color.clear)
@@ -353,7 +349,7 @@ private struct ServiceSectionView: View {
             }
 
             if service.id == "xai" {
-                Text("Grok is configured. Codex tool compatibility is not ready yet.")
+                Text("Grok uses xAI API billing. Keep this switcher open while using Grok.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -407,12 +403,13 @@ private struct ServiceSectionView: View {
 
     private var openAIAccountActions: some View {
         HStack(spacing: 4) {
-            Button {
-                store.importCurrentOpenAIAccount()
+            Menu {
+                Button("Import accounts from Codex Switcher") { store.importExistingAccounts() }
+                Button("Save current Codex account") { store.importCurrentOpenAIAccount() }
             } label: {
                 Image(systemName: "square.and.arrow.down")
             }
-            .help("Save the current Codex account in Keychain")
+            .help("Import saved Codex accounts into Keychain")
             if store.isOpenAIAccountLoginRunning {
                 ProgressView()
                     .controlSize(.small)
@@ -531,6 +528,12 @@ private struct ServiceSectionView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
+                if let email = account.email, email != account.displayName {
+                    Text(email)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 if isOpenAIAccountInvalid(account) {
                     Text(account.credentialMessage ?? invalidOpenAIAccountMessage)
                         .font(.caption)

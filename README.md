@@ -1,3 +1,7 @@
+# Andrew’s fork
+
+Account and provider switching with Keychain storage, existing 1Password authentication, and a Grok Responses adapter. See [FORK.md](FORK.md) for usage, verification, and limitations.
+
 ![Codex Model Switcher](/icon.png)
 
 # Codex Model Switcher

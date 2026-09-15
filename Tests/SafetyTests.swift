@@ -54,3 +54,31 @@ final class SafetyTests: XCTestCase {
         XCTAssertFalse(twice.contains("experimental_bearer_token"))
     }
 }
+
+extension SafetyTests {
+    func testGrokCopiesAuthenticationWithoutChangingSourceProvider() throws {
+        let original = "[model_providers.xai]\nname = \"xAI\"\nbase_url = \"https://api.x.ai/v1\"\n[model_providers.xai.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://example/item/key\"]\n"
+        let selected = SelectedModel(serviceID: "xai", modelID: "test-model")
+        let data = AppData(services: [service("xai", existing: true)], selectedModel: selected)
+        let output = try writer.rewriteConfig(original, selected: selected, data: data)
+        XCTAssertTrue(output.contains(original))
+        XCTAssertTrue(output.contains("model_provider = \"xai-switcher\""))
+        XCTAssertTrue(output.contains("http://127.0.0.1:48118/v1"))
+        let again = try writer.rewriteConfig(output, selected: selected, data: data)
+        XCTAssertEqual(again.components(separatedBy: "# Codex Model Switcher Grok Responses adapter").count, 2)
+    }
+
+    func testMalformedTOMLAndUnrelatedEditsAreRejected() throws {
+        let selected = SelectedModel(serviceID: "openai", modelID: "__native__")
+        let data = AppData(services: [service("openai")], selectedModel: selected)
+        XCTAssertThrowsError(try writer.rewriteConfig("broken = [", selected: selected, data: data))
+        XCTAssertThrowsError(try ConfigValidation.prepare(original: "approval_policy = \"never\"", updated: "approval_policy = \"on-request\"", provider: "openai", linked: true, grok: false))
+    }
+
+    func testSecondConcurrentSwitcherCannotAcquireLock() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try ConfigLock(directory: directory)
+        try withExtendedLifetime(first) { XCTAssertThrowsError(try ConfigLock(directory: directory)) }
+    }
+}

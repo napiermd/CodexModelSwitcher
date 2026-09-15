@@ -11,16 +11,15 @@ import SwiftUI
 @main
 struct CodexModelSwitcherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = AppStore()
+    @StateObject private var store = AppStore.shared
 
     var body: some Scene {
         MenuBarExtra {
             ContentView()
                 .environmentObject(store)
+
         } label: {
-            Image("icon")
-                .renderingMode(.template)
-                        .foregroundColor(.white)
+            Label("Models", systemImage: "arrow.triangle.2.circlepath")
         }
         .menuBarExtraStyle(.window)
     }

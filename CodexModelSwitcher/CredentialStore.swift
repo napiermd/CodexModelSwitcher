@@ -3,7 +3,7 @@ import Security
 
 /// Only metadata is serialized in model-switcher.json. Secrets live in Keychain.
 struct CredentialStore {
-    static let service = "dev.napier.CodexModelSwitcher"
+    static let service = ProcessInfo.processInfo.environment["MODEL_SWITCHER_KEYCHAIN_SERVICE"] ?? "dev.napier.CodexModelSwitcher"
 
     static func read(_ account: String) throws -> String? {
         var query = baseQuery(account)

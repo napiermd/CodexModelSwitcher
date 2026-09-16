@@ -288,7 +288,7 @@ struct ContentView: View {
         case .notRunning:
             return "Model Harbor connection is not running"
         case .active:
-            return "The local connection is ready. Keep Model Harbor open for Grok and Baseten."
+            return "The local connection is ready. Keep Model Harbor open for Codex, Grok and Baseten."
         case .error:
             return "Model Harbor connection failed. Reopen this app to retry."
         }
@@ -332,7 +332,7 @@ private struct ServiceSectionView: View {
 
                 if service.id == "openai" {
                     openAIAccountActions
-                } else {
+                } else if service.id != "codex-subscription" {
                     providerActions
                 }
             }
@@ -353,7 +353,7 @@ private struct ServiceSectionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled((service.id == "xai" || service.id == "grok-oauth") && store.proxyStatus != .active)
+                    .disabled((service.id == "xai" || LiveRouting.supports(service.id)) && store.proxyStatus != .active)
                     .padding(.vertical, 2)
                     .padding(.horizontal, 6)
                     .background(isSelected(model) ? Color.accentColor.opacity(0.14) : Color.clear)
@@ -361,7 +361,13 @@ private struct ServiceSectionView: View {
                 }
             }
 
-            if service.id == "grok-oauth" {
+            if service.id == "codex-subscription" {
+                Text("Uses the ChatGPT subscription signed in to Codex. Switch models here without restarting.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if service.id == "openai" {
+                Text("Direct connection for saved accounts. Requires restarting Codex; use Current subscription above for live switching.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if service.id == "grok-oauth" {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         if store.grokIsSignedIn {

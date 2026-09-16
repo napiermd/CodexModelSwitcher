@@ -111,6 +111,7 @@ class LiveRoutingTests(unittest.TestCase):
         module.TURN_ROUTES.clear()
         self.data = {'services': [
             {'id':'grok-oauth','models':[{'id':'grok-4.6'}]},
+            {'id':'codex-subscription','models':[{'id':'gpt-6-astra'}]},
             {'id':'baseten','models':[{'id':'moonshotai/Kimi-K3'}, {'id':'deepseek-ai/DeepSeek-V4.1-Flash'}]}
         ]}
         self.select('grok-oauth','grok-4.6')
@@ -153,9 +154,38 @@ class LiveRoutingTests(unittest.TestCase):
         self.assertEqual(base, 'https://inference.baseten.co/v1')
         self.assertEqual(t.request['reasoning']['effort'], 'high')
 
+    def test_subscription_uses_only_codex_supplied_auth_and_never_api_billing(self):
+        from unittest.mock import patch
+        self.select('codex-subscription', 'gpt-6-astra')
+        incoming = {'Authorization':'Bearer header.payload.signature', 'ChatGPT-Account-ID':'account-1',
+                    'X-Model-Harbor-Token':'local-secret', 'Cookie':'must-not-forward'}
+        with patch.object(module, 'oauth_headers') as grok, patch.object(module, 'baseten_headers') as baseten:
+            t, headers, base, route = module.routed_request({'model':'harbor-selected','stream':True}, incoming)
+        grok.assert_not_called(); baseten.assert_not_called()
+        self.assertEqual(t.request['model'], 'gpt-6-astra')
+        self.assertEqual(base, 'https://chatgpt.com/backend-api/codex')
+        self.assertEqual(headers['Authorization'], incoming['Authorization'])
+        self.assertEqual(headers['ChatGPT-Account-ID'], 'account-1')
+        self.assertNotIn('X-Model-Harbor-Token', headers)
+        self.assertNotIn('Cookie', headers)
+        for invalid in ({}, {'Authorization':'Bearer sk-api-key', 'ChatGPT-Account-ID':'account-1'},
+                        {'Authorization':'Bearer header.payload.signature'}):
+            with self.assertRaises(ValueError):
+                module.routed_request({'model':'harbor-selected'}, invalid)
+
+    def test_other_providers_never_receive_codex_credentials(self):
+        from unittest.mock import patch
+        incoming = {'Authorization':'Bearer codex.access.token', 'ChatGPT-Account-ID':'codex-account',
+                    'X-Model-Harbor-Token':'local-secret'}
+        for provider, model, helper in [('grok-oauth','grok-4.6','oauth_headers'), ('baseten','moonshotai/Kimi-K3','baseten_headers')]:
+            self.select(provider, model)
+            with patch.object(module, helper, return_value={'Authorization':'Bearer own-credential'}):
+                _, headers, _, _ = module.routed_request({'model':'harbor-selected'}, incoming)
+            self.assertEqual(headers, {'Authorization':'Bearer own-credential'})
+
     def test_missing_selection_and_server_side_history_fail_closed(self):
         self.select('openai', '__native__')
-        with self.assertRaisesRegex(ValueError, 'Choose a Grok or Baseten'):
+        with self.assertRaisesRegex(ValueError, 'Choose a Codex, Grok or Baseten'):
             module.routed_request({'model':'harbor-selected'}, {})
         with self.assertRaisesRegex(ValueError, 'full conversation history'):
             module.routed_request({'model':'harbor-selected','previous_response_id':'resp1'}, {})
@@ -178,7 +208,12 @@ class LiveRoutingTests(unittest.TestCase):
         body = ('event: response.completed\ndata: '+json.dumps(response)+'\n\n').encode()
         class Upstream(io.BytesIO):
             status = 200
-            headers = {'Content-Type':'text/event-stream'}
+            headers = {}
+            def __next__(self):
+                line = self.readline()
+                if not line:
+                    raise AssertionError('Must stop at response.completed without waiting for server EOF')
+                return line
         class Opener:
             def open(self, request, timeout):
                 self.request = request
@@ -200,6 +235,22 @@ class LiveRoutingTests(unittest.TestCase):
                 self.assertIn(b'response.completed',r.read())
                 self.assertEqual(opener.request.get_header('Authorization'),'Bearer upstream-oauth')
                 self.assertEqual(json.loads(opener.request.data)['model'],'grok-4.6')
+                c.close()
+                c = http.client.HTTPConnection(*server.server_address, timeout=5)
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True}),
+                          headers={'Authorization':'Bearer codex.access.token','X-Model-Harbor-Token':'wrong-local-token'})
+                self.assertEqual(c.getresponse().status,401); c.close()
+                c = http.client.HTTPConnection(*server.server_address, timeout=5)
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True}),
+                          headers={'Authorization':'Bearer codex.access.token','X-Model-Harbor-Token':'test-local-bridge-token',
+                                   'ChatGPT-Account-ID':'codex-account'})
+                r = c.getresponse()
+                self.assertEqual(r.status,200)
+                self.assertEqual(r.getheader('Content-Type'),'text/event-stream')
+                self.assertIn(b'response.completed',r.read())
+                self.assertNotIn('Chatgpt-account-id',opener.request.headers)
+                self.assertNotIn('X-model-harbor-token',opener.request.headers)
+                self.assertEqual(opener.request.get_header('Authorization'),'Bearer upstream-oauth')
                 c.close()
             finally:
                 server.shutdown(); server.server_close(); worker.join()

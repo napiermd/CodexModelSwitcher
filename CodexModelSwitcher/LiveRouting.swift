@@ -7,7 +7,7 @@ enum LiveRouting {
     static let catalogURL = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/model-harbor.json")
 
     static func supports(_ serviceID: String) -> Bool {
-        serviceID == "grok-oauth" || serviceID == "baseten"
+        serviceID == "grok-oauth" || serviceID == "baseten" || serviceID == "codex-subscription"
     }
 
     static func catalog(in data: AppData) throws -> Data {
@@ -23,7 +23,7 @@ enum LiveRouting {
         let window = windows.min() ?? 128000
         let model: [String: Any] = [
             "slug": modelID, "display_name": "Model Harbor selection",
-            "description": "Follows the Grok or Baseten model selected in Model Harbor. Changes apply on your next turn.",
+            "description": "Follows the Codex, Grok or Baseten model selected in Model Harbor. Changes apply on your next turn.",
             "base_instructions": "You are a coding assistant. Follow the user instructions, use the available tools, and verify results.",
             "default_reasoning_level": "high",
             "supported_reasoning_levels": ["low", "medium", "high"].map { ["effort": $0, "description": "\($0.capitalized) reasoning"] },

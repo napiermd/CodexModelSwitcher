@@ -22,8 +22,12 @@ import urllib.request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', required=True)
+    parser.add_argument('--subscription', action='store_true', help='Include current ChatGPT subscription; official Codex manages auth.')
     parser.add_argument('--installed', action='store_true', help='Use the running app; waits for selections made in its menu.')
+    parser.add_argument('--verify-upgrade', action='store_true', help='Start with the old provider config, update it while Codex is open, then test a new task.')
     args = parser.parse_args()
+    if args.verify_upgrade and (not args.subscription or args.installed):
+        parser.error('--verify-upgrade requires --subscription and uses an isolated bridge')
     repo = pathlib.Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location('bridge', repo/'CodexModelSwitcher/Support/grok_adapter.py')
     bridge = importlib.util.module_from_spec(spec); spec.loader.exec_module(bridge)
@@ -32,6 +36,14 @@ def main():
     saved = json.loads((real/'model-switcher.json').read_text())
     models = [('grok-oauth','grok-4.6'), ('baseten','moonshotai/Kimi-K3'),
               ('baseten','deepseek-ai/DeepSeek-V4.1-Flash'), ('grok-oauth','grok-4.5'), ('grok-oauth','grok-4.6')]
+    if args.subscription:
+        native = json.loads((real/'models_cache.json').read_text())['models']
+        native = [m for m in native if m.get('visibility') == 'list' and m.get('slug') == 'gpt-6-astra']
+        if not native: raise RuntimeError('The current Codex catalog does not include GPT-6 Astra.')
+        saved['services'].append({'id':'codex-subscription', 'models':[{'id':m['slug']} for m in native]})
+        models = [('codex-subscription',native[0]['slug']), ('grok-oauth','grok-4.6'), ('baseten','moonshotai/Kimi-K3'), ('codex-subscription',native[0]['slug'])]
+    if args.verify_upgrade:
+        models = models[:1]
     with tempfile.TemporaryDirectory(prefix='harbor-live-') as tmp:
         root = pathlib.Path(tmp)
         bridge.CONFIG_DIR = real if args.installed else root
@@ -53,6 +65,13 @@ def main():
                  '[features]', 'apps=false', '[model_providers.model-harbor]', 'name="Model Harbor"', 'wire_api="responses"',
                  'base_url="http://127.0.0.1:'+str(port)+'/harbor/v1"','supports_websockets=false',
                  '[model_providers.model-harbor.auth]', 'command="/bin/cat"', 'args=['+json.dumps(str(bridge.TOKEN_PATH))+']']
+        if args.subscription:
+            # Point this short test at the existing official auth cache without
+            # copying or printing its credentials.
+            (root/'auth.json').symlink_to(real/'auth.json')
+            lines = lines[:-3] + ['requires_openai_auth=true',
+                '[model_providers.model-harbor.http_headers]',
+                'X-Model-Harbor-Token='+json.dumps(bridge.TOKEN_PATH.read_text().strip())]
         def table(path, values):
             rows=['['+'.'.join(path)+']']
             for key,val in values.items():
@@ -73,7 +92,14 @@ for line in sys.stdin:
 ''')
         lines += ['[mcp_servers.verification]','command='+json.dumps(shutil.which('python3')),
                   'args=['+json.dumps(str(root/'marker-mcp.py'))+']']
-        (root/'config.toml').write_text('\n'.join(lines)+'\n')
+        final_config = '\n'.join(lines)+'\n'
+        initial_config = final_config
+        if args.verify_upgrade:
+            old_auth = '[model_providers.model-harbor.auth]\ncommand="/bin/cat"\nargs=['+json.dumps(str(bridge.TOKEN_PATH))+']'
+            new_auth = 'requires_openai_auth=true\n[model_providers.model-harbor.http_headers]\nX-Model-Harbor-Token='+json.dumps(bridge.TOKEN_PATH.read_text().strip())
+            initial_config = final_config.replace(new_auth, old_auth)
+            if initial_config == final_config: raise RuntimeError('Upgrade fixture was not changed')
+        (root/'config.toml').write_text(initial_config)
         env = dict(os.environ, CODEX_HOME=str(root))
         q = queue.Queue()
         proc = subprocess.Popen([shutil.which('codex'),'app-server','--stdio'],env=env,cwd=root,
@@ -99,6 +125,8 @@ for line in sys.stdin:
         try:
             rpc('initialize',{'clientInfo':{'name':'harbor_verification','version':'1'},'capabilities':{'experimentalApi':True}})
             proc.stdin.write('{"method":"initialized"}\n');proc.stdin.flush()
+            if args.verify_upgrade:
+                (root/'config.toml').write_text(final_config)
             started=rpc('thread/start',{'cwd':str(root),'model':'harbor-selected','modelProvider':'model-harbor','approvalPolicy':'never','sandbox':'read-only','ephemeral':True})
             thread=started['thread']['id']
             for index,(provider,model) in enumerate(models):
@@ -115,7 +143,7 @@ for line in sys.stdin:
                     (root/'model-switcher.json').write_text(json.dumps(saved))
                 memory='remember-switch-8529'
                 prompt=('Remember '+memory+'. ' if index==0 else 'Recall the memory word from my first message. ')
-                prompt+='Call the verification MCP read_marker tool now. Its value changes each turn; do not reuse a previous result. Reply with the memory word and the tool result, nothing else.'
+                prompt+=' This is verification turn '+str(index+1)+' ('+os.urandom(6).hex()+'). The external marker file was just replaced. Your first action must be a fresh call to the verification MCP read_marker tool. Previously returned markers are now invalid. Reply with the memory word and the NEW tool result, nothing else.'
                 result=rpc('turn/start',{'threadId':thread,'input':[{'type':'text','text':prompt}],'model':'harbor-selected','effort':'low'})
                 deadline=time.monotonic()+180
                 messages=[];tool_calls=0

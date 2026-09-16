@@ -121,6 +121,10 @@ final class AppStore: ObservableObject {
                !candidate.services[index].models.contains(where: { $0.id == "__native__" }) {
                 candidate.services[index].models.insert(CodexModel(id: "__native__", name: "Native Codex models"), at: 0)
             }
+            if let subscription = codexSubscriptionService() {
+                candidate.services.removeAll { $0.id == subscription.id }
+                candidate.services.insert(subscription, at: 0)
+            }
             try reflectActiveConfiguration(in: &candidate)
             try save(candidate)
             storageReady = true
@@ -345,6 +349,21 @@ final class AppStore: ObservableObject {
             try save(candidate)
             try CredentialStore.remove("provider:\(service.id)")
         }
+    }
+
+    private func codexSubscriptionService() -> CodexService? {
+        let cache = AppPaths.codexDirectory.appendingPathComponent("models_cache.json")
+        guard let bytes = try? Data(contentsOf: cache),
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let entries = object["models"] as? [[String: Any]] else { return nil }
+        let models = entries.compactMap { entry -> CodexModel? in
+            guard entry["visibility"] as? String == "list", let slug = entry["slug"] as? String else { return nil }
+            return CodexModel(id: slug, name: entry["display_name"] as? String ?? slug)
+        }
+        guard !models.isEmpty else { return nil }
+        return CodexService(id: "codex-subscription", name: "Codex · Current subscription",
+            baseURL: "https://chatgpt.com/backend-api/codex", envKey: "", apiKey: "",
+            models: models, catalogPath: cache.path)
     }
 
     private func defaultData() -> AppData {

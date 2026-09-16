@@ -1,4 +1,4 @@
-"""Local Responses bridge for Grok OAuth and direct Baseten inference."""
+"""Local Responses bridge for Codex subscriptions, Grok OAuth and Baseten."""
 import copy
 import hashlib
 import http.server
@@ -21,6 +21,7 @@ from collections import OrderedDict
 ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 MAX_BODY = 32 * 1024 * 1024
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
+CODEX_BASE = 'https://chatgpt.com/backend-api/codex'
 TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
 AUTH_PATH = pathlib.Path.home() / '.grok/auth.json'
 AUTH_LOCK = threading.Lock()
@@ -113,8 +114,8 @@ def selected_route():
     data = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
     selection = data.get('selectedModel') or {}
     provider, model = selection.get('serviceID'), selection.get('modelID')
-    if provider not in ('grok-oauth', 'baseten'):
-        raise ValueError('Choose a Grok or Baseten model in Model Harbor.')
+    if provider not in ('grok-oauth', 'baseten', 'codex-subscription'):
+        raise ValueError('Choose a Codex, Grok or Baseten model in Model Harbor.')
     service = next((s for s in data['services'] if s['id'] == provider), None)
     if not service or model not in [m['id'] for m in service['models']]:
         raise ValueError('The selected model is no longer available. Choose another model in Model Harbor.')
@@ -167,6 +168,24 @@ def baseten_headers():
     return {'Authorization': 'Bearer ' + key, 'User-Agent': 'ModelHarbor/1.0'}
 
 
+def codex_headers(headers):
+    # Codex supplies and refreshes its own subscription credentials. Never read
+    # another account's token, accept an API key, or fall back to API billing.
+    authorization = headers.get('Authorization', '')
+    token = authorization.removeprefix('Bearer ')
+    if not authorization.startswith('Bearer ') or token.startswith('sk-') or token.count('.') != 2:
+        raise ValueError('Use Model Harbor with ChatGPT sign-in enabled in Codex. Start a new Model Harbor task after upgrading Harbor.')
+    account = headers.get('ChatGPT-Account-ID') or headers.get('chatgpt-account-id')
+    if not account:
+        raise ValueError('Sign in to Codex with your ChatGPT subscription to use this model.')
+    result = {'Authorization': authorization, 'ChatGPT-Account-ID': account,
+              'User-Agent': headers.get('User-Agent', 'ModelHarbor/1.0'), 'originator': 'codex_cli_rs'}
+    for name in ('session_id', 'conversation_id', 'OpenAI-Beta', 'x-codex-turn-metadata'):
+        if headers.get(name):
+            result[name] = headers[name]
+    return result
+
+
 def routed_request(source, headers):
     if source.get('model') != 'harbor-selected':
         raise ValueError('Choose Model Harbor selection in Codex to use live switching.')
@@ -182,6 +201,9 @@ def routed_request(source, headers):
             reasoning['effort'] = 'high'
         upstream_headers = baseten_headers()
         base = 'https://inference.baseten.co/v1'
+    elif route['provider'] == 'codex-subscription':
+        upstream_headers = codex_headers(headers)
+        base = CODEX_BASE
     else:
         upstream_headers = oauth_headers()
         base = OAUTH_BASE
@@ -354,7 +376,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 body = json.dumps({'selected': selected_route(), 'last_request': LAST_ROUTE}).encode()
             except (ValueError, OSError, KeyError):
-                return self.error(409, 'Choose a Grok or Baseten model in Model Harbor.')
+                return self.error(409, 'Choose a Codex, Grok or Baseten model in Model Harbor.')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -385,7 +407,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def local_authorized(self):
         try:
-            return hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + TOKEN_PATH.read_text().strip())
+            token = TOKEN_PATH.read_text().strip()
+            return (hmac.compare_digest(self.headers.get('X-Model-Harbor-Token', ''), token)
+                    or hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + token))
         except OSError:
             return False
 
@@ -434,7 +458,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 headers=headers)
             opener = urllib.request.build_opener(NoRedirect)
             with opener.open(request, timeout=180) as upstream:
-                content_type = upstream.headers.get('Content-Type', 'application/json')
+                content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
                 self.send_response(upstream.status)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Cache-Control', 'no-cache')
@@ -451,18 +475,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if line.strip():
                             block.append(line.rstrip(b'\r\n'))
                         elif block:
-                            self.wfile.write(translation.event(b'\n'.join(block)))
+                            event = translation.event(b'\n'.join(block))
+                            if route and translation.response_status:
+                                with ROUTE_LOCK:
+                                    LAST_ROUTE = dict(route, state=translation.response_status)
+                            self.wfile.write(event)
                             self.wfile.flush()
                             block = []
+                            if translation.response_status:
+                                break
                     if block:
-                        self.wfile.write(translation.event(b'\n'.join(block)))
+                        event = translation.event(b'\n'.join(block))
+                        if route and translation.response_status:
+                            with ROUTE_LOCK:
+                                LAST_ROUTE = dict(route, state=translation.response_status)
+                        self.wfile.write(event)
                 else:
                     response = json.load(upstream)
                     translation.response_status = response.get('status')
+                    if route:
+                        with ROUTE_LOCK:
+                            LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
                     self.wfile.write(json.dumps(translation.output(response)).encode())
-                if route:
+                if route and not translation.response_status:
                     with ROUTE_LOCK:
-                        LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
+                        LAST_ROUTE = dict(route, state='finished')
         except urllib.error.HTTPError as error:
             if not started:
                 # Provider errors contain schema diagnostics, never request headers.

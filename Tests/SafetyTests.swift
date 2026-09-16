@@ -2,7 +2,7 @@ import XCTest
 @testable import SwitcherCore
 
 final class SafetyTests: XCTestCase {
-    let writer = CodexConfigWriter()
+    let writer = CodexConfigWriter(bridgeToken: "test-local-bridge-token")
     func service(_ id: String, existing: Bool = false) -> CodexService {
         CodexService(id: id, name: id, baseURL: "https://example.com/v1", envKey: "EXAMPLE_KEY", apiKey: "secret-never-serialize",
                      models: [CodexModel(id: "test-model", name: "Test"), CodexModel(id: "__native__", name: "Native")], usesExistingProvider: existing)
@@ -32,7 +32,7 @@ final class SafetyTests: XCTestCase {
 
     func testLinkedProviderPreservesAuthenticationExactly() throws {
         let input = "[model_providers.baseten]\nname = \"Existing\"\n[model_providers.baseten.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://vault/item/key\"]\n"
-        let output = try writer.rewriteConfig(input, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: AppData(services: [service("baseten", existing: true)], selectedModel: nil))
+        let output = try writer.rewriteConfig(input, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: AppData(services: [service("baseten", existing: true), service("codex-subscription")], selectedModel: nil))
         XCTAssertTrue(output.contains(input))
         XCTAssertFalse(output.contains("secret-never-serialize"))
         XCTAssertTrue(output.contains("model_provider = \"model-harbor\""))
@@ -56,7 +56,7 @@ final class SafetyTests: XCTestCase {
 }
 
 extension SafetyTests {
-    func testGrokOAuthUsesOnlyLocalCredentialAndPreservesAPIProvider() throws {
+    func testLiveProviderUsesCodexAuthAndSeparateLocalToken() throws {
         let source = "[model_providers.xai]\nbase_url = \"https://api.x.ai/v1\"\nenv_key = \"XAI_API_KEY\"\n"
         let oauth = CodexService(id: "grok-oauth", name: "Grok browser sign-in", baseURL: "http://127.0.0.1:48118/oauth/v1", envKey: "", apiKey: "", models: [CodexModel(id: "grok-4.6", name: "Grok 4.6")])
         let selection = SelectedModel(serviceID: oauth.id, modelID: "grok-4.6")
@@ -65,8 +65,8 @@ extension SafetyTests {
         XCTAssertTrue(output.contains(source))
         XCTAssertTrue(output.contains("model_provider = \"model-harbor\""))
         XCTAssertTrue(output.contains("/harbor/v1"))
-        XCTAssertTrue(output.contains("command = \"/bin/cat\""))
-        XCTAssertTrue(output.contains("model-harbor-bridge-token"))
+        XCTAssertTrue(output.contains("requires_openai_auth = true"))
+        XCTAssertTrue(output.contains("X-Model-Harbor-Token = \"test-local-bridge-token\""))
         let again = try writer.rewriteConfig(output, selected: selection, data: data)
         XCTAssertEqual(again.components(separatedBy: "[model_providers.model-harbor]").count, 2)
     }
@@ -100,10 +100,12 @@ extension SafetyTests {
 extension SafetyTests {
     func testLiveSwitchKeepsCodexConfigurationIdentical() throws {
         let original = "[model_providers.baseten]\nname = \"Baseten\"\nbase_url = \"https://inference.baseten.co/v1\"\n[model_providers.baseten.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://vault/item/key\"]\n"
-        let data = AppData(services: [service("grok-oauth"), service("baseten", existing: true)], selectedModel: nil)
+        let data = AppData(services: [service("grok-oauth"), service("baseten", existing: true), service("codex-subscription")], selectedModel: nil)
         let grok = try writer.rewriteConfig(original, selected: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"), data: data)
         let baseten = try writer.rewriteConfig(grok, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: data)
+        let codex = try writer.rewriteConfig(baseten, selected: SelectedModel(serviceID: "codex-subscription", modelID: "test-model"), data: data)
         XCTAssertEqual(grok, baseten)
+        XCTAssertEqual(baseten, codex)
         XCTAssertTrue(baseten.contains("model = \"harbor-selected\""))
         XCTAssertTrue(baseten.contains(original))
         XCTAssertFalse(baseten.contains("secret-never-serialize"))

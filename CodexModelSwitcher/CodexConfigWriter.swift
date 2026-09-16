@@ -1,6 +1,7 @@
 import Foundation
 
 struct CodexConfigWriter {
+    var bridgeToken: String? = nil
     func restoreOpenAIAuth(from data: AppData) throws {
         guard let id = data.selectedOpenAIAccountID,
               let account = data.openAIAccounts.first(where: { $0.id == id }) else { return }
@@ -102,9 +103,11 @@ struct CodexConfigWriter {
                 }
                 if service.id == LiveRouting.providerID {
                     let tokenPath = AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token").path
-                    lines.append("supports_websockets = false")
-                    lines.append(contentsOf: ["[model_providers.model-harbor.auth]", "command = \"/bin/cat\"",
-                        "args = [\"\(tomlEscape(tokenPath))\"]"])
+                    let token = try bridgeToken ?? String(contentsOfFile: tokenPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !token.isEmpty, !token.contains("\n"), !token.contains("\r") else { throw AppError.openAIAccountLoginFailed }
+                    lines.append(contentsOf: ["supports_websockets = false", "requires_openai_auth = true",
+                        "[model_providers.model-harbor.http_headers]",
+                        "X-Model-Harbor-Token = \"\(tomlEscape(token))\""])
                 } else if !service.apiKey.isEmpty {
                     lines.append(contentsOf: ["[model_providers.\(service.id).auth]", "command = \"/usr/bin/security\"",
                         "args = [\"find-generic-password\", \"-s\", \"\(CredentialStore.service)\", \"-a\", \"provider:\(service.id)\", \"-w\"]"])

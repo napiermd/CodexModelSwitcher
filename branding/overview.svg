@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 530" role="img" aria-labelledby="title desc">
+<title id="title">Model Harbor: independent models for independent Codex tasks</title><desc id="desc">Illustrated routing example. Build the app uses Grok, Write the guide uses Codex subscription, and Explore the data uses Kimi on Baseten. Each task remembers its choice.</desc>
+<rect width="1200" height="530" rx="16" fill="#f5f3eb"/><g fill="#193b3b" font-family="Georgia,serif"><text x="66" y="142" font-size="64">Keep your tasks.</text><text x="66" y="215" font-size="64">Change your models.</text></g>
+<g font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"><text x="68" y="271" font-size="21" fill="#516661">A macOS companion for Codex.</text><text x="68" y="306" font-size="21" fill="#516661">By Andrew Napier. MIT licensed.</text><text x="68" y="444" font-size="15" fill="#516661">Illustrated routing example</text>
+<rect x="675" y="66" width="459" height="398" rx="16" fill="#142f30"/><text x="705" y="111" font-size="18" fill="#edf4ec">Each task keeps its own model</text>
+<g fill="none" stroke="#45625b"><path d="M705 138H1104M705 231H1104M705 324H1104"/></g>
+<g fill="#edf4ec" font-size="21"><text x="705" y="174">Build the app</text><text x="705" y="267">Write the guide</text><text x="705" y="360">Explore the data</text></g>
+<g fill="#c9dfcd" font-size="16"><text x="705" y="205">Grok</text><text x="705" y="298">Codex subscription</text><text x="705" y="391">Kimi · Baseten</text></g><g fill="#f5bc53"><circle cx="1090" cy="191" r="5"/><circle cx="1090" cy="284" r="5"/><circle cx="1090" cy="377" r="5"/></g></g></svg>

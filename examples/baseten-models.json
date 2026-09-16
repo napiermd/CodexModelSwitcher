@@ -1,0 +1,62 @@
+{
+  "models": [
+    {
+      "slug": "moonshotai/Kimi-K3",
+      "display_name": "Kimi K3",
+      "description": "Example catalog entry. Confirm availability and capabilities with Baseten.",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 0,
+      "base_instructions": "You are a coding assistant. Follow the user instructions, use available tools, and verify results.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        {
+          "effort": "high",
+          "description": "High reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "context_window": 128000,
+      "max_context_window": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "support_verbosity": false,
+      "supports_parallel_tool_calls": false,
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "display_name": "DeepSeek V4.1 Flash",
+      "description": "Example catalog entry. Confirm availability and capabilities with Baseten.",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "base_instructions": "You are a coding assistant. Follow the user instructions, use available tools, and verify results.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        {
+          "effort": "high",
+          "description": "High reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "context_window": 128000,
+      "max_context_window": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "support_verbosity": false,
+      "supports_parallel_tool_calls": false,
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "experimental_supported_tools": []
+    }
+  ]
+}

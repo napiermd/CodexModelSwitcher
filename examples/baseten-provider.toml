@@ -1,0 +1,11 @@
+# Merge into ~/.codex/config.toml. Edit an existing baseten section if present.
+# This file contains no real credentials. The helper must print only the key.
+[model_providers.baseten]
+name = "Baseten"
+base_url = "https://inference.baseten.co/v1"
+wire_api = "responses"
+
+[model_providers.baseten.auth]
+command = "/opt/homebrew/bin/op" # Intel Macs may use /usr/local/bin/op.
+args = ["read", "op://YOUR_VAULT/YOUR_BASETEN_ITEM/credential"]
+timeout_ms = 30000

@@ -17,7 +17,7 @@ The app does not terminate Codex or interrupt active tasks automatically. Local 
 
 Saved OAuth credentials and entered API keys use macOS Keychain. JSON metadata excludes tokens and API keys. The active auth.json remains the credential file consumed by Codex and is written with owner-only permissions.
 
-New API providers read Keychain using an auth command. The app does not export keys into shell profiles, launchctl, or environment files. Linked Baseten, OpenRouter, and xAI providers preserve their existing authentication, including 1Password commands. Existing plaintext exports or backups made by older tools are not deleted automatically.
+New API providers read Keychain using an auth command. The app does not export keys into shell profiles, launchctl, or environment files. Linked Baseten and xAI providers preserve their existing authentication, including 1Password commands. Existing plaintext exports or backups made by older tools are not deleted automatically.
 
 Account switching captures refreshed credentials from the active account before replacing auth.json. The switcher does not independently refresh OAuth tokens. Reimporting existing accounts does not overwrite credentials already saved in Keychain.
 
@@ -37,8 +37,8 @@ The old Chat Completions proxy, which silently discarded namespace tools, has be
 
 - Codex supports multiple accounts through its own browser OAuth login.
 - Baseten uses API authentication, including existing 1Password commands.
-- Grok's API is billed separately from the Grok subscription. Signing into the xAI console does not transfer subscription usage to the API. See https://docs.x.ai/console/faq/accounts.
-- The Claude entry uses OpenRouter API access. Native Claude subscription sign-in is a separate integration through the unmodified Claude Code binary. See https://code.claude.com/docs/en/legal-and-compliance.
+- This build connects Grok using an xAI API key. Grok Build also supports browser OAuth and device login, but using that session as a Codex model provider has not been implemented or verified. See https://docs.x.ai/build/enterprise.
+- OpenRouter is not included among the default linked providers.
 
 ## Verification on this Mac
 

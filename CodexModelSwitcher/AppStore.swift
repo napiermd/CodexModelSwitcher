@@ -284,7 +284,6 @@ final class AppStore: ObservableObject {
         let config = (try? String(contentsOf: AppPaths.codexConfig, encoding: .utf8)) ?? ""
         for (id, name, url, catalog) in [
             ("baseten", "Baseten · 1Password", "https://inference.baseten.co/v1", "baseten-frontier.json"),
-            ("openrouter", "Claude · OpenRouter API", "https://openrouter.ai/api/v1", "unified-openrouter.json"),
             ("xai", "Grok · xAI API", "https://api.x.ai/v1", "xai-frontier.json")
         ] {
             let path = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/\(catalog)")

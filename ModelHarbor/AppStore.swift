@@ -252,7 +252,8 @@ final class AppStore: ObservableObject {
         do {
             let bytes = try await grokAdapter.accountStatus()
             guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                  let entries = value["models"] as? [[String: Any]] else { throw AppError.missingModel }
+                  let models = value["models"] as? [[String: Any]] else { throw AppError.missingModel }
+            let entries = models.map { LiveRouting.normalizeReasoningLevels(in: $0) }
             grokAccount = value["email"] as? String ?? "Signed in"
             grokIsSignedIn = true
             guard storageReady else { return true }

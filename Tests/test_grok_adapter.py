@@ -15,6 +15,14 @@ class TranslationTests(unittest.TestCase):
                 {'type':'function','name':'read_'+str(i),'parameters':{'type':'object','properties':{}}} for i in range(count)]}],
             'input':[{'role':'user','content':'Read the marker'}]})
 
+    def test_grok_slider_effort_values_reach_upstream_unchanged(self):
+        for model, efforts in [('grok-4.6', ['low', 'medium', 'high', 'xhigh']),
+                               ('grok-4.5', ['low', 'medium', 'high'])]:
+            for effort in efforts:
+                with self.subTest(model=model, effort=effort):
+                    translated = module.Translation({'model': model, 'input': [], 'reasoning': {'effort': effort}})
+                    self.assertEqual(translated.request['reasoning']['effort'], effort)
+
     def test_large_group_keeps_every_tool_under_provider_limit(self):
         t=self.translation(446)
         self.assertEqual(len(t.request['tools']),1)

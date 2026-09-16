@@ -26,6 +26,10 @@ Test behavioral changes at their boundary: independent tasks, config preservatio
 
 For UI changes, check light/dark macOS appearance and keyboard access. For website changes, check desktop and narrow screens, keyboard focus, and reduced motion. The demo must stay clearly labeled and must not make provider API requests.
 
+## Offline task-repair verification
+
+With the Codex CLI on PATH, run `python3 scripts/verify-task-repair.py`. It creates a synthetic task with a mismatched provider in a temporary Codex home, demonstrates the failure against a local mock endpoint, repairs the saved provider, and resumes the same task in a second Codex process. It checks paginated history and verifies that the conversation bytes survive unchanged. It uses synthetic keys and makes no real inference requests. Verified with Codex CLI 0.150.1; protocol changes may require updating this optional check.
+
 ## Live verification
 
 `python3 scripts/verify-live-switch.py --live --installed` explicitly opts into provider usage with synthetic tasks and the running installed app. It requires configured accounts and may request one Baseten unlock if the session is not already unlocked. `--without-baseten` avoids requesting a Baseten credential. Omit `--installed` to exercise the source bridge.

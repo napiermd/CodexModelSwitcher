@@ -157,4 +157,27 @@ extension SafetyTests {
         let data = AppData(services: [service("grok-oauth")], selectedModel: nil)
         XCTAssertThrowsError(try writer.rewriteConfig("[model_providers.model-harbor]\nname = \"Mine\"\n", selected: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"), data: data))
     }
+    func testOpenRouterCatalogOnlyIncludesToolModelsAndPreservesCapabilities() throws {
+        let bytes = Data(#"{"data":[{"id":"test/vision","name":"Vision Coder","context_length":262144,"supported_parameters":["tools","reasoning"],"architecture":{"input_modalities":["text","image"]}},{"id":"test/text","name":"Text Coder","context_length":65536,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"]}},{"id":"test/no-tools","name":"Image only","supported_parameters":[] }]}"#.utf8)
+        let models = try OpenRouterModel.parse(bytes)
+        XCTAssertEqual(models.map(\.id), ["test/text", "test/vision"])
+        XCTAssertFalse(models[0].reasoning)
+        XCTAssertEqual(models[0].catalogEntry["input_modalities"] as? [String], ["text"])
+        XCTAssertEqual(models[1].catalogEntry["context_window"] as? Int, 262144)
+        let service = CodexService(id: "openrouter", name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1", envKey: "OPENROUTER_API_KEY", apiKey: "synthetic", models: [CodexModel(id: "test/text", name: "Text")])
+        let data = AppData(services: [service], selectedModel: nil)
+        XCTAssertTrue(LiveRouting.supports("openrouter"))
+        XCTAssertEqual(LiveRouting.selection(for: "harbor/openrouter/test/text", in: data)?.modelID, "test/text")
+        XCTAssertEqual(LiveRouting.providerName("openrouter"), "OpenRouter")
+    }
+
+    func testConnectionVerificationRequiresResponseAndRejectsLaterAuthFailure() {
+        XCTAssertFalse(ProviderActivity().verifiedConnection)
+        XCTAssertTrue(ProviderActivity(["last_success": 100.0]).verifiedConnection)
+        XCTAssertFalse(ProviderActivity(["last_success": 100.0, "last_failure": 101.0, "http_status": 401]).verifiedConnection)
+        XCTAssertTrue(ProviderActivity(["last_success": 100.0, "last_failure": 101.0, "http_status": 429]).verifiedConnection)
+        XCTAssertFalse(ProviderActivity(["last_success": 100.0, "last_auth_failure": 101.0, "last_failure": 102.0, "http_status": 429]).verifiedConnection)
+        XCTAssertTrue(ProviderActivity(["last_success": 103.0, "last_auth_failure": 101.0, "last_failure": 102.0]).verifiedConnection)
+    }
+
 }

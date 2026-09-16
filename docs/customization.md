@@ -4,6 +4,10 @@
 
 Model Harbor is MIT licensed. Fork it, inspect the routes, change the interface, or contribute improvements back. Keep the license and upstream notices when redistributing.
 
+## Customize the menu bar
+
+Use **Settings → Menu bar** for display mode, icon visibility, System/Light/Dark appearance, and provider visibility. At least one provider remains visible. Provider connection follows the selected Harbor tab. Activity and last requested model refer to real bridge traffic across all tasks, not the foreground Codex task.
+
 ## Choose available models
 
 Codex subscription models come from Codex's local catalog. Grok models come from the signed-in account. These lists reflect provider access; editing a label does not unlock a model.
@@ -16,11 +20,13 @@ Harbor generates `model-harbor.json`; edit the source provider catalog instead o
 
 ## Add another provider
 
-The **+** provider editor retains the upstream direct-provider workflow. It expects a compatible Responses endpoint. Arbitrary Chat Completions providers are not supported. A custom direct provider does not automatically become a live Harbor route, and changing direct providers may require restarting Codex.
+Use **Add provider** for the supported connection flows. OpenRouter verifies a key and discovers tool-capable models from its live catalog; selected entries are saved to `~/.codex/model-catalogs/openrouter.json`.
+
+The **Custom provider** editor retains the upstream direct-provider workflow. It expects a compatible Responses endpoint. Arbitrary Chat Completions providers are not supported. A custom direct provider does not automatically become a live Harbor route, and changing direct providers may require restarting Codex.
 
 To extend live routing in source:
 
-1. Define the provider and its catalog discovery in `AppStore.swift`.
+1. Register its presentation in `ProviderPresentation.swift` and its catalog discovery in `AppStore.swift`.
 2. Add its stable ID and display label in `LiveRouting.swift`.
 3. Add a fixed, validated destination and provider-specific credential handling in `grok_adapter.py`.
 4. Test that credentials never cross provider boundaries, unknown models fail, and parallel tasks remain independent.
@@ -30,14 +36,14 @@ Do not turn the bridge into an arbitrary authenticated URL forwarder or reuse an
 
 ## Change the app or identity
 
-Open `ModelHarbor.xcodeproj` in Xcode. `ContentView.swift` owns the native interface. The icon is authored in `scripts/render-icon.swift`; its vector counterpart is `branding/mark.svg`.
+Open `ModelHarbor.xcodeproj` in Xcode. `ContentView.swift` owns the native interface. The image-generation master is `assets/brand/harbor-icon-master.png`, with the exact prompt beside it and embedded in the image. `scripts/render-icon.swift` derives the shipping icon sizes from that master.
 
 ```sh
 swift scripts/render-icon.swift
 ./scripts/build-app.sh --ad-hoc
 ```
 
-The renderer updates the macOS icon sizes, app header mark, repository icon, and website PNG. Keep the vector asset consistent when changing its geometry. Use your own bundle ID and signing identity for a separately distributed fork. Existing users of this project should retain their current identity to preserve Keychain trust.
+The renderer updates the macOS icon sizes, app header mark, repository icon, and website PNG. Keep the master and its prompt together when changing the identity. Use your own bundle ID and signing identity for a separately distributed fork. Existing users of this project should retain their current identity to preserve Keychain trust.
 
 ## Change the website
 

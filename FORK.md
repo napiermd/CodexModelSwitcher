@@ -8,7 +8,7 @@ Open **Model Harbor** in Applications or click **Harbor** in the menu bar.
 
 - **Codex · Current subscription:** choose an OpenAI model in the live picker. Harbor imports visible models from Codex's official local catalog and uses the ChatGPT account currently signed in to Codex. No OpenAI API key is used.
 - **Saved Codex accounts:** the separate direct-connection controls retain account import and browser sign-in; switching this direct connection still needs a restart.
-- **Baseten:** direct inference using your existing provider authentication, including 1Password. No OpenRouter integration is added.
+- **Baseten:** direct inference using your existing provider authentication, including 1Password. The optional OpenRouter connection has its own verified-key setup and model catalog.
 - **Grok:** your official Grok browser session. Models are fetched from that account. **Sign in** runs the installed official `grok login --oauth` flow; credentials remain in Grok's own private store. Model Harbor never receives your password.
 - **Per-task model switching:** choose a named model in each Codex task's picker. The choice belongs to that task. Switching task A from Grok to Baseten leaves task B unchanged. Existing conversation history and tool results continue across models; an in-progress turn stays on its starting model.
 - **New task default:** the menu in Harbor changes the default for future tasks. Existing tasks retain their model. Provider account sign-ins remain shared connections; this feature does not create a separate OAuth account per task.
@@ -72,3 +72,11 @@ On September 16, 2026, a synthetic Git fixture exercised the installed Harbor br
 The first review hit its five-minute timeout before a verdict; the launcher reported `timed_out`, terminated its process group, and preserved its worktree. A narrower review with the exact source and test command completed successfully. There was no model fallback. Harbor recorded one credential-helper read throughout this verification. The desktop app stayed open. This is a small workflow and tool-compatibility check, not a coding-quality benchmark or a guarantee about large production changes.
 
 Native role parsing and exact model/effort overrides were separately verified with installed Codex CLI 0.150.1 against synthetic local endpoints. A hostile project configuration could neither redirect the isolated worker nor start an unrelated MCP command. See [agent teams](docs/agent-teams.md) for the native-directory limitation and verified Responses effort settings.
+
+## Connections redesign — September 16, 2026
+
+The native panel now separates provider inspection from settings, measures its content height, and shows actual request activity. Menu-bar display, appearance, and provider visibility are configurable. The navy/platinum icon was generated with OpenAI image generation; its master and exact prompt are included.
+
+OpenRouter has an authenticated, fixed-destination Responses route, Keychain-backed key storage, key verification, tool-capable catalog selection, and disconnect support. Protocol tests use a controlled upstream fixture to verify routing, credential separation, authentication rejection, and activity accounting. Live key verification and catalog loading were observed on the development installation. Claude Fable 5.1 (`anthropic/claude-fable-5.1`) also passed a streamed tool-call/result round trip through Harbor, completing both turns and returning the expected response. Other listed models have not all received model-specific inference checks. Final local verification passed 103 Python tests, 15 Swift tests, the signed macOS build, and site checks. The finish review passed after checking dark/light captures, selected-tab contrast, truthful connection states, and design documentation.
+
+The CodexBar project informed the provider tabs, settings separation, and customizable menu-bar approach. No CodexBar source or provider monitoring implementation was copied. Usage quotas, balances, and its full provider roster are not implemented by this change.

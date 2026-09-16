@@ -8,6 +8,6 @@ let package = Package(
         .target(name: "HarborCore", path: "ModelHarbor",
             exclude: ["AppStore.swift", "ContentView.swift", "AppDelegate.swift", "ModelHarborApp.swift",
                       "InstallationVerification.swift", "VisualEffects.swift", "Support", "Assets.xcassets", "ModelHarbor.entitlements"],
-            sources: ["Types.swift", "Utils.swift", "CodexConfigWriter.swift", "CredentialStore.swift", "OpenAIAuthManager.swift", "GrokAdapter.swift", "ConfigValidation.swift", "LiveRouting.swift", "BasetenCatalog.swift"]),
-        .testTarget(name: "HarborCoreTests", dependencies: ["HarborCore"], path: "Tests", exclude: ["test_grok_adapter.py", "test_baseten_pacing.py", "test_task_repair.py", "test_task_repair_api.py", "test_harbor_team.py", "test_baseten_reasoning.py", "__pycache__"])
+            sources: ["Types.swift", "Utils.swift", "CodexConfigWriter.swift", "CredentialStore.swift", "OpenAIAuthManager.swift", "GrokAdapter.swift", "ConfigValidation.swift", "LiveRouting.swift", "BasetenCatalog.swift", "ProviderPresentation.swift"]),
+        .testTarget(name: "HarborCoreTests", dependencies: ["HarborCore"], path: "Tests", exclude: ["test_grok_adapter.py", "test_baseten_pacing.py", "test_task_repair.py", "test_task_repair_api.py", "test_harbor_team.py", "test_baseten_reasoning.py", "test_provider_connections.py", "__pycache__"])
     ])

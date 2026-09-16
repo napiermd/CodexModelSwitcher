@@ -35,6 +35,55 @@ ROUTE_LOCK = threading.Lock()
 TURN_ROUTES = OrderedDict()
 LAST_ROUTE = None
 TASK_REPAIRS = None
+PROVIDER_ACTIVITY = {}
+OPENROUTER_KEY = ''
+
+
+def provider_activity_start(route):
+    with ROUTE_LOCK:
+        record = PROVIDER_ACTIVITY.setdefault(route['provider'], {'active': 0, 'completed': 0, 'failed': 0})
+        record['active'] += 1
+        active_models = record.setdefault('active_models', {})
+        active_models[route['model']] = active_models.get(route['model'], 0) + 1
+        record.update(model=route['model'], state='working')
+
+
+def provider_activity_finish(route, status, http_status=None):
+    with ROUTE_LOCK:
+        record = PROVIDER_ACTIVITY.setdefault(route['provider'], {'active': 0, 'completed': 0, 'failed': 0})
+        record['active'] = max(0, record['active'] - 1)
+        active_models = record.setdefault('active_models', {})
+        remaining = active_models.get(route['model'], 1) - 1
+        if remaining > 0:
+            active_models[route['model']] = remaining
+        else:
+            active_models.pop(route['model'], None)
+        record.update(model=next(reversed(active_models), route['model']), state='working' if record['active'] else status)
+        record.pop('http_status', None)
+        if status == 'completed':
+            record['completed'] += 1
+            record['last_success'] = time.time()
+        else:
+            record['failed'] += 1
+            record['last_failure'] = time.time()
+            if http_status in (401, 403):
+                record['last_auth_failure'] = record['last_failure']
+            if http_status is not None:
+                record['http_status'] = http_status
+
+
+def provider_status():
+    with ROUTE_LOCK:
+        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY), 'openrouter_ready': bool(OPENROUTER_KEY)}
+
+
+def openrouter_headers():
+    with ROUTE_LOCK:
+        key = OPENROUTER_KEY
+    if not key:
+        raise ValueError('Connect OpenRouter in Model Harbor before using this model.')
+    return {'Authorization': 'Bearer ' + key, 'X-Title': 'Model Harbor'}
+
 
 
 
@@ -128,7 +177,7 @@ def requested_route(model_id):
         _, provider, model = parts
     else:
         raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
-    if provider not in ('grok-oauth', 'baseten', 'codex-subscription'):
+    if provider not in ('grok-oauth', 'baseten', 'codex-subscription', 'openrouter'):
         raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
     service = next((s for s in data['services'] if s['id'] == provider), None)
     if not service or model not in [m['id'] for m in service['models']]:
@@ -277,6 +326,14 @@ def routed_request(source, headers):
             source['chat_template_args'] = {'enable_thinking': True}
         upstream_headers = baseten_headers()
         base = 'https://inference.baseten.co/v1'
+    elif route['provider'] == 'openrouter':
+        upstream_headers = openrouter_headers()
+        base = 'https://openrouter.ai/api/v1'
+        # Request routing must fail instead of silently switching to a different model.
+        source['provider'] = {'require_parameters': True}
+        reasoning = source.get('reasoning')
+        if isinstance(reasoning, dict) and reasoning.get('effort') == 'none':
+            source.pop('reasoning', None)
     elif route['provider'] == 'codex-subscription':
         upstream_headers = codex_headers(headers)
         base = CODEX_BASE
@@ -663,7 +720,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/harbor/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
-            body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE,
+            body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
                                'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None}).encode()
@@ -708,12 +765,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
 
     def do_POST(self):
-        global LAST_ROUTE
+        global LAST_ROUTE, OPENROUTER_KEY
         started = False
+        activity_started = False
+        activity_status = 'failed'
+        activity_http_status = None
         route = None
         pacer = None
         acquired = False
         try:
+            if self.path == '/harbor/providers/openrouter':
+                if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 8192:
+                    return self.error(400, 'Invalid connection settings')
+                value = json.loads(self.rfile.read(length))
+                key = value.get('key') if isinstance(value, dict) else None
+                if not isinstance(key, str) or len(key) > 4096 or any(c.isspace() for c in key):
+                    return self.error(400, 'Invalid connection settings')
+                with ROUTE_LOCK:
+                    OPENROUTER_KEY = key
+                body = b'{"configured":true}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path in ('/harbor/repairs/enable', '/harbor/repairs/disable'):
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
@@ -775,6 +854,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 headers = oauth_headers() if oauth else {'Authorization': authorization}
                 base = OAUTH_BASE if oauth else 'https://api.x.ai/v1'
             if route:
+                provider_activity_start(route)
+                activity_started = True
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='started')
             headers.update({'Content-Type': 'application/json',
@@ -842,10 +923,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         with ROUTE_LOCK:
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
                     self.wfile.write(json.dumps(translation.output(response)).encode())
+                activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
                 if route and not translation.response_status:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
         except urllib.error.HTTPError as error:
+            activity_http_status = error.code
+            if route and route['provider'] == 'openrouter' and error.code in (401, 403):
+                with ROUTE_LOCK:
+                    OPENROUTER_KEY = ''
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='failed', http_status=error.code)
@@ -882,6 +968,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if activity_started:
+                provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:
                 pacer.finish(translation.usage)
                 pacer.leave()

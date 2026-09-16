@@ -21,6 +21,13 @@ final class AppStore: ObservableObject {
     @Published var pendingTaskRepairs = 0
     @Published var repairedTaskCount = 0
     @Published var savingTaskRepairs = false
+    @Published var providerActivity: [String: ProviderActivity] = [:]
+    @Published var lastProviderID = ""
+    @Published var lastRequestedModel = ""
+    @Published var openRouterReady = false
+    @Published var connectingOpenRouter = false
+    @Published var openRouterModels: [OpenRouterModel] = []
+    private var connectionPolling: Task<Void, Never>?
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -44,6 +51,13 @@ final class AppStore: ObservableObject {
                         if await grokAdapter.isHealthy() {
                             proxyStatus = .active
                             await refreshGrokAccount()
+                            await syncOpenRouter()
+                            connectionPolling = Task { [weak self] in
+                                while !Task.isCancelled {
+                                    await self?.refreshConnectionStatus()
+                                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                                }
+                            }
                             if let selected = data.selectedModel, LiveRouting.supports(selected.serviceID) {
                                 perform { try writer.applySelection(selected, in: data) }
                             }
@@ -99,9 +113,21 @@ final class AppStore: ObservableObject {
 
     func refreshConnectionStatus() async {
         guard let bytes = try? await grokAdapter.connectionStatus(),
-              let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              let baseten = value["baseten_auth"] as? [String: Any] else { return }
-        basetenState = baseten["state"] as? String ?? "not_loaded"
+              let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+            proxyStatus = .notRunning
+            providerActivity = [:]
+            return
+        }
+        proxyStatus = .active
+        basetenState = (value["baseten_auth"] as? [String: Any])?["state"] as? String ?? "not_loaded"
+        if let providers = value["providers"] as? [String: Any] {
+            openRouterReady = providers["openrouter_ready"] as? Bool ?? false
+            providerActivity = (providers["activity"] as? [String: [String: Any]] ?? [:]).mapValues(ProviderActivity.init)
+        }
+        if let request = value["last_request"] as? [String: Any] {
+            lastProviderID = request["provider"] as? String ?? ""
+            lastRequestedModel = request["model"] as? String ?? ""
+        }
         if let repairs = value["task_repairs"] as? [String: Any] {
             taskRepairsEnabled = repairs["enabled"] as? Bool ?? false
             taskRepairState = repairs["state"] as? String ?? "checking"
@@ -162,7 +188,7 @@ final class AppStore: ObservableObject {
             if FileManager.default.fileExists(atPath: AppPaths.appData.path) {
                 candidate = try JSONDecoder().decode(AppData.self, from: Data(contentsOf: AppPaths.appData))
                 try candidate.loadCredentials()
-                candidate.services.removeAll { $0.id == "openrouter" || $0.id == "xai" }
+                candidate.services.removeAll { $0.id == "xai" }
                 for service in defaultData().services where !candidate.services.contains(where: { $0.id == service.id }) {
                     candidate.services.append(service)
                 }
@@ -378,6 +404,80 @@ final class AppStore: ObservableObject {
             try CredentialStore.remove("openai:\(account.id)")
             statusMessage = "Saved account removed. Your active Codex session stays signed in."
         }
+    }
+
+    var codexConfigured: Bool {
+        data.services.contains { $0.id == "codex-subscription" } && FileManager.default.fileExists(atPath: AppPaths.codexDirectory.appendingPathComponent("auth.json").path)
+    }
+
+    func providerConnectionLabel(_ id: String) -> String {
+        if proxyStatus != .active { return "Offline" }
+        if providerConnected(id) { return "Connected" }
+        if id == "codex-subscription" && codexConfigured { return "Configured" }
+        return "Not connected"
+    }
+
+    func providerConnected(_ id: String) -> Bool {
+        guard proxyStatus == .active else { return false }
+        switch id {
+        case "baseten": return basetenState == "ready"
+        case "grok-oauth": return grokIsSignedIn
+        case "openrouter": return openRouterReady
+        case "codex-subscription": return providerActivity[id]?.verifiedConnection ?? false
+        default: return false
+        }
+    }
+
+    func syncOpenRouter() async {
+        guard let service = data.services.first(where: { $0.id == "openrouter" }), !service.apiKey.isEmpty else { return }
+        do { try await grokAdapter.configureOpenRouter(key: service.apiKey); await refreshConnectionStatus() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func disconnectOpenRouter() async {
+        do {
+            try await grokAdapter.configureOpenRouter(key: "")
+            var candidate = data
+            if let index = candidate.services.firstIndex(where: { $0.id == "openrouter" }) { candidate.services[index].apiKey = "" }
+            try save(candidate)
+            await refreshConnectionStatus()
+            statusMessage = "OpenRouter disconnected. Its model choices remain saved for reconnecting."
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func fetchOpenRouterModels(key: String) async -> Bool {
+        guard !connectingOpenRouter else { return false }
+        connectingOpenRouter = true
+        defer { connectingOpenRouter = false }
+        do {
+            openRouterModels = try await OpenRouterAPI.models(key: key.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard !openRouterModels.isEmpty else { throw ProviderError.message("No tool-capable OpenRouter models are available.") }
+            errorMessage = ""
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func connectOpenRouter(key: String, models: Set<String>) async -> Bool {
+        guard storageReady else { return false }
+        do {
+            let picked = openRouterModels.filter { models.contains($0.id) }
+            guard !picked.isEmpty else { throw ProviderError.message("Choose at least one model.") }
+            let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/openrouter.json")
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: ["models": picked.map(\.catalogEntry)], options: [.sortedKeys]).write(to: path, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+            var candidate = data
+            candidate.services.removeAll { $0.id == "openrouter" }
+            candidate.services.append(CodexService(id: "openrouter", name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1", envKey: "OPENROUTER_API_KEY", apiKey: key, models: picked.map { CodexModel(id: $0.id, name: $0.name) }, catalogPath: path.path))
+            try save(candidate)
+            try await grokAdapter.configureOpenRouter(key: key)
+            await refreshConnectionStatus()
+            statusMessage = "OpenRouter connected. Reopen Codex once to load newly added model names. Existing task models stay unchanged."
+            errorMessage = ""
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 
     func saveService(originalID: String?, form: ServiceFormData) {

@@ -1,30 +1,10 @@
 import AppKit
 
 let root = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "ModelHarbor/Assets.xcassets")
-let image = NSImage(size: NSSize(width: 1024, height: 1024))
-image.lockFocus()
-NSColor(calibratedRed: 7/255, green: 81/255, blue: 84/255, alpha: 1).setFill()
-NSBezierPath(roundedRect: NSRect(x: 40, y: 40, width: 944, height: 944), xRadius: 215, yRadius: 215).fill()
-let route = NSBezierPath()
-route.lineWidth = 62
-route.lineCapStyle = .round
-route.lineJoinStyle = .round
-route.move(to: NSPoint(x: 512, y: 266))
-route.line(to: NSPoint(x: 512, y: 505))
-route.move(to: NSPoint(x: 280, y: 744))
-route.line(to: NSPoint(x: 280, y: 615))
-route.curve(to: NSPoint(x: 512, y: 505), controlPoint1: NSPoint(x: 280, y: 515), controlPoint2: NSPoint(x: 407, y: 505))
-route.curve(to: NSPoint(x: 744, y: 615), controlPoint1: NSPoint(x: 617, y: 505), controlPoint2: NSPoint(x: 744, y: 515))
-route.line(to: NSPoint(x: 744, y: 744))
-NSColor(calibratedRed: 239/255, green: 247/255, blue: 237/255, alpha: 1).setStroke()
-route.stroke()
-for x in [280.0, 744.0] {
-    NSColor(calibratedRed: 239/255, green: 247/255, blue: 237/255, alpha: 1).setFill()
-    NSBezierPath(ovalIn: NSRect(x: x-53, y: 699, width: 106, height: 106)).fill()
+let master = URL(fileURLWithPath: "assets/brand/harbor-icon-master.png")
+guard let image = NSImage(contentsOf: master) else {
+    fatalError("Missing icon master at assets/brand/harbor-icon-master.png")
 }
-NSColor(calibratedRed: 245/255, green: 188/255, blue: 83/255, alpha: 1).setFill()
-NSBezierPath(ovalIn: NSRect(x: 444, y: 198, width: 136, height: 136)).fill()
-image.unlockFocus()
 func writePNG(side: Int, to url: URL) throws {
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,

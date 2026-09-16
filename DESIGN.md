@@ -11,3 +11,5 @@ Account methods appear in provider headings: Codex current subscription, saved C
 The model picker explains that tasks using “Model Harbor selection” follow the chosen Codex subscription, Grok or Baseten model on their next turn. The footer names the shared Model Harbor connection. Provider-specific task selections remain explicit; never claim an existing OpenAI task has switched just because the global selection changed.
 
 Current subscription models appear first. Their caption explains that the account is the one signed in to Codex. The older saved-account controls explicitly identify the direct connection and its restart requirement, avoiding a false promise that account switching is live.
+
+Baseten explains that unlocking lasts for one Harbor session. A visible Reconnect Baseten button provides recovery after a canceled unlock or key change. Requests never relaunch the unlock prompt after failure; the button is disabled during reconnect.

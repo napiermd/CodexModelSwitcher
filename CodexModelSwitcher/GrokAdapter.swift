@@ -48,6 +48,18 @@ final class GrokAdapter {
         return bytes
     }
 
+    func reconnectBaseten() async throws {
+        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/baseten/reconnect")!, timeoutInterval: 70)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (bytes, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+            throw NSError(domain: "ModelHarbor", code: 401, userInfo: [NSLocalizedDescriptionKey: result?["error"] as? String ?? "Baseten could not reconnect. Try again when 1Password is ready."])
+        }
+    }
+
     static func login() async throws {
         try await Task.detached {
             let home = FileManager.default.homeDirectoryForCurrentUser

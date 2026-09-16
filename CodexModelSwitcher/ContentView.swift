@@ -367,6 +367,14 @@ private struct ServiceSectionView: View {
             } else if service.id == "openai" {
                 Text("Direct connection for saved accounts. Requires restarting Codex; use Current subscription above for live switching.")
                     .font(.caption).foregroundStyle(.secondary)
+            } else if service.id == "baseten" {
+                Text("Unlock once per Harbor session. The credential stays in memory while Harbor is open.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(store.isBasetenReconnectRunning ? "Connecting…" : "Reconnect Baseten") {
+                    store.reconnectBaseten()
+                }
+                .disabled(store.isBasetenReconnectRunning || store.proxyStatus != .active)
+                .help("Read the current key from 1Password again after a key change or canceled unlock.")
             } else if service.id == "grok-oauth" {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {

@@ -147,6 +147,69 @@ def route_for_turn(source, headers):
         return dict(route)
 
 
+class BasetenCredentialError(ValueError):
+    pass
+
+
+class BasetenCredentials:
+    """One helper unlock per app session or explicit reconnect, shared by threads."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.signature = None
+        self.key = None
+        self.failure = None
+        self.helper_reads = 0
+        self.reuses = 0
+        self.snapshot = {'state': 'not_loaded', 'helper_reads': 0, 'reuses': 0}
+
+    def publish(self, state):
+        self.snapshot = {'state': state, 'helper_reads': self.helper_reads, 'reuses': self.reuses}
+
+    def reset(self):
+        with self.lock:
+            self.signature = self.key = self.failure = None
+            self.publish('not_loaded')
+
+    def get(self, auth):
+        signature = json.dumps(auth, sort_keys=True)
+        with self.lock:
+            if signature != self.signature:
+                self.signature, self.key, self.failure = signature, None, None
+            if self.failure:
+                raise BasetenCredentialError(self.failure)
+            if self.key:
+                self.reuses += 1
+                self.publish('ready')
+                return self.key
+            self.helper_reads += 1
+            self.publish('unlocking')
+            try:
+                result = subprocess.run([auth['command'], *auth.get('args', [])],
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                        timeout=min(auth.get('timeout_ms', 30000) / 1000, 60), check=True)
+                key = result.stdout.strip()
+                if not key or '\n' in key or '\r' in key:
+                    raise ValueError('Unusable credential')
+            except (OSError, subprocess.SubprocessError, ValueError):
+                self.failure = 'Baseten unlock did not finish. Click Reconnect Baseten in Model Harbor to try again. Automatic retries are paused.'
+                self.publish('needs_reconnect')
+                raise BasetenCredentialError(self.failure) from None
+            self.key = key
+            self.publish('ready')
+            return key
+
+    def reject(self, authorization):
+        with self.lock:
+            # A delayed failure from an older request must not invalidate a new key.
+            if self.key and hmac.compare_digest(authorization, 'Bearer ' + self.key):
+                self.key = None
+                self.failure = 'Baseten rejected the saved credential. Click Reconnect Baseten in Model Harbor after updating the key.'
+                self.publish('needs_reconnect')
+
+
+BASETEN_CREDENTIALS = BasetenCredentials()
+
+
 def baseten_headers():
     config = tomllib.loads((CONFIG_DIR / 'config.toml').read_text())
     provider = config.get('model_providers', {}).get('baseten', {})
@@ -154,11 +217,7 @@ def baseten_headers():
         raise ValueError('Baseten must use the direct inference.baseten.co endpoint.')
     auth = provider.get('auth') or {}
     if auth.get('command'):
-        # Reuse the existing local provider's credential helper (e.g. 1Password).
-        result = subprocess.run([auth['command'], *auth.get('args', [])],
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                timeout=min(auth.get('timeout_ms', 30000) / 1000, 60), check=True)
-        key = result.stdout.strip()
+        key = BASETEN_CREDENTIALS.get(auth)
     elif provider.get('env_key'):
         key = os.environ.get(provider['env_key'], '').strip()
     else:
@@ -374,7 +433,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
             try:
-                body = json.dumps({'selected': selected_route(), 'last_request': LAST_ROUTE}).encode()
+                body = json.dumps({'selected': selected_route(), 'last_request': LAST_ROUTE,
+                                   'baseten_auth': BASETEN_CREDENTIALS.snapshot}).encode()
             except (ValueError, OSError, KeyError):
                 return self.error(409, 'Choose a Codex, Grok or Baseten model in Model Harbor.')
             self.send_response(200)
@@ -416,7 +476,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         global LAST_ROUTE
         started = False
+        route = None
         try:
+            if self.path == '/harbor/baseten/reconnect':
+                if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                if int(self.headers.get('Content-Length', '0')) != 0:
+                    return self.error(400, 'Reconnect does not accept a body')
+                BASETEN_CREDENTIALS.reset()
+                baseten_headers()
+                body = b'{"connected":true}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             oauth = self.path == '/oauth/v1/responses'
             routed = self.path == '/harbor/v1/responses'
             if self.path not in ('/v1/responses', '/oauth/v1/responses', '/harbor/v1/responses'):
@@ -501,6 +576,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
         except urllib.error.HTTPError as error:
+            if route and route['provider'] == 'baseten' and error.code in (401, 403):
+                BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
             if not started:
                 # Provider errors contain schema diagnostics, never request headers.
                 body = error.read(16384)

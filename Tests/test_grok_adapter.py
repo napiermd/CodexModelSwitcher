@@ -109,6 +109,7 @@ class LiveRoutingTests(unittest.TestCase):
         self.config = patch.object(module, 'CONFIG_DIR', self.root)
         self.config.start()
         module.TURN_ROUTES.clear()
+        module.BASETEN_CREDENTIALS = module.BasetenCredentials()
         self.data = {'services': [
             {'id':'grok-oauth','models':[{'id':'grok-4.6'}]},
             {'id':'codex-subscription','models':[{'id':'gpt-6-astra'}]},
@@ -196,9 +197,121 @@ class LiveRoutingTests(unittest.TestCase):
         from unittest.mock import patch
         (self.root/'config.toml').write_text('[model_providers.baseten]\nbase_url="https://inference.baseten.co/v1"\n[model_providers.baseten.auth]\ncommand="/fake/op"\nargs=["read","op://a/b/c"]\n')
         with patch.object(module.subprocess, 'run', side_effect=module.subprocess.CalledProcessError(1,['/fake/op'])) as run:
-            with self.assertRaises(module.subprocess.CalledProcessError):
+            with self.assertRaisesRegex(module.BasetenCredentialError, "Reconnect Baseten"):
                 module.baseten_headers()
         self.assertTrue(run.call_args.kwargs['capture_output'])
+
+    def helper_config(self, item='op://a/b/c'):
+        (self.root/'config.toml').write_text('[model_providers.baseten]\nbase_url="https://inference.baseten.co/v1"\n[model_providers.baseten.auth]\ncommand="/fake/op"\nargs=["read","'+item+'"]\n')
+
+    def test_baseten_tool_continuations_and_model_switches_unlock_once(self):
+        from unittest.mock import patch
+        self.helper_config()
+        result = module.subprocess.CompletedProcess(['/fake/op'], 0, 'secret-key\n')
+        with patch.object(module.subprocess, 'run', return_value=result) as run:
+            for model in ['moonshotai/Kimi-K3', 'moonshotai/Kimi-K3', 'deepseek-ai/DeepSeek-V4.1-Flash', 'moonshotai/Kimi-K3']:
+                self.select('baseten', model)
+                _, headers, base, _ = module.routed_request({'model':'harbor-selected','input':'hello'}, {})
+                self.assertEqual(headers['Authorization'], 'Bearer secret-key')
+                self.assertEqual(base, 'https://inference.baseten.co/v1')
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(module.BASETEN_CREDENTIALS.snapshot, {'state':'ready','helper_reads':1,'reuses':3})
+        self.assertNotIn('secret-key', ''.join(f.read_text() for f in self.root.iterdir()))
+
+    def test_simultaneous_baseten_requests_share_one_unlock(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        import threading
+        self.helper_config()
+        started, release = threading.Event(), threading.Event()
+        def unlock(*args, **kwargs):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return module.subprocess.CompletedProcess(['/fake/op'], 0, 'shared-key')
+        with patch.object(module.subprocess, 'run', side_effect=unlock) as run, ThreadPoolExecutor(max_workers=8) as pool:
+            pending = [pool.submit(module.baseten_headers) for _ in range(8)]
+            self.assertTrue(started.wait(5))
+            release.set()
+            self.assertEqual([p.result(timeout=5)['Authorization'] for p in pending], ['Bearer shared-key']*8)
+        self.assertEqual(run.call_count, 1)
+
+    def test_canceled_failed_and_empty_unlocks_do_not_prompt_again(self):
+        from unittest.mock import patch
+        for outcome in [module.subprocess.CalledProcessError(1, ['/fake/op'], stderr='private diagnostic'),
+                        module.subprocess.TimeoutExpired(['/fake/op'], 1),
+                        module.subprocess.CompletedProcess(['/fake/op'], 0, ''),
+                        module.subprocess.CompletedProcess(['/fake/op'], 0, 'bad\nkey')]:
+            with self.subTest(outcome=type(outcome).__name__):
+                module.BASETEN_CREDENTIALS = module.BasetenCredentials()
+                self.helper_config()
+                behavior = {'side_effect':outcome} if isinstance(outcome, Exception) else {'return_value':outcome}
+                with patch.object(module.subprocess, 'run', **behavior) as run:
+                    for _ in range(4):
+                        with self.assertRaisesRegex(module.BasetenCredentialError, 'Automatic retries are paused') as error:
+                            module.baseten_headers()
+                        self.assertNotIn('private diagnostic', str(error.exception))
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(module.BASETEN_CREDENTIALS.snapshot['state'], 'needs_reconnect')
+
+    def test_reconnect_and_changed_helper_load_the_current_key(self):
+        from unittest.mock import patch
+        self.helper_config()
+        keys = [module.subprocess.CompletedProcess([], 0, key) for key in ['first','second','third']]
+        with patch.object(module.subprocess, 'run', side_effect=keys) as run:
+            self.assertEqual(module.baseten_headers()['Authorization'], 'Bearer first')
+            module.BASETEN_CREDENTIALS.reset()
+            self.assertEqual(module.baseten_headers()['Authorization'], 'Bearer second')
+            module.BASETEN_CREDENTIALS.reject('Bearer first')
+            self.assertEqual(module.baseten_headers()['Authorization'], 'Bearer second')
+            self.helper_config('op://a/new/c')
+            self.assertEqual(module.baseten_headers()['Authorization'], 'Bearer third')
+            self.assertEqual(module.baseten_headers()['Authorization'], 'Bearer third')
+        self.assertEqual(run.call_count, 3)
+
+    def test_baseten_auth_rejection_does_not_automatically_unlock_again(self):
+        from unittest.mock import patch
+        self.helper_config()
+        with patch.object(module.subprocess, 'run', return_value=module.subprocess.CompletedProcess([],0,'rejected-key')) as run:
+            header = module.baseten_headers()['Authorization']
+            module.BASETEN_CREDENTIALS.reject(header)
+            for _ in range(3):
+                with self.assertRaisesRegex(module.BasetenCredentialError, 'Baseten rejected'):
+                    module.baseten_headers()
+        self.assertEqual(run.call_count, 1)
+        self.assertIsNone(module.BASETEN_CREDENTIALS.key)
+
+    def test_http_reconnect_is_explicit_authenticated_and_recovers_a_canceled_unlock(self):
+        import threading, http.client
+        from unittest.mock import patch
+        self.helper_config()
+        token = self.root/'token'; token.write_text('test-local-bridge-token')
+        with patch.object(module,'TOKEN_PATH',token), patch.object(module.subprocess,'run',side_effect=[
+                module.subprocess.CalledProcessError(1, ['/fake/op']),
+                module.subprocess.CompletedProcess([],0,'recovered-key')]) as run:
+            with self.assertRaises(module.BasetenCredentialError):
+                module.baseten_headers()
+            server = module.http.server.ThreadingHTTPServer(('127.0.0.1',0),module.Handler)
+            worker = threading.Thread(target=server.serve_forever,daemon=True); worker.start()
+            def request(path, headers, method='POST'):
+                conn = http.client.HTTPConnection(*server.server_address,timeout=5)
+                conn.request(method,path,headers=headers)
+                response=conn.getresponse(); result=(response.status,response.read())
+                conn.close(); return result
+            try:
+                path='/harbor/baseten/reconnect'
+                auth={'Authorization':'Bearer test-local-bridge-token'}
+                self.assertEqual(request(path,{})[0],401)
+                self.assertEqual(request(path,dict(auth,Origin='https://example.com'))[0],401)
+                self.assertEqual(run.call_count,1)
+                self.assertEqual(request(path,auth)[0],200)
+                self.assertEqual(module.baseten_headers()['Authorization'],'Bearer recovered-key')
+                status,body=request('/harbor/status',auth,'GET')
+                self.assertEqual(status,200)
+                self.assertNotIn(b'recovered-key',body)
+                self.assertEqual(json.loads(body)['baseten_auth'],{'state':'ready','helper_reads':2,'reuses':1})
+                self.assertEqual(run.call_count,2)
+            finally:
+                server.shutdown(); server.server_close(); worker.join()
 
     def test_http_bridge_requires_local_token_and_preserves_routed_stream(self):
         import threading, urllib.request, urllib.error, io

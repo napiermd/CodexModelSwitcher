@@ -25,7 +25,10 @@ def main():
     parser.add_argument('--subscription', action='store_true', help='Include current ChatGPT subscription; official Codex manages auth.')
     parser.add_argument('--installed', action='store_true', help='Use the running app; waits for selections made in its menu.')
     parser.add_argument('--verify-upgrade', action='store_true', help='Start with the old provider config, update it while Codex is open, then test a new task.')
+    parser.add_argument('--baseten-session', action='store_true', help='Verify repeated Baseten turns and tool continuations share one credential lookup.')
     args = parser.parse_args()
+    if args.baseten_session and (args.subscription or args.verify_upgrade):
+        parser.error('--baseten-session cannot be combined with subscription or upgrade verification')
     if args.verify_upgrade and (not args.subscription or args.installed):
         parser.error('--verify-upgrade requires --subscription and uses an isolated bridge')
     repo = pathlib.Path(__file__).resolve().parents[1]
@@ -42,6 +45,9 @@ def main():
         if not native: raise RuntimeError('The current Codex catalog does not include GPT-6 Astra.')
         saved['services'].append({'id':'codex-subscription', 'models':[{'id':m['slug']} for m in native]})
         models = [('codex-subscription',native[0]['slug']), ('grok-oauth','grok-4.6'), ('baseten','moonshotai/Kimi-K3'), ('codex-subscription',native[0]['slug'])]
+    if args.baseten_session:
+        models = [('baseten','moonshotai/Kimi-K3'), ('baseten','moonshotai/Kimi-K3'),
+                  ('baseten','deepseek-ai/DeepSeek-V4.1-Flash'), ('baseten','moonshotai/Kimi-K3')]
     if args.verify_upgrade:
         models = models[:1]
     with tempfile.TemporaryDirectory(prefix='harbor-live-') as tmp:
@@ -121,6 +127,13 @@ for line in sys.stdin:
                     if 'error' in value:raise RuntimeError(json.dumps(value['error']))
                     return value['result']
             raise TimeoutError(method)
+        def baseten_status():
+            if not args.installed:
+                return bridge.BASETEN_CREDENTIALS.snapshot
+            request = urllib.request.Request('http://127.0.0.1:48118/harbor/status', headers={'Authorization':'Bearer '+bridge.TOKEN_PATH.read_text().strip()})
+            with urllib.request.urlopen(request,timeout=10) as response:
+                return json.load(response)['baseten_auth']
+        initial_auth = baseten_status() if args.baseten_session else None
         report=[]
         try:
             rpc('initialize',{'clientInfo':{'name':'harbor_verification','version':'1'},'capabilities':{'experimentalApi':True}})
@@ -170,6 +183,14 @@ for line in sys.stdin:
                 report.append(row);print(json.dumps(row),flush=True)
                 if not all([row['tool_calls']>0,row['marker_verified'],row['memory_verified'],row['route_verified']]):
                     raise RuntimeError('Live verification failed: '+repr(text))
+            if args.baseten_session:
+                final_auth = baseten_status()
+                helper_reads = final_auth['helper_reads'] - initial_auth['helper_reads']
+                reuses = final_auth['reuses'] - initial_auth['reuses']
+                expected_reads = 0 if initial_auth['state'] == 'ready' else 1
+                if final_auth['state'] != 'ready' or helper_reads != expected_reads or reuses < len(models):
+                    raise RuntimeError('Baseten did not reuse one session credential')
+                print(json.dumps({'baseten_credential_helper_reads':helper_reads,'credential_reuses':reuses}),flush=True)
             print(json.dumps({'passed':True,'turns':len(report),'codex_process_id':proc.pid,'thread_id':thread,'restarts':0}),flush=True)
         finally:
             proc.terminate()

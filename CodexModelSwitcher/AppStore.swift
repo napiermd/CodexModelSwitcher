@@ -14,6 +14,7 @@ final class AppStore: ObservableObject {
     @Published var grokAccount = "Checking sign-in…"
     @Published var grokIsSignedIn = false
     @Published var isGrokLoginRunning = false
+    @Published var isBasetenReconnectRunning = false
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -59,6 +60,23 @@ final class AppStore: ObservableObject {
         defer { CredentialStore.allowAuthenticationUI = false }
         load()
         if storageReady { errorMessage = ""; Task { await refreshGrokAccount() } }
+    }
+
+    func reconnectBaseten() {
+        guard !isBasetenReconnectRunning else { return }
+        isBasetenReconnectRunning = true
+        statusMessage = "Unlock Baseten in 1Password once for this Harbor session."
+        Task {
+            defer { isBasetenReconnectRunning = false }
+            do {
+                try await grokAdapter.reconnectBaseten()
+                errorMessage = ""
+                statusMessage = "Baseten is ready. Its credential stays in memory until Harbor quits or you reconnect."
+            } catch {
+                statusMessage = ""
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func signInGrok() {

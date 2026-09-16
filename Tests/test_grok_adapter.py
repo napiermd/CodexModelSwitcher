@@ -68,3 +68,35 @@ class TranslationTests(unittest.TestCase):
                       'arguments':'{"tool":"missing","arguments":"{}"}'})
 
 if __name__=='__main__':unittest.main()
+
+class OAuthTests(unittest.TestCase):
+    def test_rejects_api_key_session(self):
+        from unittest.mock import patch
+        with patch.object(pathlib.Path, 'exists', return_value=True), patch.object(pathlib.Path, 'read_text', return_value=json.dumps({'xai':{'key':'api-key','auth_mode':'api_key'}})):
+            with self.assertRaisesRegex(ValueError, 'Select a Grok account'):
+                module.session()
+
+    def test_oauth_headers_use_session_and_actual_client_version(self):
+        from unittest.mock import patch
+        auth={'key':'oauth-test','expires_at':'2099-01-01T00:00:00Z'}
+        with patch.object(module,'session',return_value=auth), patch.object(module,'grok_binary',return_value='/fake/grok'), patch.object(module.subprocess,'check_output',return_value='grok 1.0.30 stable'):
+            headers=module.oauth_headers()
+        self.assertEqual(headers['Authorization'],'Bearer oauth-test')
+        self.assertEqual(headers['User-Agent'],'ModelHarbor/1.0')
+        self.assertEqual(headers['x-grok-client-version'],'1.0.30')
+
+    def test_expired_session_refreshes_through_official_client(self):
+        from unittest.mock import patch
+        old={'key':'old','expires_at':'2000-01-01T00:00:00Z'}
+        new={'key':'fresh','expires_at':'2099-01-01T00:00:00Z'}
+        with patch.object(module,'session',side_effect=[old,new]), patch.object(module,'grok_binary',return_value='/fake/grok'), patch.object(module.subprocess,'run') as run, patch.object(module.subprocess,'check_output',return_value='grok 1.0.30'):
+            self.assertEqual(module.oauth_headers()['Authorization'],'Bearer fresh')
+            self.assertEqual(run.call_args.args[0],['/fake/grok','models'])
+            self.assertNotIn('XAI_API_KEY',run.call_args.kwargs['env'])
+
+    def test_failed_refresh_does_not_fall_back_to_api_key(self):
+        from unittest.mock import patch
+        old={'key':'old','expires_at':'2000-01-01T00:00:00Z'}
+        with patch.object(module,'session',return_value=old), patch.object(module,'grok_binary',return_value='/fake/grok'), patch.object(module.subprocess,'run'):
+            with self.assertRaisesRegex(ValueError,'could not refresh'):
+                module.oauth_headers()

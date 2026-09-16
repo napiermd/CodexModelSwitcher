@@ -12,7 +12,8 @@ struct CodexService: Identifiable, Codable, Equatable {
     var models: [CodexModel]
 
     var requiresAPIKey: Bool {
-        !envKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if id == "grok-oauth" { return false }
+        return !envKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     init(

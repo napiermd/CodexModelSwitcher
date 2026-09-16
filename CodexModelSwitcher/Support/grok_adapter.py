@@ -10,9 +10,91 @@ import re
 import socket
 import urllib.error
 import urllib.request
+import datetime
+import hmac
+import pathlib
+import secrets
+import subprocess
 
 ADDRESS = ('127.0.0.1', 48118)
 MAX_BODY = 32 * 1024 * 1024
+OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
+TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
+AUTH_PATH = pathlib.Path.home() / '.grok/auth.json'
+AUTH_LOCK = threading.Lock()
+
+
+def grok_binary():
+    for path in [pathlib.Path.home() / '.local/bin/grok', pathlib.Path('/opt/homebrew/bin/grok'), pathlib.Path('/usr/local/bin/grok')]:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    raise ValueError('Install the official Grok client before signing in.')
+
+
+def session():
+    if not AUTH_PATH.exists():
+        raise ValueError('Sign in to Grok in Model Harbor.')
+    sessions = [a for a in json.loads(AUTH_PATH.read_text()).values()
+                if a.get('oidc_issuer') == 'https://auth.x.ai' and a.get('auth_mode') == 'oidc' and a.get('key')]
+    if len(sessions) != 1:
+        raise ValueError('Select a Grok account by signing in again.')
+    return sessions[0]
+
+
+def expired(auth):
+    expiry = auth.get('expires_at')
+    if not expiry:
+        return True
+    return datetime.datetime.fromisoformat(expiry.replace('Z', '+00:00')).timestamp() < time.time() + 90
+
+
+def oauth_headers():
+    with AUTH_LOCK:
+        auth = session()
+        if expired(auth):
+            # The official client owns refresh rotation and its cross-process lock.
+            env = {k: v for k, v in os.environ.items() if k not in ('XAI_API_KEY', 'GROK_DEPLOYMENT_KEY', 'GROK_AUTH_PATH', 'GROK_HOME')}
+            subprocess.run([grok_binary(), 'models'], env=env, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45, check=True)
+            auth = session()
+            if expired(auth):
+                raise ValueError('Grok could not refresh your session. Sign in again.')
+        version = subprocess.check_output([grok_binary(), '--version'], timeout=5, text=True).split()[1]
+        return {'Authorization': 'Bearer ' + auth['key'], 'X-XAI-Token-Auth': 'xai-grok-cli',
+                'x-grok-client-version': version, 'User-Agent': 'ModelHarbor/1.0'}
+
+
+def ensure_bridge_token():
+    TOKEN_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        TOKEN_PATH.chmod(0o600)
+        return
+    with os.fdopen(fd, 'w') as f:
+        f.write(secrets.token_urlsafe(48))
+
+
+def oauth_models():
+    req = urllib.request.Request(OAUTH_BASE + '/models', headers=oauth_headers())
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
+        entries = json.load(response)['data']
+    models = []
+    for entry in entries:
+        if entry.get('api_backend') != 'responses':
+            continue
+        models.append({'slug': entry['id'], 'display_name': entry.get('name', entry['id']),
+                       'description': entry.get('description', ''), 'base_instructions': 'You are a coding assistant. Follow the user instructions and use the available tools.',
+                       'default_reasoning_level': entry.get('reasoning_effort', 'high'),
+                       'supported_reasoning_levels': [{'effort': e['value'], 'description': e.get('description', e['value'])} for e in entry.get('reasoning_efforts', [])],
+                       'shell_type': 'shell_command', 'visibility': 'list', 'supported_in_api': True,
+                       'priority': len(models), 'context_window': entry.get('context_window', 128000),
+                       'max_context_window': entry.get('context_window', 128000), 'input_modalities': ['text', 'image'],
+                       'support_verbosity': False, 'truncation_policy': {'mode': 'tokens', 'limit': 10000},
+                       'supports_parallel_tool_calls': False, 'experimental_supported_tools': []})
+    if not models:
+        raise ValueError('This Grok account has no Responses models available.')
+    return {'email': session().get('email', 'Signed in'), 'models': models}
 
 
 def flat_name(namespace, name, custom=False):
@@ -177,6 +259,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
+        if self.path == '/oauth/status':
+            if self.headers.get('Origin') or not self.local_authorized():
+                return self.error(401, 'Local authorization required')
+            try:
+                body = json.dumps(oauth_models()).encode()
+            except Exception:
+                return self.error(401, 'Grok sign-in needs attention. Sign in again in Model Harbor.')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path != '/health':
             return self.error(404, 'Not found')
         body = b'{"adapter":"codex-model-switcher-grok","version":1}'
@@ -186,16 +281,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def local_authorized(self):
+        try:
+            return hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + TOKEN_PATH.read_text().strip())
+        except OSError:
+            return False
+
     def do_POST(self):
         started = False
         try:
-            if self.path != '/v1/responses':
+            oauth = self.path == '/oauth/v1/responses'
+            if self.path not in ('/v1/responses', '/oauth/v1/responses'):
                 return self.error(404, 'Only Responses requests are supported')
             if self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
                 return self.error(400, 'Browser origins and transfer-encoded requests are not supported')
             authorization = self.headers.get('Authorization', '')
             if not authorization.startswith('Bearer ') or len(authorization) < 12:
                 return self.error(401, 'A provider credential is required')
+            if oauth and not self.local_authorized():
+                return self.error(401, 'Local authorization required')
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY:
                 return self.error(413, 'Request body exceeds the adapter limit')
@@ -209,10 +313,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if len(raw) > MAX_BODY:
                 return self.error(413, 'Decoded body exceeds the adapter limit')
             translation = Translation(json.loads(raw))
-            request = urllib.request.Request('https://api.x.ai/v1/responses',
+            headers = oauth_headers() if oauth else {'Authorization': authorization}
+            headers.update({'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream' if translation.request.get('stream') else 'application/json'})
+            request = urllib.request.Request((OAUTH_BASE if oauth else 'https://api.x.ai/v1') + '/responses',
                 data=json.dumps(translation.request, separators=(',', ':')).encode(),
-                headers={'Authorization': authorization, 'Content-Type': 'application/json',
-                         'Accept': 'text/event-stream' if translation.request.get('stream') else 'application/json'})
+                headers=headers)
             opener = urllib.request.build_opener(NoRedirect)
             with opener.open(request, timeout=180) as upstream:
                 content_type = upstream.headers.get('Content-Type', 'application/json')
@@ -250,6 +356,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    ensure_bridge_token()
     server = http.server.ThreadingHTTPServer(ADDRESS, Handler)
     server.daemon_threads = True
     parent_pid = os.getppid()

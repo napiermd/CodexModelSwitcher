@@ -4,6 +4,39 @@ import Foundation
 /// Runs the real store against an explicitly isolated directory and Keychain service.
 @MainActor
 struct InstallationVerification {
+    static func migrateVault() async {
+        defer { NSApplication.shared.terminate(nil) }
+        do {
+            guard try CredentialStore.read("codex-accounts") == nil else { print("Vault already migrated."); return }
+            let metadata = try JSONDecoder().decode(AppData.self, from: Data(contentsOf: AppPaths.appData))
+            let source = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex-switcher/accounts.json")
+            let root = try JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any]
+            let authManager = OpenAIAuthManager()
+            var available: [String] = []
+            for entry in root?["accounts"] as? [[String: Any]] ?? [] {
+                guard var tokens = entry["auth_data"] as? [String: Any], tokens.removeValue(forKey: "type") as? String == "chat_g_p_t" else { continue }
+                available.append(String(decoding: try JSONSerialization.data(withJSONObject: ["auth_mode": "chatgpt", "tokens": tokens]), as: UTF8.self))
+            }
+            // Prefer the active credential, which Codex may have refreshed since import.
+            if let active = try? String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("auth.json"), encoding: .utf8) { available.insert(active, at: 0) }
+            var vault: [String: String] = [:]
+            for account in metadata.openAIAccounts {
+                guard let auth = available.first(where: { authManager.extractAccountID(from: $0) == account.accountID && authManager.extractEmail(from: $0) == account.email }),
+                      let object = try JSONSerialization.jsonObject(with: Data(auth.utf8)) as? [String: Any],
+                      let tokens = object["tokens"] as? [String: Any], let token = tokens["access_token"] as? String else { throw AppError.openAIAccountLoginFailed }
+                var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!, timeoutInterval: 30)
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue(account.accountID, forHTTPHeaderField: "ChatGPT-Account-ID")
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw AppError.openAIAccountLoginFailed }
+                vault[account.id] = auth
+            }
+            guard !vault.isEmpty else { throw AppError.openAIAccountLoginFailed }
+            try CredentialStore.write(String(decoding: JSONEncoder().encode(vault), as: UTF8.self), account: "codex-accounts")
+            print("Migrated \(vault.count) authenticated accounts into the signed Model Harbor vault.")
+        } catch { print("Migration did not finish: \(error.localizedDescription)") }
+    }
+
     static func run() async {
         guard ProcessInfo.processInfo.arguments.contains("--verify-accounts"),
               let directory = ProcessInfo.processInfo.environment["MODEL_SWITCHER_CONFIG_DIR"],
@@ -15,6 +48,7 @@ struct InstallationVerification {
         defer {
             for account in store.data.openAIAccounts { try? CredentialStore.remove("openai:\(account.id)") }
             try? CredentialStore.remove("verification-probe")
+            try? CredentialStore.remove("codex-accounts")
             try? FileManager.default.removeItem(at: AppPaths.codexDirectory.appendingPathComponent("auth.json"))
             if let encoded = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? encoded.write(to: reportURL, options: .atomic)

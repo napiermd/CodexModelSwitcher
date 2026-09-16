@@ -5,9 +5,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
+        if ProcessInfo.processInfo.arguments.contains("--migrate-vault") {
+            Task { @MainActor in await InstallationVerification.migrateVault() }
+            return
+        }
         if !ProcessInfo.processInfo.arguments.contains("--verify-accounts") {
             _ = AppStore.shared
-            if AppStore.shared.data.openAIAccounts.isEmpty { showSettings() }
+            showSettings()
         }
         if ProcessInfo.processInfo.arguments.contains("--verify-accounts") {
             Task { @MainActor in await InstallationVerification.run() }
@@ -22,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 470),
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = "Codex Model Switcher"
+            window.title = "Model Harbor"
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: ContentView().environmentObject(AppStore.shared).background(.regularMaterial))
             window.center()

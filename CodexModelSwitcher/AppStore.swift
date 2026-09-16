@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    static let shared = AppStore(startAdapter: !ProcessInfo.processInfo.arguments.contains("--verify-accounts"))
+    static let shared = AppStore(startAdapter: !ProcessInfo.processInfo.arguments.contains(where: { ["--verify-accounts", "--migrate-vault"].contains($0) }))
     @Published private(set) var data: AppData = .empty
     @Published var errorMessage = ""
     @Published var statusMessage = ""
@@ -11,6 +11,8 @@ final class AppStore: ObservableObject {
     @Published var checkingOpenAIAccountIDs: Set<String> = []
     @Published var proxyStatus: ProxyServerStatus = .notRunning
     @Published private(set) var storageReady = false
+    @Published var grokAccount = "Checking sign-in…"
+    @Published var isGrokLoginRunning = false
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -31,7 +33,7 @@ final class AppStore: ObservableObject {
                 Task {
                     for _ in 0..<50 {
                         try? grokAdapter.start()
-                        if await grokAdapter.isHealthy() { proxyStatus = .active; return }
+                        if await grokAdapter.isHealthy() { proxyStatus = .active; await refreshGrokAccount(); return }
                         try? await Task.sleep(nanoseconds: 100_000_000)
                     }
                     proxyStatus = .error
@@ -44,12 +46,53 @@ final class AppStore: ObservableObject {
     func clearError() { errorMessage = ""; statusMessage = "" }
     func clearStatusMessage() { statusMessage = "" }
 
+    func unlockAccounts() {
+        CredentialStore.allowAuthenticationUI = true
+        defer { CredentialStore.allowAuthenticationUI = false }
+        load()
+        if storageReady { errorMessage = ""; Task { await refreshGrokAccount() } }
+    }
+
+    func signInGrok() {
+        guard !isGrokLoginRunning else { return }
+        isGrokLoginRunning = true
+        statusMessage = "Finish signing in on Grok’s website."
+        Task {
+            defer { isGrokLoginRunning = false }
+            do { try await GrokAdapter.login(); await refreshGrokAccount(); statusMessage = "Grok sign-in finished." }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func refreshGrokAccount() async {
+        do {
+            let bytes = try await grokAdapter.accountStatus()
+            guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  let entries = value["models"] as? [[String: Any]] else { throw AppError.missingModel }
+            grokAccount = value["email"] as? String ?? "Signed in"
+            guard storageReady else { return }
+            let catalog = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/grok-oauth.json")
+            try FileManager.default.createDirectory(at: catalog.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: ["models": entries]).write(to: catalog, options: .atomic)
+            var candidate = data
+            if let index = candidate.services.firstIndex(where: { $0.id == "grok-oauth" }) {
+                candidate.services[index].models = entries.compactMap { entry in
+                    guard let slug = entry["slug"] as? String else { return nil }
+                    return CodexModel(id: slug, name: entry["display_name"] as? String ?? slug)
+                }
+                candidate.services[index].catalogPath = catalog.path
+            }
+            try save(candidate)
+        } catch { grokAccount = "Sign in to load your models" }
+    }
+
     func load() {
         do {
             var candidate = defaultData()
             if FileManager.default.fileExists(atPath: AppPaths.appData.path) {
                 candidate = try JSONDecoder().decode(AppData.self, from: Data(contentsOf: AppPaths.appData))
                 try candidate.loadCredentials()
+                candidate.services.removeAll { $0.id == "openrouter" || $0.id == "xai" }
                 for service in defaultData().services where !candidate.services.contains(where: { $0.id == service.id }) {
                     candidate.services.append(service)
                 }
@@ -127,7 +170,7 @@ final class AppStore: ObservableObject {
 
     func select(serviceID: String, modelID: String) {
         perform {
-            if serviceID == "xai", proxyStatus != .active {
+            if serviceID == "xai" || serviceID == "grok-oauth", proxyStatus != .active {
                 throw NSError(domain: "Switcher", code: 1, userInfo: [NSLocalizedDescriptionKey: "The Grok adapter is not ready. Reopen the switcher and try again."])
             }
             var candidate = try capturingActiveAccount()
@@ -135,7 +178,7 @@ final class AppStore: ObservableObject {
             try writer.applySelection(selection, in: candidate)
             candidate.selectedModel = selection
             try save(candidate)
-            statusMessage = serviceID == "xai"
+            statusMessage = serviceID == "xai" || serviceID == "grok-oauth"
                 ? "Grok selected. Restart Codex; keep this switcher open."
                 : "Selection saved. Restart Codex to apply."
         }
@@ -283,8 +326,7 @@ final class AppStore: ObservableObject {
             models: [CodexModel(id: "__native__", name: "Native Codex models")])]
         let config = (try? String(contentsOf: AppPaths.codexConfig, encoding: .utf8)) ?? ""
         for (id, name, url, catalog) in [
-            ("baseten", "Baseten · 1Password", "https://inference.baseten.co/v1", "baseten-frontier.json"),
-            ("xai", "Grok · xAI API", "https://api.x.ai/v1", "xai-frontier.json")
+            ("baseten", "Baseten · Direct API", "https://inference.baseten.co/v1", "baseten-frontier.json")
         ] {
             let path = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/\(catalog)")
             guard config.contains("[model_providers.\(id)]"),
@@ -298,6 +340,7 @@ final class AppStore: ObservableObject {
             services.append(CodexService(id: id, name: name, baseURL: url, envKey: "", apiKey: "", models: models,
                 catalogPath: path.path, usesExistingProvider: true))
         }
+        services.append(CodexService(id: "grok-oauth", name: "Grok · Browser sign-in", baseURL: "http://127.0.0.1:48118/oauth/v1", envKey: "", apiKey: "", models: []))
         return AppData(services: services, selectedModel: nil)
     }
 }

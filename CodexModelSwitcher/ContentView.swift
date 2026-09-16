@@ -12,6 +12,11 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             Divider()
+            if !store.storageReady {
+                Button("Unlock saved accounts") { store.unlockAccounts() }
+                    .buttonStyle(.borderedProminent)
+                    .padding(12)
+            }
             bodySection
                 .disabled(!store.storageReady)
             if editorSession == nil {
@@ -78,7 +83,9 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
             } else {
-                Image(systemName: "terminal")
+                Image("HarborMark")
+                    .resizable()
+                    .scaledToFit()
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.tint)
                     .frame(width: 34, height: 34)
@@ -88,7 +95,7 @@ struct ContentView: View {
                             .strokeBorder(.white.opacity(0.18), lineWidth: 1)
                     }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Codex Models")
+                    Text("Model Harbor")
                         .font(.system(.headline, design: .rounded).weight(.semibold))
                     Text(currentSelectionText)
                         .font(.subheadline)
@@ -340,7 +347,7 @@ private struct ServiceSectionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(service.id == "xai" && store.proxyStatus != .active)
+                    .disabled((service.id == "xai" || service.id == "grok-oauth") && store.proxyStatus != .active)
                     .padding(.vertical, 2)
                     .padding(.horizontal, 6)
                     .background(isSelected(model) ? Color.accentColor.opacity(0.14) : Color.clear)
@@ -348,7 +355,17 @@ private struct ServiceSectionView: View {
                 }
             }
 
-            if service.id == "xai" {
+            if service.id == "grok-oauth" {
+                HStack {
+                    Text(store.grokAccount).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(store.isGrokLoginRunning ? "Signing in…" : "Sign in") { store.signInGrok() }
+                        .disabled(store.isGrokLoginRunning)
+                }
+                Text("Uses your Grok sign-in. Keep Model Harbor open.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if service.id == "xai" {
                 Text("Grok uses xAI API billing. Keep this switcher open while using Grok.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

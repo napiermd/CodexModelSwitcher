@@ -88,7 +88,11 @@ struct CodexConfigWriter {
                     throw NSError(domain: "CodexModelSwitcher", code: 2, userInfo: [NSLocalizedDescriptionKey:
                         "The upstream compatibility proxy is disabled pending tool and authentication verification."])
                 }
-                if !service.apiKey.isEmpty {
+                if service.id == "grok-oauth" {
+                    let tokenPath = AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token").path
+                    lines.append(contentsOf: ["[model_providers.grok-oauth.auth]", "command = \"/bin/cat\"",
+                        "args = [\"\(tomlEscape(tokenPath))\"]"])
+                } else if !service.apiKey.isEmpty {
                     lines.append(contentsOf: ["[model_providers.\(service.id).auth]", "command = \"/usr/bin/security\"",
                         "args = [\"find-generic-password\", \"-s\", \"\(CredentialStore.service)\", \"-a\", \"provider:\(service.id)\", \"-w\"]"])
                 } else if !service.envKey.isEmpty {

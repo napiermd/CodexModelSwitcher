@@ -19,7 +19,7 @@ struct CodexModelSwitcherApp: App {
                 .environmentObject(store)
 
         } label: {
-            Label("Models", systemImage: "arrow.triangle.2.circlepath")
+            Label("Harbor", systemImage: "signpost.right.and.left")
         }
         .menuBarExtraStyle(.window)
     }

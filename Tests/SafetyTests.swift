@@ -56,6 +56,20 @@ final class SafetyTests: XCTestCase {
 }
 
 extension SafetyTests {
+    func testGrokOAuthUsesOnlyLocalCredentialAndPreservesAPIProvider() throws {
+        let source = "[model_providers.xai]\nbase_url = \"https://api.x.ai/v1\"\nenv_key = \"XAI_API_KEY\"\n"
+        let oauth = CodexService(id: "grok-oauth", name: "Grok browser sign-in", baseURL: "http://127.0.0.1:48118/oauth/v1", envKey: "", apiKey: "", models: [CodexModel(id: "grok-4.6", name: "Grok 4.6")])
+        let selection = SelectedModel(serviceID: oauth.id, modelID: "grok-4.6")
+        let data = AppData(services: [oauth], selectedModel: selection)
+        let output = try writer.rewriteConfig(source, selected: selection, data: data)
+        XCTAssertTrue(output.contains(source))
+        XCTAssertTrue(output.contains("model_provider = \"grok-oauth\""))
+        XCTAssertTrue(output.contains("/oauth/v1"))
+        XCTAssertTrue(output.contains("command = \"/bin/cat\""))
+        XCTAssertTrue(output.contains("model-harbor-bridge-token"))
+        let again = try writer.rewriteConfig(output, selected: selection, data: data)
+        XCTAssertEqual(again.components(separatedBy: "[model_providers.grok-oauth]").count, 2)
+    }
     func testGrokCopiesAuthenticationWithoutChangingSourceProvider() throws {
         let original = "[model_providers.xai]\nname = \"xAI\"\nbase_url = \"https://api.x.ai/v1\"\n[model_providers.xai.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://example/item/key\"]\n"
         let selected = SelectedModel(serviceID: "xai", modelID: "test-model")

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-09-16",
+  "transport": "responses",
+  "evidence": "Live Responses requests completed with exact model IDs and xhigh echoed for Kimi K3, GLM 5.3 and DeepSeek V4 Pro 0813. This is request/response evidence, not independent attestation of internal compute. Literal max is rejected by some Responses backends. Kimi K2.7 Code has thinking on/off, without a documented depth control.",
+  "models": [
+    {"id": "moonshotai/Kimi-K3", "name": "Kimi K3", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "xhigh", "reasoning_mode": "effort"},
+    {"id": "zai-org/GLM-5.3", "name": "GLM 5.3", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["high", "xhigh"], "default_effort": "xhigh", "reasoning_mode": "effort"},
+    {"id": "deepseek-ai/DeepSeek-V4-Pro-0813", "name": "DeepSeek V4 Pro 0813", "context_window": 1048576, "input_modalities": ["text"], "efforts": ["high", "xhigh"], "default_effort": "xhigh", "reasoning_mode": "effort"},
+    {"id": "moonshotai/Kimi-K2.7-Code", "name": "Kimi K2.7 Code", "context_window": 262000, "input_modalities": ["text", "image"], "efforts": ["high"], "default_effort": "high", "reasoning_mode": "thinking"},
+    {"id": "deepseek-ai/DeepSeek-V4.1-Flash", "name": "DeepSeek V4.1 Flash", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "high", "reasoning_mode": "effort"}
+  ],
+  "roles": [
+    {"name": "harbor_kimi_architect", "model": "moonshotai/Kimi-K3", "effort": "xhigh", "kind": "architect", "description": "Plan the feature and split independent assignments across the Harbor coding team."},
+    {"name": "harbor_glm_coder", "model": "zai-org/GLM-5.3", "effort": "xhigh", "kind": "coder", "description": "Implement one bounded assignment using GLM 5.3 in its own Git worktree."},
+    {"name": "harbor_deepseek_coder", "model": "deepseek-ai/DeepSeek-V4-Pro-0813", "effort": "xhigh", "kind": "coder", "description": "Implement one bounded assignment using DeepSeek V4 Pro 0813 in its own Git worktree."},
+    {"name": "harbor_kimi_coder", "model": "moonshotai/Kimi-K2.7-Code", "effort": "high", "kind": "coder", "description": "Implement a bounded coding or testing assignment with Kimi K2.7 Code thinking enabled. The provider has no documented depth control."},
+    {"name": "harbor_reviewer", "model": "moonshotai/Kimi-K3", "effort": "xhigh", "kind": "reviewer", "description": "Independently review integrated changes and test evidence without editing files."}
+  ]
+}

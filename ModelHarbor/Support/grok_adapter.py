@@ -268,8 +268,13 @@ def routed_request(source, headers):
     source['store'] = False
     if route['provider'] == 'baseten':
         reasoning = source.get('reasoning')
-        if isinstance(reasoning, dict) and reasoning.get('effort') == 'xhigh':
-            reasoning['effort'] = 'high'
+        if isinstance(reasoning, dict) and reasoning.get('effort') in ('max', 'ultra'):
+            raise ValueError('Baseten Responses supports up to xhigh. Choose the verified Harbor agent role; max and ultra are not translated silently.')
+        if route['model'] == 'moonshotai/Kimi-K2.7-Code':
+            if isinstance(reasoning, dict) and reasoning.get('effort', 'high') != 'high':
+                raise ValueError('Kimi K2.7 Code uses high as the Harbor thinking-enabled setting; the provider has no documented depth control.')
+            source.pop('reasoning', None)
+            source['chat_template_args'] = {'enable_thinking': True}
         upstream_headers = baseten_headers()
         base = 'https://inference.baseten.co/v1'
     elif route['provider'] == 'codex-subscription':

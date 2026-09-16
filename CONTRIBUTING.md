@@ -20,7 +20,7 @@ python3 scripts/check-site.py
 ./scripts/build-app.sh --ad-hoc
 ```
 
-Use Xcode and Homebrew Python 3.14 on macOS. No paid provider account is needed for the local test suites or CI. The app build requires macOS. Linux can run Python and website checks.
+Use Xcode 16+ and Homebrew Python 3.14 on macOS. No paid provider account is needed for the local test suites or CI. The app build requires macOS. Linux can run Python and website checks.
 
 Test behavioral changes at their boundary: independent tasks, config preservation, credential routing, cancellation, or tool results. Do not commit your `.codex` directory, account metadata, generated credentials, Keychain exports, or local build outputs. Use isolated test directories and the explicit test-only Keychain namespace when exercising account operations.
 

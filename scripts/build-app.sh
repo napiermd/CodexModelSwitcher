@@ -7,6 +7,11 @@ case "${1:-}" in
   '') identity="${MODEL_HARBOR_SIGNING_IDENTITY:-}" ;;
   *) echo "Unknown option: $1" >&2; exit 2 ;;
 esac
+xcode_version="$(xcodebuild -version | sed -n 's/^Xcode //p')"
+if [[ -z "$xcode_version" || "${xcode_version%%.*}" -lt 16 ]]; then
+  echo 'Xcode 16 or newer is required. Select it with xcode-select before building.' >&2
+  exit 1
+fi
 if [[ -z "$identity" && -d '/Applications/Model Harbor.app' ]]; then
   identity="$(codesign -dvv '/Applications/Model Harbor.app' 2>&1 | sed -n 's/^Authority=//p' | head -1)"
 fi

@@ -6,7 +6,7 @@ Model Harbor is a source preview for macOS 13 or later. It is intended for peopl
 
 ## Prerequisites
 
-- Xcode with its command-line tools selected. Run `xcodebuild -version` to check.
+- Xcode **16 or newer** with its command-line tools selected. Run `xcodebuild -version` to check.
 - Homebrew Python **3.14** at `/opt/homebrew/bin/python3` or `/usr/local/bin/python3`. The bridge needs 3.11 for TOML and 3.14 for compressed Zstd requests.
 - Codex installed and signed in with your ChatGPT account. Open it once before Harbor so its configuration and `models_cache.json` exist.
 - For Grok, the official Grok CLI installed at `~/.local/bin/grok`, `/opt/homebrew/bin/grok`, or `/usr/local/bin/grok`, with OAuth access for your account. Follow [xAI's current setup documentation](https://docs.x.ai/build/enterprise).

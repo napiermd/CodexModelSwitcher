@@ -28,7 +28,7 @@ Provider eligibility and model availability depend on your accounts. Grok OAuth 
 
 ## Build and run
 
-Install Xcode and Homebrew Python 3.14. Sign in to Codex and run it once to populate its local configuration and model catalog.
+Install Xcode 16+ and Homebrew Python 3.14. Sign in to Codex and run it once to populate its local configuration and model catalog.
 
 ```sh
 git clone https://github.com/napiermd/model-harbor.git

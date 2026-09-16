@@ -34,6 +34,7 @@ CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.
 ROUTE_LOCK = threading.Lock()
 TURN_ROUTES = OrderedDict()
 LAST_ROUTE = None
+TASK_REPAIRS = None
 
 
 
@@ -659,7 +660,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.error(401, 'Local authorization required')
             body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE,
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
-                               'baseten_traffic': baseten_traffic_status()}).encode()
+                               'baseten_traffic': baseten_traffic_status(),
+                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -681,7 +683,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path != '/health':
             return self.error(404, 'Not found')
-        body = b'{"adapter":"codex-model-switcher-grok","version":2,"baseten_pacing":true}'
+        body = b'{"adapter":"codex-model-switcher-grok","version":2,"baseten_pacing":true,"task_repairs":true}'
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -707,6 +709,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pacer = None
         acquired = False
         try:
+            if self.path in ('/harbor/repairs/enable', '/harbor/repairs/disable'):
+                if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                if int(self.headers.get('Content-Length', '0')) != 0:
+                    return self.error(400, 'Task repair settings do not accept a body')
+                if TASK_REPAIRS is None:
+                    return self.error(503, 'Task repair service is unavailable')
+                TASK_REPAIRS.set_enabled(self.path.endswith('/enable'))
+                body = json.dumps(TASK_REPAIRS.snapshot).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == '/harbor/baseten/reconnect':
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
@@ -867,6 +884,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     ensure_bridge_token()
+    from task_repair import RepairMonitor
+    TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
+    TASK_REPAIRS.start()
     server = http.server.ThreadingHTTPServer(ADDRESS, Handler)
     server.daemon_threads = True
     parent_pid = os.getppid()

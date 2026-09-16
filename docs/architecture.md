@@ -18,11 +18,21 @@ flowchart LR
 
 Each model has an explicit route ID, such as `harbor/grok-oauth/<model>` or `harbor/baseten/<model>`. `LiveRouting.swift` builds the catalog. The bridge validates the requested route against configured models. It does not look at the app's default to decide which model an existing task uses.
 
-Codex also persists the task's provider. A model-picker change does not migrate that provider. An older `openai` task paired with a `harbor/...` model therefore sends the Harbor model name to the native OpenAI connection and fails before reaching Harbor. See the [offline task repair](getting-started.md#repair-an-older-openai-task) for that case.
+Codex also persists the task's provider. A model-picker change does not migrate that provider. An older `openai` task paired with a `harbor/...` model therefore sends the Harbor model name to the native OpenAI connection and fails before reaching Harbor. See the [task route repair](getting-started.md#repair-an-older-openai-task) for that case.
 
 Codex persists the model choice for each task. A `(thread_id, turn_id)` pair pins tool continuations to the route that began the turn. Changing the model affects a subsequent turn. A hidden legacy route remains fixed to its pre-upgrade model for older tasks.
 
 The **New task default** updates configuration for future tasks. Accounts remain shared connections; this does not isolate a separate OAuth identity for every task.
+
+## Repairing saved routes
+
+`Support/task_repair.py` is the shared engine for the app and command-line repair. Monitoring is read-only until the user enables automatic repair. Each pass finds OpenAI tasks with an installed Harbor selection; it does not change native models or other providers.
+
+For a live-app repair, the engine takes Codex's `thread-writer-locks/.coordination.lock`, opens and exclusively locks the selected task's lock file, then releases coordination. It holds the task lock through validation, backup, file publication and SQLite commit. Codex's active writer or publication lock causes repair to wait. The engine never deletes the shared lock file and never stops a task. Missing lock support requires the offline command instead.
+
+The backup journal records original and replacement file hashes plus the conversation-body hash. A crash between replacing the rollout and committing SQLite leaves a prepared journal. Recovery takes the same task lock and finishes only an exact original/replacement state; subsequent conversation changes stop recovery. Reports and backups are private local files. Repair settings use the existing authenticated loopback API and reject browser-origin requests.
+
+The end-to-end check reproduces a native-provider failure, verifies refusal while Codex owns the task lock, archives the task, repairs it, then restores and completes the same task through Harbor in the same Codex process. All verification traffic uses synthetic data and loopback model endpoints.
 
 ## Credentials and request destinations
 

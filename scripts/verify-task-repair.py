@@ -19,7 +19,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'harbor/baseten/verification-model'
-spec = importlib.util.spec_from_file_location('repair', ROOT / 'scripts/repair-task-provider.py')
+spec = importlib.util.spec_from_file_location('repair', ROOT / 'ModelHarbor/Support/task_repair.py')
 repair = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(repair)
 
@@ -148,27 +148,30 @@ stream_max_retries = 0
         assert before['status'] == 'failed', before['status']
         assert server.requests[-1] == ('/native/v1/responses', MODEL)
         print('BEFORE: existing task fails through native provider.', flush=True)
-    finally:
-        first.close()
-    plan = repair.task_plan(root, task_id)
-    assert plan['metadata']['payload']['history_mode'] == 'paginated'
-    # This isolated home has no running client. Real CLI repairs always keep the process guard.
-    result = repair.apply_plan(root, plan, process_check=lambda: [])
-    assert result['conversation_unchanged']
-    assert b'PRESERVE_THIS_HISTORY' in Path(plan['rollout']).read_bytes()
-    print('REPAIR: only provider changed; conversation bytes preserved.', flush=True)
-    second = Client(root)
-    try:
-        second.initialize()
-        resumed = second.rpc('thread/resume', {'threadId': task_id, 'excludeTurns': True})
+        try:
+            repair.repair_unloaded(root, task_id)
+        except repair.TaskInUse:
+            print('LOCK: repair refuses the loaded task while Codex stays open.', flush=True)
+        else:
+            raise AssertionError('Loaded task writer lock was not enforced')
+        first.rpc('thread/archive', {'threadId': task_id})
+        assert task_id not in first.rpc('thread/loaded/list', {})['data']
+        plan = repair.task_plan(root, task_id)
+        assert plan['metadata']['payload']['history_mode'] == 'paginated'
+        result = repair.repair_unloaded(root, task_id)
+        assert result['conversation_unchanged']
+        assert b'PRESERVE_THIS_HISTORY' in Path(plan['rollout']).read_bytes()
+        print('REPAIR: only provider changed; conversation bytes preserved.', flush=True)
+        first.rpc('thread/unarchive', {'threadId': task_id})
+        resumed = first.rpc('thread/resume', {'threadId': task_id, 'excludeTurns': True})
         assert resumed['modelProvider'] == 'model-harbor', resumed['modelProvider']
         assert resumed['thread']['id'] == task_id
-        after = second.turn(task_id, 'Continue the synthetic routing verification only.')
+        after = first.turn(task_id, 'Continue the synthetic routing verification only.')
         assert after['status'] == 'completed', after['status']
         assert server.requests[-1] == ('/harbor/v1/responses', MODEL)
-        print('AFTER: same task resumes through Harbor and completes.', flush=True)
+        print('AFTER: same task completes through Harbor without restarting Codex.', flush=True)
     finally:
-        second.close()
+        first.close()
 
 
 def main():

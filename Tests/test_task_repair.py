@@ -1,13 +1,17 @@
 import importlib.util
 from contextlib import closing, contextmanager
 import json
+import fcntl
+import os
+import subprocess
+import sys
 import pathlib
 import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('task_repair', pathlib.Path(__file__).resolve().parents[1] / 'scripts/repair-task-provider.py')
+spec = importlib.util.spec_from_file_location('task_repair', pathlib.Path(__file__).resolve().parents[1] / 'ModelHarbor/Support/task_repair.py')
 repair = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(repair)
 TASK = '11111111-2222-4333-8444-555555555555'
@@ -127,6 +131,140 @@ class TaskRepairTests(unittest.TestCase):
         output = f'{repair.os.getuid()} 123 /Applications/ChatGPT.app/Contents/Resources/codex\n{repair.os.getuid()} 456 /bin/zsh\n'
         with patch.object(repair.subprocess, 'run', return_value=type('Result', (), {'stdout': output})()):
             self.assertEqual(repair.codex_processes(), [123])
+
+    def prepare_locks(self):
+        locks = self.home / 'thread-writer-locks'
+        locks.mkdir(exist_ok=True)
+        (locks / '.coordination.lock').touch()
+        return locks
+
+    def test_live_repair_refuses_loaded_writer_then_repairs_after_release(self):
+        locks = self.prepare_locks()
+        with (locks / (TASK + '.lock')).open('w+b') as loaded:
+            fcntl.flock(loaded, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(repair.TaskInUse):
+                repair.repair_unloaded(self.home, TASK)
+            self.assertEqual(self.row()[0], 'openai')
+            self.assertEqual(self.rollout.read_bytes(), self.original)
+        result = repair.repair_unloaded(self.home, TASK)
+        self.assertTrue(result['conversation_unchanged'])
+        self.assertEqual(self.row()[0], 'model-harbor')
+
+    def test_coordination_lock_blocks_cleanup_and_repair_race(self):
+        locks = self.prepare_locks()
+        with (locks / '.coordination.lock').open('r+b') as cleanup:
+            fcntl.flock(cleanup, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(repair.TaskInUse):
+                repair.repair_unloaded(self.home, TASK)
+        self.assertEqual(self.rollout.read_bytes(), self.original)
+
+    def test_live_repair_requires_codex_lock_namespace(self):
+        with self.assertRaisesRegex(ValueError, 'locks are unavailable'):
+            repair.repair_unloaded(self.home, TASK)
+        self.assertEqual(self.row()[0], 'openai')
+
+    def test_monitor_opt_in_survives_restart_and_preserves_unrelated_task(self):
+        self.prepare_locks()
+        monitor = repair.RepairMonitor(self.home)
+        monitor.run_once()
+        self.assertEqual(monitor.snapshot, {'enabled': False, 'state': 'waiting', 'pending': 1, 'repaired': 0})
+        self.assertEqual(self.row()[0], 'openai')
+        monitor.set_enabled(True)
+        restarted = repair.RepairMonitor(self.home)
+        restarted.run_once()
+        self.assertEqual(restarted.snapshot, {'enabled': True, 'state': 'ready', 'pending': 0, 'repaired': 1})
+        restarted.run_once()
+        self.assertEqual(restarted.snapshot['repaired'], 1)
+        self.assertEqual(self.row('unrelated'), ('openai', 'native-model', 'Other task'))
+        self.assertEqual(restarted.settings.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(restarted.report.stat().st_mode & 0o777, 0o600)
+
+    def test_monitor_waits_for_loaded_task_without_error_or_backup(self):
+        locks = self.prepare_locks()
+        monitor = repair.RepairMonitor(self.home)
+        monitor.set_enabled(True)
+        with (locks / (TASK + '.lock')).open('w+b') as loaded:
+            fcntl.flock(loaded, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            monitor.run_once()
+            self.assertEqual(monitor.snapshot['state'], 'waiting')
+            self.assertFalse((self.home / 'model-harbor-task-backups').exists())
+        monitor.run_once()
+        self.assertEqual(monitor.snapshot['pending'], 0)
+
+    def test_unknown_models_stop_monitor_without_repeated_backups(self):
+        self.prepare_locks()
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
+            db.execute('UPDATE threads SET model=? WHERE id=?', ('harbor/unknown/model', TASK))
+        monitor = repair.RepairMonitor(self.home)
+        monitor.set_enabled(True)
+        monitor.run_once()
+        self.assertEqual(monitor.snapshot['state'], 'error')
+        report = monitor.report.read_bytes()
+        monitor.run_once()
+        self.assertEqual(monitor.report.read_bytes(), report)
+        self.assertFalse((self.home / 'model-harbor-task-backups').exists())
+
+    def test_disabling_automatic_repairs_persists_and_does_not_write_routes(self):
+        self.prepare_locks()
+        monitor = repair.RepairMonitor(self.home)
+        monitor.set_enabled(True)
+        monitor.set_enabled(False)
+        repair.RepairMonitor(self.home).run_once()
+        self.assertEqual(self.rollout.read_bytes(), self.original)
+
+    def test_report_write_failure_keeps_retry_available(self):
+        self.prepare_locks()
+        monitor = repair.RepairMonitor(self.home)
+        monitor.set_enabled(True)
+        with patch.object(repair, 'private_json', side_effect=OSError('Disk full')):
+            monitor.run_once()
+        self.assertEqual(monitor.snapshot['state'], 'error')
+        monitor.set_enabled(True)
+        monitor.run_once()
+        self.assertEqual(monitor.snapshot['state'], 'ready')
+        self.assertEqual(self.row()[0], 'model-harbor')
+
+    def crash_after_rollout_publication(self):
+        self.prepare_locks()
+        code = """
+import importlib.util, os, pathlib, sys
+from contextlib import contextmanager
+spec = importlib.util.spec_from_file_location('repair', sys.argv[1])
+repair = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(repair)
+original = repair.open_database
+@contextmanager
+def database(home, writable=False):
+    with original(home, writable) as connection:
+        if not writable:
+            yield connection
+        else:
+            class CrashBeforeCommit:
+                execute = connection.execute
+                def commit(self): os._exit(83)
+            yield CrashBeforeCommit()
+repair.open_database = database
+repair.repair_unloaded(pathlib.Path(sys.argv[2]), sys.argv[3])
+"""
+        result = subprocess.run([sys.executable, '-c', code, repair.__file__, str(self.home), TASK])
+        self.assertEqual(result.returncode, 83)
+        self.assertEqual(self.row()[0], 'openai')
+        self.assertEqual(json.loads(self.rollout.read_bytes().split(b'\n', 1)[0])['payload']['model_provider'], 'model-harbor')
+
+    def test_interrupted_commit_recovers_exact_route_and_history(self):
+        self.crash_after_rollout_publication()
+        self.assertEqual(repair.recover_pending(self.home), [{'thread_id': TASK, 'recovered': True}])
+        self.assertEqual(self.row()[0], 'model-harbor')
+        self.assertEqual(self.rollout.read_bytes().split(b'\n', 1)[1], self.history)
+        self.assertEqual(repair.recover_pending(self.home), [])
+
+    def test_interrupted_commit_refuses_changed_conversation(self):
+        self.crash_after_rollout_publication()
+        with self.rollout.open('ab') as out:
+            out.write(b'{"type":"new-event"}\n')
+        with self.assertRaisesRegex(ValueError, 'interrupted repair changed'):
+            repair.recover_pending(self.home)
+        self.assertEqual(self.row()[0], 'openai')
 
 
 if __name__ == '__main__':

@@ -76,7 +76,7 @@ class PacingTests(unittest.TestCase):
         self.pacer.finish({'input_tokens': 190000, 'output_tokens': 5000,
                            'input_tokens_details': {'cached_tokens': 189000}})
         self.reserve(300000)
-        self.assertAlmostEqual(self.clock(), 1023.4)
+        self.assertAlmostEqual(self.clock(), 1029.25)
 
     def test_provider_limits_and_remaining_capacity_control_next_request(self):
         self.pacer.observe(headers(x_ratelimit_limit_tokens=1000000, x_ratelimit_remaining_tokens=0,
@@ -89,7 +89,7 @@ class PacingTests(unittest.TestCase):
         self.reserve(50000)
         self.pacer.observe(headers(x_ratelimit_limit_tokens=100000), 200)
         self.reserve(50000)
-        self.assertEqual(self.clock(), 1030)
+        self.assertEqual(self.clock(), 1037.5)
 
     def test_overload_backoff_then_success(self):
         calls = []
@@ -156,6 +156,51 @@ class PacingTests(unittest.TestCase):
         tools = module.estimated_tokens({'input': 'hello', 'tools': [{'description': 'a' * 3000}]})
         self.assertGreaterEqual(tools - base, 1000)
         self.assertEqual(module.estimated_tokens({'input': 'hello', 'max_output_tokens': 8192}) - base, 4096)
+
+    def test_base64_is_not_counted_as_prompt_text(self):
+        def request(size):
+            return {'input': [{'role': 'user', 'content': [{'type': 'input_image',
+                    'image_url': 'data:image/png;base64,' + 'A' * size}]}]}
+        self.assertEqual(module.estimated_tokens(request(100)), module.estimated_tokens(request(2_000_000)))
+        self.assertGreater(module.estimated_tokens(request(100)), 32768)
+
+    def test_rate_limit_without_headers_waits_a_full_refill_window(self):
+        self.opener.open.side_effect = [rejected(429), Response()]
+        self.open().close()
+        self.assertEqual(self.clock(), 1060)
+
+    def test_recovery_can_outlast_the_old_four_attempt_ceiling(self):
+        self.opener.open.side_effect = [rejected(529) for _ in range(5)] + [Response()]
+        self.open(budget=600).close()
+        self.assertEqual(self.opener.open.call_count, 6)
+        self.assertEqual(self.clock(), 1190)
+
+    def test_limit_cooldown_and_debt_survive_a_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(module, 'CONFIG_DIR', pathlib.Path(root)), patch.object(module.time, 'time', return_value=2000):
+            first = module.BasetenPacer(clock=self.clock, model='model/test')
+            first.reserve(100000, self.clock() + 600, lambda: False, lambda _: None)
+            first.observe(headers(x_ratelimit_limit_tokens=1000000, Retry_After=90), 429)
+            fresh = module.BasetenPacer(clock=self.clock, model='model/test')
+            self.assertEqual(fresh.tpm, 1000000)
+            self.assertEqual(fresh.delay(1000), 90)
+            self.assertEqual(first.state_path.stat().st_mode & 0o777, 0o600)
+            saved = first.state_path.read_text()
+            self.assertNotIn('Authorization', saved)
+            self.assertNotIn('input', saved)
+
+    def test_large_schema_estimate_learns_from_usage_without_tiny_probe_bias(self):
+        self.reserve(450000)
+        self.pacer.finish({'input_tokens': 150000, 'output_tokens': 100})
+        self.assertEqual(self.pacer.estimation_multiplier, 0.8)
+        self.clock.advance(60)
+        self.reserve(450000 * self.pacer.estimation_multiplier)
+        self.pacer.finish({'input_tokens': 150000, 'output_tokens': 100})
+        self.assertAlmostEqual(self.pacer.estimation_multiplier, 0.64)
+        before = self.pacer.estimation_multiplier
+        self.clock.advance(60)
+        self.reserve(4096)
+        self.pacer.finish({'input_tokens': 89, 'output_tokens': 15})
+        self.assertEqual(self.pacer.estimation_multiplier, before)
 
     def test_models_have_independent_lanes(self):
         module.BASETEN_PACERS.clear()
@@ -242,12 +287,12 @@ class HTTPTests(unittest.TestCase):
                      x_ratelimit_remaining_tokens=305000, x_request_id='provider-request')]
         response, body = self.post()
         self.assertEqual(response.status, 200)
-        self.assertEqual(response.getheader('x-ratelimit-limit-tokens'), '500000')
-        self.assertEqual(response.getheader('x-request-id'), 'provider-request')
+        self.assertEqual(response.getheader('X-Model-Harbor-Provider'), 'baseten')
+        self.assertTrue(body.startswith(b': Model Harbor is waiting'))
         self.assertIn(b'response.completed', body)
         self.assertNotIn(b'fake-private-key', body)
-        self.assertEqual(self.clock(), 1045)
-        self.assertAlmostEqual(self.pacer.token_due, 1068.4)
+        self.assertEqual(self.clock(), 1060)
+        self.assertAlmostEqual(self.pacer.token_due, 1089.25)
         self.assertEqual(self.helper.call_count, 1)
         self.assertEqual(self.opener.open.call_count, 2)
         self.assertFalse(self.pacer.active)
@@ -256,14 +301,45 @@ class HTTPTests(unittest.TestCase):
         def overload(*args, **kwargs):
             raise rejected(529, x_request_id='overload-id')
         self.opener.open.side_effect = overload
-        response, body = self.post()
+        response, body = self.post(stream=False)
         self.assertEqual(response.status, 529)
         self.assertEqual(json.loads(body), {'error': {'message': 'busy', 'code': 529}})
         self.assertEqual(response.getheader('retry-after'), '60')
         self.assertEqual(response.getheader('x-request-id'), 'overload-id')
         self.assertEqual(self.helper.call_count, 1)
-        self.assertEqual(self.opener.open.call_count, 4)
+        self.assertEqual(self.opener.open.call_count, 10)
         self.assertEqual(module.LAST_ROUTE['state'], 'failed')
+        self.assertFalse(self.pacer.active)
+
+    def test_queued_stream_ends_with_explicit_error_when_recovery_is_exhausted(self):
+        self.opener.open.side_effect = lambda *a, **k: (_ for _ in ()).throw(rejected(529))
+        response, body = self.post()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.getheader('Content-Type'), 'text/event-stream')
+        events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith(b'data: ')]
+        self.assertEqual(events[-1]['type'], 'response.failed')
+        self.assertEqual(events[-1]['response']['error']['message'], 'busy')
+        self.assertEqual(self.opener.open.call_count, 10)
+        self.assertFalse(self.pacer.active)
+
+    def test_queued_stream_handles_unstructured_provider_error(self):
+        failure = urllib.error.HTTPError('https://inference.baseten.co/v1/responses', 400, 'Rejected',
+                                        headers(), io.BytesIO(b'["unsupported request"]'))
+        self.opener.open.side_effect = [rejected(529), failure]
+        response, body = self.post()
+        events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith(b'data: ')]
+        self.assertEqual(events[-1]['type'], 'response.failed')
+        self.assertIn('unsupported request', events[-1]['response']['error']['message'])
+        self.assertTrue(failure.closed)
+        self.assertFalse(self.pacer.active)
+
+    def test_local_queue_timeout_is_distinct_from_provider_rate_limit(self):
+        self.pacer.cooldown = self.clock() + 700
+        response, body = self.post(stream=False)
+        self.assertEqual(response.status, 503)
+        self.assertIn(b'local queue limit', body)
+        self.assertEqual(self.opener.open.call_count, 0)
+        self.assertEqual(self.pacer.queue_timeouts, 1)
         self.assertFalse(self.pacer.active)
 
     def test_partial_stream_failure_is_not_replayed(self):
@@ -308,7 +384,7 @@ class HTTPTests(unittest.TestCase):
         response, body = self.post(stream=False)
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(body)['usage']['input_tokens'], 200000)
-        self.assertAlmostEqual(self.pacer.token_due, 1025.2)
+        self.assertAlmostEqual(self.pacer.token_due, 1031.5)
 
 
 if __name__ == '__main__':

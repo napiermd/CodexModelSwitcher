@@ -113,6 +113,7 @@ struct CodexConfigWriter {
                     let token = try bridgeToken ?? String(contentsOfFile: tokenPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !token.isEmpty, !token.contains("\n"), !token.contains("\r") else { throw AppError.openAIAccountLoginFailed }
                     lines.append(contentsOf: ["supports_websockets = false", "requires_openai_auth = true",
+                        "stream_idle_timeout_ms = 900000",
                         "[model_providers.model-harbor.http_headers]",
                         "X-Model-Harbor-Token = \"\(tomlEscape(token))\""])
                 } else if !service.apiKey.isEmpty {

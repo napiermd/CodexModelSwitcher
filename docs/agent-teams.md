@@ -85,7 +85,7 @@ python3 scripts/harbor-team.py run \
   --timeout 1800
 ```
 
-Repeat that command concurrently for `harbor_deepseek_coder` and `harbor_kimi_coder`. A second process targeting the same worktree fails immediately. Different models can run in parallel; Harbor’s existing per-model pacing and bounded retries still apply.
+Repeat that command concurrently for `harbor_deepseek_coder` and `harbor_kimi_coder`. A second process targeting the same worktree fails immediately. Different models can run in parallel; Harbor queues each model independently, keeps 20% pacing headroom, and gives temporary rejections up to ten minutes to recover. Workers allow fifteen minutes of stream idle time. Cached input still consumes the token-per-minute allowance. A parent task can exhaust its own queue budget before any workers launch; check the launcher artifacts before calling a failed parent turn a swarm failure.
 
 The coordinating task waits for all workers, inspects their changes, runs independent checks, and applies accepted changes to the integration worktree. Use `harbor_reviewer` against that worktree for an independent review, then run the project’s combined checks before merging. The architect proposes integration steps in read-only mode; the coordinating task performs the actual integration. Nothing merges, pushes, or deploys automatically.
 

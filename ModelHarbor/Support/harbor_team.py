@@ -284,6 +284,7 @@ requires_openai_auth = false
 supports_websockets = false
 request_max_retries = 0
 stream_max_retries = 0
+stream_idle_timeout_ms = 900000
 '''
     atomic_write(temporary / 'config.toml', text)
     token_path = home / 'model-harbor-bridge-token'

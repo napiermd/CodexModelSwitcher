@@ -9,7 +9,7 @@ import tempfile
 import time
 import tomllib
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('harbor_team', ROOT / 'ModelHarbor/Support/harbor_team.py')
@@ -219,13 +219,80 @@ print(os.environ['MODEL_HARBOR_WORKER_AUTH'],file=sys.stderr)
         body = ('import subprocess,sys,time\n'
                 'subprocess.Popen([sys.executable,"-c",' + repr('import time,pathlib;time.sleep(1);pathlib.Path(' + repr(str(child_marker)) + ').write_text("bad")') + '])\n'
                 'time.sleep(60)\n')
-        result = self.run_worker(body, timeout=.15)
+        with patch.object(harbor, 'terminate_group', wraps=harbor.terminate_group) as cleanup:
+            result = self.run_worker(body, timeout=.15)
+        self.assertEqual(cleanup.call_count, 1)
         self.assertEqual(result['status'], 'timed_out')
         time.sleep(1.2)
         self.assertFalse(child_marker.exists())
         self.assertTrue(Path(result['artifacts']).exists())
         with harbor.exclusive_lock(self.output / 'locks/harbor_glm_coder.lock'):
             pass
+
+    def test_completed_worker_process_group_is_cleaned_up_once(self):
+        with patch.object(harbor, 'terminate_group', wraps=harbor.terminate_group) as cleanup:
+            result = self.run_worker("print('{\"type\":\"turn.completed\"}')")
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(cleanup.call_count, 1)
+
+    def test_permission_error_for_reaped_group_requires_no_live_members(self):
+        for snapshot in ('999 S\n', '321 Z+\n', '321 ZX\n999 S\n'):
+            with self.subTest(snapshot=snapshot):
+                process = Mock(pid=321)
+                process.poll.return_value = 0
+                with patch.object(harbor.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+                     patch.object(harbor.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, snapshot)):
+                    harbor.terminate_group(process)
+                process.wait.assert_called_once_with(timeout=5)
+
+    def test_zombie_group_before_leader_is_reaped_is_waited_for(self):
+        process = Mock(pid=321)
+        process.poll.return_value = None
+        process.wait.return_value = -signal.SIGTERM
+        with patch.object(harbor.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+             patch.object(harbor.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '321 Z+\n')):
+            harbor.terminate_group(process)
+        process.wait.assert_called_once_with(timeout=5)
+
+    def test_process_group_permission_failure_is_not_hidden_for_live_or_unknown_group(self):
+        for leader_state, snapshot in ((None, '321 S+\n'), (0, '321 S+\n'), (0, ''), (0, 'unrecognized output')):
+            with self.subTest(leader_state=leader_state, snapshot=snapshot):
+                process = Mock(pid=321)
+                process.poll.return_value = leader_state
+                with patch.object(harbor.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+                     patch.object(harbor.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, snapshot)):
+                    with self.assertRaises(PermissionError):
+                        harbor.terminate_group(process)
+                process.wait.assert_not_called()
+        process = Mock(pid=321)
+        process.poll.return_value = 0
+        with patch.object(harbor.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+             patch.object(harbor.subprocess, 'run', side_effect=subprocess.TimeoutExpired('ps', 5)):
+            with self.assertRaises(PermissionError):
+                harbor.terminate_group(process)
+
+    def test_live_group_cleanup_failure_stops_owned_leader_and_retains_failure_result(self):
+        processes = []
+        def fail_cleanup(process):
+            processes.append(process)
+            raise PermissionError(1, 'Operation not permitted')
+        with patch.object(harbor, 'terminate_group', side_effect=fail_cleanup) as cleanup:
+            result = self.run_worker('import time\ntime.sleep(60)', timeout=.15)
+        self.assertEqual(cleanup.call_count, 1)
+        self.assertIsNotNone(processes[0].poll())
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['execution_status'], 'timed_out')
+        self.assertEqual(result['cleanup']['errors'], ['PermissionError'])
+        artifacts = Path(result['artifacts'])
+        self.assertEqual(json.loads((artifacts / 'result.json').read_text()), result)
+        self.assertTrue((artifacts / 'changes.json').is_file())
+
+    def test_cleanup_failure_cannot_report_completed(self):
+        with patch.object(harbor, 'terminate_group', side_effect=PermissionError(1, 'Operation not permitted')):
+            result = self.run_worker("print('{\"type\":\"turn.completed\"}')")
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['execution_status'], 'completed')
+        self.assertEqual(result['cleanup']['status'], 'failed')
 
     def test_wrong_branch_and_changed_role_fail_before_process_launch(self):
         self.prepare()

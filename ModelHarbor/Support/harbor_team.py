@@ -345,25 +345,40 @@ def capture_changes(cwd, artifacts, base):
             'untracked_count': len(manifest['untracked']), 'snapshot_bytes': total}
 
 
-def terminate_group(process):
+def signal_group(process, signum):
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, signum)
+        return True
     except ProcessLookupError:
+        return False
+    except PermissionError:
+        # macOS may report EPERM for zombies before waitpid can reap the leader.
+        # Check every group member; an exited leader can still have live children.
+        try:
+            snapshot = subprocess.run(['/bin/ps', '-axo', 'pgid=,stat='], check=True,
+                                      capture_output=True, text=True, timeout=5)
+            members = [line.split() for line in snapshot.stdout.splitlines() if line.strip()]
+            valid = members and all(len(fields) == 2 and fields[0].isdigit() for fields in members)
+            if valid and not any(int(group) == process.pid and state[0] not in ('Z', 'X')
+                                 for group, state in members):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            pass
+        raise
+
+
+def terminate_group(process):
+    if not signal_group(process, signal.SIGTERM):
         process.wait(timeout=5)
         return
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
+        if not signal_group(process, 0):
             break
         time.sleep(.02)
     else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        signal_group(process, signal.SIGKILL)
     process.wait(timeout=5)
 
 
@@ -396,6 +411,7 @@ def run(team_file, name, prompt_file, *, timeout=1800, home=None, spec=None, cod
         write_json(artifacts / 'result.json', result)
         process = None
         readers = []
+        cleanup_errors = []
         original_handlers = {}
         terminal = []
         try:
@@ -418,7 +434,20 @@ def run(team_file, name, prompt_file, *, timeout=1800, home=None, spec=None, cod
                 process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True,
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                            text=True, encoding='utf-8', errors='replace')
-                cleanup.callback(terminate_group, process)
+                def cleanup_process():
+                    try:
+                        terminate_group(process)
+                    except Exception as error:
+                        cleanup_errors.append(type(error).__name__)
+                        # The owned leader can still be stopped even when group signaling fails.
+                        # This is incomplete group cleanup and can never produce a completed result.
+                        if process.poll() is None:
+                            try:
+                                process.kill()
+                                process.wait(timeout=5)
+                            except Exception as leader_error:
+                                cleanup_errors.append(type(leader_error).__name__)
+                cleanup.callback(cleanup_process)
 
                 def collect(stream, filename, events=False):
                     fd = os.open(artifacts / filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -485,13 +514,17 @@ def run(team_file, name, prompt_file, *, timeout=1800, home=None, spec=None, cod
             result['error'] = str(error) if isinstance(error, ValueError) else f'Worker setup or execution failed ({type(error).__name__}).'
         finally:
             if process is not None:
-                terminate_group(process)
                 for reader in readers:
                     reader.join(timeout=5)
                 if process.stdin and not process.stdin.closed:
                     process.stdin.close()
             for signum, handler in original_handlers.items():
                 signal.signal(signum, handler)
+            if cleanup_errors:
+                result['execution_status'] = result['status']
+                result['status'] = 'failed'
+                result['error'] = 'Worker process-group cleanup could not be verified (' + ', '.join(cleanup_errors) + ').'
+                result['cleanup'] = {'status': 'failed', 'errors': cleanup_errors}
             try:
                 result['changes'] = capture_changes(cwd, artifacts, team['base_commit'])
             except Exception:

@@ -24,6 +24,19 @@ private struct HarborMenuBarLabel: View {
     private var activity: ProviderActivity { store.providerActivity[providerID] ?? ProviderActivity() }
     private var text: String {
         switch MenuBarDisplay(rawValue: display) ?? .connection {
+        case .quota:
+            guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale,
+                  let percent = snapshot.windows.compactMap(\.remainingPercent).min() else { return "\(provider.name) · Quota unavailable" }
+            return "\(provider.name) · \(Int(percent.rounded()))% left"
+        case .spend:
+            guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale, let amount = snapshot.costToday else { return "\(provider.name) · Spend unavailable" }
+            return "\(provider.name) · \(amount.formatted(.currency(code: "USD")))\(snapshot.isEstimate ? " est." : "")"
+        case .reset:
+            guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale,
+                  let date = snapshot.windows.compactMap(\.resetsAt).filter({ $0 > Date() }).min() else { return "\(provider.name) · Reset unavailable" }
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .abbreviated
+            return "\(provider.name) · \(formatter.localizedString(for: date, relativeTo: Date()))"
         case .icon: return ""
         case .name: return "Harbor"
         case .count: return "\(ProviderDefinition.all.filter { store.providerConnected($0.id) }.count) connected"

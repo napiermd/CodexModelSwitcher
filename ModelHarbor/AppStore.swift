@@ -27,6 +27,10 @@ final class AppStore: ObservableObject {
     @Published var openRouterReady = false
     @Published var connectingOpenRouter = false
     @Published var openRouterModels: [OpenRouterModel] = []
+    @Published var usageSnapshots: [UsageSnapshot] = []
+    @Published var usageRefreshing = false
+    @Published private(set) var usageLastAttempt = Date.distantPast
+    private var usagePolling: Task<Void, Never>?
     private var connectionPolling: Task<Void, Never>?
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
@@ -52,6 +56,14 @@ final class AppStore: ObservableObject {
                             proxyStatus = .active
                             await refreshGrokAccount()
                             await syncOpenRouter()
+                            usagePolling = Task { [weak self] in
+                                while !Task.isCancelled {
+                                    if UserDefaults.standard.object(forKey: "harbor.usageAutoRefresh") as? Bool ?? true {
+                                        await self?.refreshUsage()
+                                    }
+                                    try? await Task.sleep(nanoseconds: 300_000_000_000)
+                                }
+                            }
                             connectionPolling = Task { [weak self] in
                                 while !Task.isCancelled {
                                     await self?.refreshConnectionStatus()
@@ -71,7 +83,86 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func stopAdapter() { grokAdapter.stop() }
+    func stopAdapter() { connectionPolling?.cancel(); usagePolling?.cancel(); grokAdapter.stop() }
+
+    func usageSnapshot(for provider: String) -> UsageSnapshot? {
+        let id = UserDefaults.standard.string(forKey: "harbor.usageAccount.\(provider)")
+        let entries = usageSnapshots.filter { $0.providerID == provider }
+        return entries.first { $0.id == id } ?? entries.first
+    }
+
+    func refreshUsage() async {
+        guard !usageRefreshing, Date().timeIntervalSince(usageLastAttempt) >= 60 else { return }
+        usageRefreshing = true
+        usageLastAttempt = Date()
+        defer { usageRefreshing = false }
+        var accounts: [CodexUsageAccount] = []
+        if let auth = try? String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("auth.json"), encoding: .utf8),
+           let current = CodexUsageAccount.parse(auth: auth) { accounts.append(current) }
+        for saved in data.openAIAccounts {
+            if let account = CodexUsageAccount.parse(auth: saved.authJSON, label: saved.displayName),
+               !accounts.contains(where: { $0.id == account.id }) { accounts.append(account) }
+        }
+        let history = UserDefaults.standard.object(forKey: "harbor.importCodexBarHistory") as? Bool ?? true
+        var next = history ? await UsageHistoryReader.shared.read() : []
+        async let providerResults = UsageClient.bridge()
+        for account in accounts {
+            do { next.append(try await UsageClient.codex(account)) }
+            catch {
+                var entry = usageSnapshots.first { $0.id == account.id } ?? UsageSnapshot(id: account.id, providerID: "codex-subscription", accountLabel: account.label, source: "Codex account usage", scope: "This ChatGPT account")
+                entry.error = (error as? ProviderError)?.localizedDescription ?? "Could not refresh Codex usage. Harbor will retry later."
+                next.append(entry)
+            }
+        }
+        if accounts.isEmpty {
+            next.append(UsageSnapshot(id: "codex-unavailable", providerID: "codex-subscription", accountLabel: "Codex account", source: "Codex account usage", scope: "", error: "No readable Codex sign-in. Sign in to Codex or unlock saved accounts in Harbor."))
+        }
+        do { next += try await providerResults }
+        catch {
+            for provider in ["baseten", "grok-oauth", "openrouter"] {
+                var entry = usageSnapshots.first { $0.id == provider } ?? UsageSnapshot(id: provider, providerID: provider, accountLabel: ProviderDefinition.named(provider).name, source: "Provider account API", scope: "")
+                entry.error = "Usage service is unavailable. Keep Model Harbor open and refresh."
+                next.append(entry)
+            }
+        }
+        if !(UserDefaults.standard.object(forKey: "harbor.importCodexBarHistory") as? Bool ?? true) {
+            next.removeAll { $0.source.hasPrefix("CodexBar") }
+        }
+        usageSnapshots = next.sorted { ($0.isEstimate ? 1 : 0) < ($1.isEstimate ? 1 : 0) }
+    }
+
+    func connectCodexBarHistory() {
+        let panel = NSOpenPanel()
+        panel.title = "Connect CodexBar history"
+        panel.message = "Choose CodexBar’s widget-snapshot.json to read its cached usage and token-value history. This grants access to one file; no sign-in or Keychain access is needed."
+        panel.prompt = "Connect history"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = UsageClient.codexBarHistoryLocation.deletingLastPathComponent()
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                guard url.lastPathComponent == "widget-snapshot.json" else {
+                    throw ProviderError.message("Choose CodexBar’s widget-snapshot.json file.")
+                }
+                let bookmark = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                UserDefaults.standard.set(bookmark, forKey: "harbor.codexBarHistoryBookmark")
+                UserDefaults.standard.set(true, forKey: "harbor.importCodexBarHistory")
+                self.statusMessage = "CodexBar history connected. Usage will refresh from its saved history."
+                Task {
+                    let history = await UsageHistoryReader.shared.read()
+                    self.usageSnapshots.removeAll { $0.source.hasPrefix("CodexBar") }
+                    if UserDefaults.standard.object(forKey: "harbor.importCodexBarHistory") as? Bool ?? true {
+                        self.usageSnapshots += history
+                    }
+                    if history.isEmpty { self.errorMessage = "CodexBar history is not available yet. Refresh CodexBar, then retry here." }
+                }
+            } catch { self.errorMessage = error.localizedDescription }
+        }
+    }
+
     func clearError() { errorMessage = ""; statusMessage = "" }
     func clearStatusMessage() { statusMessage = "" }
 

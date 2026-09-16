@@ -39,6 +39,7 @@ LAST_ROUTE = None
 TASK_REPAIRS = None
 PROVIDER_ACTIVITY = {}
 OPENROUTER_KEY = ''
+USAGE_COLLECTOR = None
 
 
 def provider_activity_start(route):
@@ -290,6 +291,31 @@ def baseten_headers():
     if not key or '\n' in key or '\r' in key:
         raise ValueError('Baseten authentication returned no usable credential.')
     return {'Authorization': 'Bearer ' + key, 'User-Agent': 'ModelHarbor/1.0'}
+
+
+def usage_credentials(provider):
+    # Usage reads must never unlock a vault or rotate an OAuth token.
+    if provider == 'baseten':
+        with BASETEN_CREDENTIALS.lock:
+            key = BASETEN_CREDENTIALS.key or ''
+        if not key:
+            try:
+                config = tomllib.loads((CONFIG_DIR / 'config.toml').read_text())
+                name = config.get('model_providers', {}).get('baseten', {}).get('env_key')
+                key = os.environ.get(name, '') if name else ''
+            except (OSError, ValueError):
+                pass
+        return key, 'Organization', 'Connect Baseten once in Connections to read organization spend.'
+    if provider == 'openrouter':
+        with ROUTE_LOCK:
+            return OPENROUTER_KEY, 'Connected API key', 'Connect OpenRouter to read API spend.'
+    try:
+        auth = session()
+        if not expired(auth):
+            return auth['key'], auth.get('email') or 'Signed-in Grok account', ''
+    except (OSError, ValueError, KeyError):
+        pass
+    return '', 'Grok account', 'Sign in to Grok, or use Grok once to refresh its session, then refresh usage.'
 
 
 def codex_headers(headers):
@@ -851,6 +877,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_GET(self):
+        global USAGE_COLLECTOR
+        if self.path == '/harbor/usage':
+            if self.headers.get('Origin') or not self.local_authorized():
+                return self.error(401, 'Local authorization required')
+            from provider_usage import UsageCollector
+            with ROUTE_LOCK:
+                if USAGE_COLLECTOR is None:
+                    USAGE_COLLECTOR = UsageCollector(usage_credentials)
+            body = json.dumps(USAGE_COLLECTOR.read()).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == '/harbor/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')

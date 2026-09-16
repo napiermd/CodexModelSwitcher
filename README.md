@@ -7,6 +7,14 @@
 
 ![An illustrated example of separate models staying with separate tasks](branding/overview.svg)
 
+## Usage and spend
+
+Track Codex account limits and resets, Grok subscription quota, Baseten
+organization API spend, and OpenRouter key usage from **Usage & spend**.
+Daily history and optional CodexBar token-value estimates keep their source
+and account scope visible. Usage checks reuse existing credentials without
+opening 1Password. See [Usage and spend](docs/USAGE.md) for coverage and setup.
+
 ## One model choice per task
 
 Choose a model in **each Codex task's picker**. Model Harbor connects the current Codex subscription, Grok browser sign-in, Baseten, and OpenRouter through a local bridge. Task A can use Grok while task B keeps its Codex model. You can change a model inside an existing Harbor task and continue the conversation.

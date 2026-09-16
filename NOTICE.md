@@ -20,4 +20,15 @@ The website self-hosts Instrument Sans by the Instrument Sans Project Authors an
 
 The current navy/platinum monogram was produced with OpenAI image generation for Model Harbor. The master and exact generation prompt are in `assets/brand/`; shipping icon sizes are derived by `scripts/render-icon.swift`. The generation tool did not expose a selectable version number.
 
-[CodexBar](https://github.com/steipete/CodexBar) informed the native provider inspector, settings separation, and menu-bar customization patterns. This change does not copy CodexBar source, branding, or its provider-usage collectors.
+[CodexBar](https://github.com/steipete/CodexBar) informed the native provider inspector, settings separation, and menu-bar customization patterns. The original visual redesign did not copy CodexBar source, branding, or its provider-usage collectors. The subsequent usage integration is credited below.
+
+## CodexBar usage interoperability
+
+The account-usage integration references CodexBar's MIT-licensed Codex OAuth
+usage reader, Grok credits billing parser, and widget snapshot format.
+Copyright (c) 2026 Peter Steinberger. The complete license is retained in
+[LICENSES/CodexBar-MIT.txt](LICENSES/CodexBar-MIT.txt).
+
+CodexBar is an independent project: https://github.com/steipete/CodexBar.
+Its cached local cost estimates are labeled as estimates and are never treated
+as subscription invoices or attributed to an individual saved Harbor account.

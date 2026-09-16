@@ -98,7 +98,9 @@ struct ContentView: View {
             Spacer()
             if editorSession != nil {
                 Button("Save") { saveEditorSession() }.buttonStyle(.borderedProminent)
-            } else if page == "connections" {
+            } else if page == "connections" || page == "usage" {
+                Button { store.clearError(); page = page == "usage" ? "connections" : "usage" } label: { Image(systemName: page == "usage" ? "network" : "chart.bar.xaxis").font(.system(size: 16)) }
+                    .buttonStyle(.borderless).frame(width: 28, height: 28).help(page == "usage" ? "Connections" : "Usage & spend").accessibilityLabel(page == "usage" ? "Connections" : "Usage & spend")
                 Button { store.clearError(); page = "settings" } label: { Image(systemName: "gearshape").font(.system(size: 16)) }
                     .buttonStyle(.borderless).frame(width: 28, height: 28).help("Settings").accessibilityLabel("Settings")
             }
@@ -114,6 +116,7 @@ struct ContentView: View {
             case "settings": settings
             case "add": addProvider
             case "openrouter": openRouterSetup
+            case "usage": UsageView()
             default: connections
             }
         }
@@ -152,6 +155,9 @@ struct ContentView: View {
                     .padding(.top, 5)
             }
             activityView
+            Button { page = "usage"; UserDefaults.standard.set(focusedProvider, forKey: "harbor.usageProvider") } label: {
+                HStack { Label("Usage & spend", systemImage: "chart.bar.xaxis"); Spacer(); Image(systemName: "chevron.right") }
+            }.buttonStyle(.plain).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.accentColor)
             Divider()
             if let service, !service.models.isEmpty {
                 HStack { Text("Models").font(.system(size: 12, weight: .semibold)); Spacer(); Text("\(service.models.count) available").font(.caption).foregroundStyle(.secondary) }
@@ -244,6 +250,14 @@ struct ContentView: View {
                 Picker("Display", selection: $menuBarDisplay) { ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0.rawValue) } }
                 Toggle("Show Harbor icon", isOn: $showMenuBarIcon).disabled(menuBarDisplay == "icon")
                 Text("Connection follows the provider selected here. Activity follows the most recent request across your tasks.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Toggle("Refresh usage every five minutes", isOn: Binding(get: { UserDefaults.standard.object(forKey: "harbor.usageAutoRefresh") as? Bool ?? true }, set: { UserDefaults.standard.set($0, forKey: "harbor.usageAutoRefresh") }))
+                Toggle("Include CodexBar cached history", isOn: Binding(get: { UserDefaults.standard.object(forKey: "harbor.importCodexBarHistory") as? Bool ?? true }, set: { enabled in
+                    UserDefaults.standard.set(enabled, forKey: "harbor.importCodexBarHistory")
+                    if !enabled { store.usageSnapshots.removeAll { $0.source.hasPrefix("CodexBar") } }
+                }))
+                Button("Connect CodexBar history…") { store.connectCodexBarHistory() }
+                Text("Usage checks reuse existing sign-ins and unlocked keys. They never open 1Password. CodexBar history includes local token-value estimates and its selected Claude account.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Divider()
                 Picker("Appearance", selection: $appearance) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }
                 Text("Visible providers").font(.headline)

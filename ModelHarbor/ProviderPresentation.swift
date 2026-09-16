@@ -16,12 +16,15 @@ struct ProviderDefinition: Identifiable {
 }
 
 enum MenuBarDisplay: String, CaseIterable, Identifiable {
-    case connection, activity, model, count, name, icon
+    case connection, activity, quota, spend, reset, model, count, name, icon
     var id: String { rawValue }
     var title: String {
         switch self {
         case .connection: return "Provider + connection"
         case .activity: return "Provider + activity"
+        case .quota: return "Provider + quota remaining"
+        case .spend: return "Provider + today's spend"
+        case .reset: return "Provider + next reset"
         case .model: return "Last requested model"
         case .count: return "Connected provider count"
         case .name: return "Harbor name"

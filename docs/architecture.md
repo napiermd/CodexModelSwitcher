@@ -40,6 +40,18 @@ The bridge listens on `127.0.0.1:48118`. Requests require the local token. It re
 
 Harbor does not log prompts, request headers, or tokens. Its protected status endpoint reports the latest forwarded route and credential-cache state. This is operational status, not a per-task conversation log or proof of a model's underlying weights.
 
+## Baseten pacing and overload recovery
+
+All tasks using the same Baseten model share a FIFO queue in the running bridge. A model has one upstream request in flight at a time; other models and providers have independent lanes. This accounts for tool continuations and simultaneous tasks using the same allowance.
+
+The bridge starts conservatively at 500,000 tokens and 120 requests per minute. Baseten's response headers replace those defaults with the account's effective limits. Before dispatch, Harbor reserves a conservative estimate of input, tool definitions, and output. On completion it reconciles that reservation with actual input and output usage, including cached input. It also respects the remaining capacity reported by Baseten. Estimates are not exact tokenization, and traffic from other clients can still consume the account's allowance.
+
+An HTTP 429 or 529 rejection gets up to three retries. Delays start at 10 seconds, double to a 60-second base, and add up to 20% jitter. A longer `Retry-After` takes precedence, including HTTP-date values. Cooldowns remain shared when Codex retries the request or another task uses the model. Each request has a 120-second queue/retry budget, checked between upstream attempts; an individual network operation retains its 180-second timeout. Long cooldowns are returned to Codex rather than retried early. The bridge preserves structured provider errors, rate-limit headers, request IDs, and the remaining retry delay.
+
+Retries use the same cached credential. Authentication failures, ambiguous network failures, and responses that have already started streaming are never automatically replayed. A disconnected client is removed from the queue or backoff wait before another request is sent. The protected status endpoint includes per-model limits, queue size, cooldown, and request/retry counters without credentials or conversation content. Queue and cooldown state live in memory until Harbor quits.
+
+Pacing cannot create provider capacity or raise an account limit. Persistent 529s may still end the turn. See [Baseten's rate-limit documentation](https://docs.baseten.co/inference/model-apis/pricing-and-limits).
+
 ## Tools and history
 
 Codex subscription requests retain native namespaces and custom tools. Grok and Baseten use a translation layer for tool definitions, calls, results, and streaming. Replayed history keeps tool-call links while removing provider-owned item IDs and opaque reasoning that cannot safely move between providers. Requests requiring opaque `previous_response_id` state fail instead of silently losing context.

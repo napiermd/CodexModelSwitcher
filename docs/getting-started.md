@@ -95,6 +95,7 @@ An `env_key` may be used instead of a helper. A Finder-launched app does not nor
 | No Harbor models in Codex | Choose a new-task default, then reopen Codex to load its catalog. |
 | No subscription models | Sign in to Codex, run it once, and reopen Harbor so it can read the catalog. |
 | Browser says signed in, but Harbor does not | Confirm the official Grok CLI can list your models. Account access is controlled by xAI. |
+| Baseten returns 429 or 529 | Harbor now paces requests across tasks and waits before retrying. Cached tokens count toward the token limit. Persistent 429s may need a higher allowance; persistent 529s mean provider capacity is unavailable. See [pacing and recovery](architecture.md#baseten-pacing-and-overload-recovery). |
 | Baseten is missing | Check both its provider section and the catalog's exact filename. |
 | A canceled fingerprint prompt keeps the connection paused | Click Reconnect Baseten when you are ready to unlock. |
 | macOS asks again for Keychain access after rebuilding | Check whether the signing identity changed. Use one stable certificate for ongoing use. |

@@ -34,13 +34,30 @@ The script also reuses the signing identity of `/Applications/Model Harbor.app` 
 ## Connect
 
 1. Open Harbor from the menu bar. The current Codex subscription's models load from Codex's local catalog.
-2. Use **Sign in** under Grok and finish the official browser authorization. Your password stays with the provider. Confirm that Harbor displays the signed-in account and available models.
+2. Select the Grok tab and use **Sign in to Grok** and finish the official browser authorization. Your password stays with the provider. Confirm that Harbor displays the signed-in account and available models.
 3. If using Baseten, complete the next section before reopening Harbor.
-4. Choose a **New task default** in Harbor. This writes the stable `model-harbor` provider and catalog settings to your Codex configuration.
+4. Choose a **New task default** under **Settings → Advanced**. This writes the stable `model-harbor` provider and catalog settings to your Codex configuration.
 5. Reopen Codex **once** to load the new catalog. Start a task using Harbor and choose a named model in that task's picker.
 6. Choose another model in another task. Return to the first task; its choice stays with it. Changing the new-task default does not change existing tasks.
 
 A task created with a direct provider retains that provider. Selecting a Harbor model in an older OpenAI task changes the model name but does not migrate its provider. Repair that task using the next section, or start a Harbor task. You do not need a new task for every model change within Harbor. Separate saved Codex accounts are shared connection settings, not per-task identities; switching those accounts still requires restarting Codex.
+
+## Connect OpenRouter
+
+1. Choose **Add provider → OpenRouter → Connect**.
+2. Enter your OpenRouter API key and choose **Verify key & load models**. Harbor checks the key with OpenRouter before displaying its current tool-capable catalog.
+3. Search and select the models you want in Codex, then choose **Save connection**. The API key is stored in macOS Keychain; the local bridge holds its working copy in memory.
+4. Reopen Codex once to discover the newly added model names. Select an explicit OpenRouter model in a Harbor task.
+
+Requests use your OpenRouter account and billing. Model availability, reasoning support, and inference compatibility depend on the selected model and provider. Catalog discovery is not a live inference check of every model. Harbor requests support for the parameters it sends and keeps the chosen model ID fixed.
+
+Use **Manage connection → Choose models** to update the list, or **Disconnect** to remove the saved key while keeping model choices for reconnecting. An authentication rejection clears the bridge's working credential and changes its connection state.
+
+## Read connection status
+
+Select a provider tab for its connection, model list, requests in progress, and last completed response. **Bridge online** means the local process is available. **Connected** means the provider credential or session is ready; a provider can still return capacity or billing errors. Codex starts at **Configured** and becomes **Connected** after a completed response through Harbor. Completed-request counts reset when Harbor restarts.
+
+The panel expands to fit content. It uses scrolling only when the available screen height is insufficient. Settings contains menu-bar text modes, appearance, visible providers, saved accounts, and advanced routing controls.
 
 ## Repair an older OpenAI task
 
@@ -48,7 +65,7 @@ If Codex reports **"The 'harbor/...' model is not supported when using Codex wit
 
 Model changes in an existing native task do not update its saved provider. Repeatedly selecting models or signing in again will not repair it.
 
-Enable **Repair inactive task routes automatically** in Harbor. Harbor checks saved routes every ten seconds. It repairs only tasks saved under `openai` whose selected model is in your installed Harbor catalog. It preserves the task ID, selected model, title, and conversation. The setting survives Harbor restarts.
+Enable **Repair inactive task routes automatically** under **Settings → Advanced**. Harbor checks saved routes every ten seconds. It repairs only tasks saved under `openai` whose selected model is in your installed Harbor catalog. It preserves the task ID, selected model, title, and conversation. The setting survives Harbor restarts.
 
 A loaded task holds Codex's writer lock, even between turns. Harbor waits for that lock rather than modifying a live task. To release an affected task sooner:
 

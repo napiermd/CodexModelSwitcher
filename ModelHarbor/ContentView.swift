@@ -3,348 +3,423 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: AppStore
+    @AppStorage("harbor.focusedProvider") private var focusedProvider = "baseten"
+    @AppStorage("harbor.menuBarDisplay") private var menuBarDisplay = MenuBarDisplay.connection.rawValue
+    @AppStorage("harbor.showMenuBarIcon") private var showMenuBarIcon = true
+    @AppStorage("harbor.hiddenProviders") private var hiddenProviders = ""
+    @AppStorage("harbor.appearance") private var appearance = "system"
+    @State private var page = "connections"
+    @State private var settingsTab = "Menu bar"
+    @State private var bodyHeight: CGFloat = 380
     @State private var editorSession: EditorSession?
     @State private var isShowingOpenAIAccountWarning = false
-    @State private var showOtherConnections = false
+    @State private var openRouterKey = ""
+    @State private var verifiedOpenRouterKey = ""
+    @State private var chosenModels: Set<String> = []
+    @State private var modelSearch = ""
+    @State private var modelPage = 0
+    @State private var savingOpenRouter = false
+
+    private var provider: ProviderDefinition { ProviderDefinition.named(focusedProvider) }
+    private var service: CodexService? { store.data.services.first { $0.id == focusedProvider } }
+    private var activity: ProviderActivity { store.providerActivity[focusedProvider] ?? ProviderActivity() }
+    private var connected: Bool { store.providerConnected(focusedProvider) }
+    private var visibleProviders: [ProviderDefinition] {
+        let visible = ProviderDefinition.all.filter { !hiddenProviders.split(separator: ",").contains(Substring($0.id)) }
+        return visible.isEmpty ? ProviderDefinition.all : visible
+    }
+    private var maximumBodyHeight: CGFloat { max(220, (NSScreen.main?.visibleFrame.height ?? 850) - 156) }
+    private var title: String {
+        if editorSession != nil { return editorSession!.title }
+        switch page {
+        case "settings": return "Settings"
+        case "add": return "Add provider"
+        case "openrouter": return "Connect OpenRouter"
+        default: return "Model Harbor"
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             header
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
             Divider()
-            if !store.storageReady {
-                Button("Unlock saved accounts") { store.unlockAccounts() }
-                    .buttonStyle(.borderedProminent)
-                    .padding(12)
+            ScrollView(.vertical, showsIndicators: bodyHeight > maximumBodyHeight) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if !store.storageReady {
+                        Label("Saved accounts are locked", systemImage: "lock")
+                        Button("Unlock saved accounts") { store.unlockAccounts() }.buttonStyle(.borderedProminent)
+                    }
+                    pageContent.disabled(!store.storageReady)
+                    if !store.errorMessage.isEmpty {
+                        Label(store.errorMessage, systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    } else if !store.statusMessage.isEmpty {
+                        Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { proxy in Color.clear.preference(key: PanelHeightKey.self, value: proxy.size.height) })
             }
-            bodySection
-                .disabled(!store.storageReady)
-            if editorSession == nil {
-                Divider()
-                footer
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-            }
+            .frame(height: min(bodyHeight, maximumBodyHeight))
+            Divider()
+            footer
         }
-        .frame(width: panelWidth)
-        .frame(maxHeight: maxPanelHeight, alignment: .top)
-        .background {
-            WindowTransparencyConfigurator()
-                .allowsHitTesting(false)
+        .frame(width: 410)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .preferredColorScheme(appearance == "dark" ? .dark : (appearance == "light" ? .light : nil))
+        .onPreferenceChange(PanelHeightKey.self) { height in
+            if abs(bodyHeight - height) > 1 { bodyHeight = height }
         }
-        .task {
-            while !Task.isCancelled {
-                await store.refreshConnectionStatus()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
+        .background(PanelWindowSizer(height: min(bodyHeight, maximumBodyHeight) + 102))
+        .onAppear {
+            if !visibleProviders.contains(where: { $0.id == focusedProvider }) { focusedProvider = visibleProviders.first!.id }
+            Task { await store.refreshConnectionStatus() }
         }
-        .onDisappear {
-            store.clearStatusMessage()
-        }
-        .alert("Add OpenAI account", isPresented: $isShowingOpenAIAccountWarning) {
+        .alert("Add Codex account", isPresented: $isShowingOpenAIAccountWarning) {
             Button("Cancel", role: .cancel) {}
-            Button("Continue Login") {
-                store.addOpenAIAccount()
-            }
+            Button("Continue login") { store.addOpenAIAccount() }
         } message: {
-            Text("Codex will open login in your browser. If you log out of an existing ChatGPT account during this flow, that saved account may stop working. To keep saved accounts valid, use a separate browser profile or private browser for the new account.")
+            Text("Codex opens sign-in in your browser. Use a separate browser profile to keep your existing saved accounts signed in.")
         }
-    }
-
-    private var panelWidth: CGFloat {
-        390
-    }
-
-    private var maxPanelHeight: CGFloat {
-        ((NSScreen.main?.visibleFrame.height ?? 900) * 0.7).rounded(.down)
-    }
-
-    private var maxBodyHeight: CGFloat {
-        editorSession == nil ? min(500, maxPanelHeight - 80) : maxPanelHeight - 52
     }
 
     private var header: some View {
         HStack(spacing: 10) {
+            if page != "connections" || editorSession != nil {
+                Button { page = "connections"; editorSession = nil; store.clearError() } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(.plain).frame(width: 24, height: 28).help("Back to connections")
+            } else {
+                Image("HarborMark").resizable().scaledToFit().frame(width: 30, height: 30)
+            }
+            Text(title).font(.system(size: 16, weight: .semibold))
+            Spacer()
             if editorSession != nil {
-                Button {
-                    store.clearError()
-                    editorSession = nil
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.borderless)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .help("Back")
+                Button("Save") { saveEditorSession() }.buttonStyle(.borderedProminent)
+            } else if page == "connections" {
+                Button { store.clearError(); page = "settings" } label: { Image(systemName: "gearshape").font(.system(size: 16)) }
+                    .buttonStyle(.borderless).frame(width: 28, height: 28).help("Settings").accessibilityLabel("Settings")
+            }
+        }.padding(.horizontal, 18).frame(height: 58)
+    }
 
-                Text(editorSession?.title ?? "")
-                    .font(.system(.headline, design: .rounded).weight(.semibold))
-                    .lineLimit(1)
-
-                Spacer()
-
-                Button("Save") {
-                    saveEditorSession()
-                }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Image("HarborMark")
-                    .resizable()
-                    .scaledToFit()
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.tint)
-                    .frame(width: 34, height: 34)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                    }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Model Harbor")
-                        .font(.system(.headline, design: .rounded).weight(.semibold))
-                    Text("Connections")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Button {
-                    store.clearError()
-                    editorSession = EditorSession(
-                        title: "Add Provider",
-                        originalID: nil,
-                        form: ServiceFormData()
-                    )
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.borderless)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .help("Add service")
+    @ViewBuilder private var pageContent: some View {
+        if let editorSession {
+            ServiceEditorView(title: editorSession.title, originalID: editorSession.originalID, form: Binding(
+                get: { self.editorSession?.form ?? editorSession.form }, set: { self.editorSession?.form = $0 }))
+        } else {
+            switch page {
+            case "settings": settings
+            case "add": addProvider
+            case "openrouter": openRouterSetup
+            default: connections
             }
         }
     }
 
-    @ViewBuilder
-    private var bodySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let editorSession {
-                ViewThatFits(in: .vertical) {
-                    editorView(for: editorSession)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    ScrollView {
-                        editorView(for: editorSession)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                    }
-                }
-            } else {
-                serviceList
-            }
-
-            if !store.errorMessage.isEmpty {
-                Text(store.errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-            } else if !store.statusMessage.isEmpty {
-                Text(store.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-            }
-        }
-        .frame(maxHeight: maxBodyHeight, alignment: .top)
-    }
-
-    private var serviceList: some View {
-        ScrollView {
-            serviceStack
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-        }
-        .frame(height: min(410, maxBodyHeight - 64))
-    }
-
-    private var serviceStack: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            taskRoutingStatus
-            Text("Choose a model in each Codex task. Each task keeps its choice when you move between them.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 12)
-            ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
-                section(for: service)
-                Divider().padding(.vertical, 5)
-            }
-            HStack {
-                Text("New task default").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Menu {
-                    ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
-                        Section(LiveRouting.providerName(service.id)) {
-                            ForEach(service.models) { model in
-                                Button(model.name) { store.select(serviceID: service.id, modelID: model.id) }
+    private var connections: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 4) {
+                ForEach(visibleProviders) { entry in
+                    Button {
+                        focusedProvider = entry.id
+                        store.clearError()
+                    } label: {
+                        VStack(spacing: 7) {
+                            Image(systemName: entry.symbol).font(.system(size: 18, weight: .medium)).frame(height: 20)
+                            HStack(spacing: 4) {
+                                Text(entry.name).font(.system(size: 10, weight: .medium))
+                                Circle().fill(store.providerConnected(entry.id) ? Color.green : Color.secondary.opacity(0.55)).frame(width: 5, height: 5)
                             }
                         }
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .foregroundStyle(focusedProvider == entry.id ? Color.primary : Color.secondary)
+                        .background(focusedProvider == entry.id ? Color.accentColor.opacity(0.20) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("\(entry.name), \(store.providerConnectionLabel(entry.id))")
+                }
+            }
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(provider.name).font(.system(size: 22, weight: .semibold))
+                    Text(connectionDetail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Label(connectionTitle, systemImage: connected ? "checkmark.circle.fill" : "circle.dashed")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(connected ? Color.green : Color.secondary)
+                    .padding(.top, 5)
+            }
+            activityView
+            Divider()
+            if let service, !service.models.isEmpty {
+                HStack { Text("Models").font(.system(size: 12, weight: .semibold)); Spacer(); Text("\(service.models.count) available").font(.caption).foregroundStyle(.secondary) }
+                VStack(spacing: 0) {
+                    ForEach(service.models) { model in
+                        HStack(spacing: 9) {
+                            Image(systemName: "cube").font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(displayName(model)).font(.system(size: 13)).lineLimit(2)
+                            Spacer(minLength: 8)
+                            Text(effortLabel(model)).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        }.padding(.vertical, 7).accessibilityElement(children: .combine)
                     }
-                } label: {
-                    Text(store.selectedModel?.name ?? "Choose model").lineLimit(1)
                 }
-                .fixedSize()
-                .disabled(store.proxyStatus != .active)
-            }
-            .padding(.vertical, 10)
-            DisclosureGroup("Saved accounts & other providers", isExpanded: $showOtherConnections) {
-                ForEach(store.data.services.filter { !LiveRouting.supports($0.id) }) { service in
-                    section(for: service)
-                }
-            }
-            .font(.caption)
-            .padding(.vertical, 8)
-        }
-    }
-
-    private func section(for service: CodexService) -> some View {
-        ServiceSectionView(service: service, onAddOpenAIAccount: {
-            isShowingOpenAIAccountWarning = true
-        }, onEdit: {
-            store.clearError()
-            editorSession = EditorSession(title: "Edit Service", originalID: service.id, form: ServiceFormData(service: service))
-        })
-        .environmentObject(store)
-    }
-
-    private func editorView(for editorSession: EditorSession) -> some View {
-        ServiceEditorView(
-            title: editorSession.title,
-            originalID: editorSession.originalID,
-            form: Binding(
-                get: { self.editorSession?.form ?? editorSession.form },
-                set: { self.editorSession?.form = $0 }
-            )
-        )
-        .id(editorSession.id)
-    }
-
-    private func saveEditorSession() {
-        guard let editorSession else { return }
-        store.saveService(originalID: editorSession.originalID, form: editorSession.form)
-        if store.errorMessage.isEmpty {
-            self.editorSession = nil
-        }
-    }
-
-    private var taskRoutingStatus: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle("Repair inactive task routes automatically", isOn: Binding(
-                get: { store.taskRepairsEnabled },
-                set: { store.setTaskRepairsEnabled($0) }
-            ))
-            .toggleStyle(.checkbox)
-            .disabled(store.savingTaskRepairs || store.proxyStatus != .active)
-            if store.taskRepairState == "error" {
-                Text("Automatic task repair stopped. Check the repair files in your Codex folder before retrying.")
-                    .font(.caption).foregroundStyle(.red)
-                Button("Retry repairs") { store.setTaskRepairsEnabled(true) }
-            } else if store.pendingTaskRepairs > 0 {
-                Text("\(store.pendingTaskRepairs) task routes need repair. Loaded tasks wait until Codex releases them. To repair sooner, finish the task, archive it, then restore it after this count clears.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if store.taskRepairState == "ready" {
-                Text(store.repairedTaskCount > 0
-                     ? "\(store.repairedTaskCount) task routes repaired. Model choices and conversations preserved."
-                     : "Task routes checked. No incompatible Harbor selections.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Choose a model in each Codex task. Each task keeps its choice.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("Checking saved task routes…").font(.caption).foregroundStyle(.secondary)
+                Text("Connect \(provider.name) to make its models available in Codex.")
+                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                connectionAction
+                Spacer()
+                Button { store.clearError(); page = "add" } label: { Label("Add provider", systemImage: "plus") }.buttonStyle(.bordered)
             }
         }
-        .padding(.bottom, 8)
+    }
+
+    private var connectionTitle: String {
+        if store.proxyStatus != .active { return "Offline" }
+        if activity.active > 0 { return "Working" }
+        return store.providerConnectionLabel(focusedProvider)
+    }
+    private var connectionDetail: String {
+        if focusedProvider == "baseten" {
+            return connected ? "Direct API · Credential ready" : (store.basetenState == "needs_reconnect" ? "Direct API · Reconnect required" : "Direct API · Unlock once for this session")
+        }
+        if focusedProvider == "grok-oauth" && store.grokIsSignedIn { return "Browser sign-in · \(store.grokAccount)" }
+        if focusedProvider == "openrouter" { return connected ? "API key · Saved in Keychain" : "One connection, multiple model providers" }
+        return "Uses the account signed in to Codex"
+    }
+    private var activityView: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: activity.active > 0 ? "waveform" : "clock").foregroundStyle(.secondary)
+                if activity.active > 0 {
+                    Text("\(activity.active) request\(activity.active == 1 ? "" : "s") in progress").font(.caption)
+                } else if let failure = activity.lastFailure, failure > (activity.lastSuccess ?? .distantPast) {
+                    Text(activity.httpStatus.flatMap { $0 >= 400 ? "Last request returned HTTP \($0)" : nil } ?? "Last request did not complete").font(.caption).foregroundStyle(.orange)
+                } else if let date = activity.lastSuccess {
+                    Text("Last response \(date, style: .relative) ago").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(focusedProvider == "codex-subscription" && store.codexConfigured ? "No completed request this session" : (connected ? "Ready for the next request" : "No connection established")).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if activity.completed > 0 { Text("\(activity.completed) completed").font(.caption).monospacedDigit().foregroundStyle(.secondary).help("Completed requests since Harbor started") }
+            }
+            if activity.active > 0 && !activity.model.isEmpty {
+                Text(activity.model).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        }
+    }
+    @ViewBuilder private var connectionAction: some View {
+        switch focusedProvider {
+        case "baseten":
+            if connected {
+                Menu("Manage connection") {
+                    Button("Open Baseten dashboard") { open(provider.dashboard) }
+                    Button("Reconnect credentials…") { store.reconnectBaseten() }
+                }.fixedSize()
+            } else { Button(store.isBasetenReconnectRunning ? "Connecting…" : "Connect Baseten") { store.reconnectBaseten() }.disabled(store.isBasetenReconnectRunning || store.proxyStatus != .active).buttonStyle(.borderedProminent) }
+        case "grok-oauth":
+            Button(store.isGrokLoginRunning ? "Signing in…" : (connected ? "Switch account…" : "Sign in to Grok")) { store.signInGrok() }.disabled(store.isGrokLoginRunning).buttonStyle(.bordered)
+        case "openrouter":
+            if connected {
+                Menu("Manage connection") {
+                    Button("Choose models…") { beginOpenRouter() }
+                    Button("Open OpenRouter dashboard") { open(provider.dashboard) }
+                    Button("Disconnect") { Task { await store.disconnectOpenRouter() } }
+                }.fixedSize()
+            } else { Button("Connect OpenRouter") { beginOpenRouter() }.buttonStyle(.bordered) }
+        default: Button("Manage accounts…") { settingsTab = "Providers"; page = "settings" }.buttonStyle(.bordered)
+        }
+    }
+
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Picker("Settings section", selection: $settingsTab) { ForEach(["Menu bar", "Providers", "Advanced"], id: \.self) { Text($0) } }.pickerStyle(.segmented).labelsHidden()
+            if settingsTab == "Menu bar" {
+                Text("Make the menu bar useful").font(.headline)
+                Picker("Display", selection: $menuBarDisplay) { ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0.rawValue) } }
+                Toggle("Show Harbor icon", isOn: $showMenuBarIcon).disabled(menuBarDisplay == "icon")
+                Text("Connection follows the provider selected here. Activity follows the most recent request across your tasks.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Picker("Appearance", selection: $appearance) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }
+                Text("Visible providers").font(.headline)
+                ForEach(ProviderDefinition.all) { entry in
+                    Toggle(entry.name, isOn: Binding(get: { !hiddenProviders.split(separator: ",").contains(Substring(entry.id)) }, set: { visible in
+                        var hidden = Set(hiddenProviders.split(separator: ",").map(String.init))
+                        if visible { hidden.remove(entry.id) } else if hidden.count < ProviderDefinition.all.count - 1 { hidden.insert(entry.id) }
+                        hiddenProviders = hidden.sorted().joined(separator: ",")
+                        if hidden.contains(focusedProvider) { focusedProvider = ProviderDefinition.all.first { !hidden.contains($0.id) }!.id }
+                    }))
+                }
+            } else if settingsTab == "Providers" {
+                ForEach(ProviderDefinition.all) { entry in
+                    HStack {
+                        Image(systemName: entry.symbol).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 3) { Text(entry.name).font(.subheadline.weight(.medium)); Text(entry.method).font(.caption).foregroundStyle(.secondary) }
+                        Spacer()
+                        Button(store.providerConnected(entry.id) ? "Manage" : "Connect") { focusedProvider = entry.id; if entry.id == "openrouter" { beginOpenRouter() } else { page = "connections" } }
+                    }
+                }
+                Divider()
+                Text("Saved Codex accounts").font(.headline)
+                if let accounts = store.data.services.first(where: { $0.id == "openai" }) { legacySection(accounts) }
+                let custom = store.data.services.filter { !LiveRouting.supports($0.id) && $0.id != "openai" }
+                ForEach(custom) { legacySection($0) }
+                Button("Add custom provider…") { editorSession = EditorSession(title: "Custom provider", originalID: nil, form: ServiceFormData()) }
+            } else {
+                Text("Task routing").font(.headline)
+                Toggle("Repair inactive task routes automatically", isOn: Binding(get: { store.taskRepairsEnabled }, set: store.setTaskRepairsEnabled))
+                    .disabled(store.savingTaskRepairs || store.proxyStatus != .active)
+                Text(store.pendingTaskRepairs > 0 ? "\(store.pendingTaskRepairs) routes are waiting for their tasks to become inactive." : (store.taskRepairState == "error" ? "Repair needs attention. Toggle repair off and on to retry." : "Model choices stay with each task."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Text("New task default").font(.headline)
+                Menu(store.selectedModel?.name ?? "Choose model") {
+                    ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
+                        Section(LiveRouting.providerName(service.id)) { ForEach(service.models) { model in Button(model.name) { store.select(serviceID: service.id, modelID: model.id) } } }
+                    }
+                }
+                Text("Applies to new tasks. Existing tasks keep their selected model.").font(.caption).foregroundStyle(.secondary)
+                Button("Open Codex configuration") { NSWorkspace.shared.open(AppPaths.codexConfig) }
+                Divider()
+                Text("Model Harbor").font(.headline)
+                Text("Open source, maintained by Andrew Napier.").font(.caption).foregroundStyle(.secondary)
+                HStack { Button("Source & documentation") { open("https://github.com/napiermd/model-harbor") }; Spacer(); Button("Quit Harbor") { NSApplication.shared.terminate(nil) } }
+            }
+        }.controlSize(.regular)
+    }
+
+    private var addProvider: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Your models, your connections").font(.headline)
+            Text("Connect a supported provider, or configure a custom Responses endpoint.").font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(ProviderDefinition.all) { entry in
+                HStack(spacing: 12) {
+                    Image(systemName: entry.symbol).font(.title3).frame(width: 26)
+                    VStack(alignment: .leading, spacing: 3) { Text(entry.name).font(.subheadline.weight(.semibold)); Text(entry.method).font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button(store.providerConnected(entry.id) ? "Manage" : "Connect") {
+                        focusedProvider = entry.id
+                        if entry.id == "openrouter" { beginOpenRouter() } else { page = "connections" }
+                    }
+                }
+                Divider()
+            }
+            Button("Custom provider…") { editorSession = EditorSession(title: "Custom provider", originalID: nil, form: ServiceFormData()) }
+            Text("Custom endpoints use a direct Codex connection. Switching to one may require reopening Codex.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var filteredModels: [OpenRouterModel] {
+        store.openRouterModels.filter { modelSearch.isEmpty || $0.name.localizedCaseInsensitiveContains(modelSearch) || $0.id.localizedCaseInsensitiveContains(modelSearch) }
+    }
+    private var openRouterSetup: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Connect with an OpenRouter API key").font(.headline)
+            Text("The key is stored in macOS Keychain. Requests use your OpenRouter account and its billing.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            SecureField("OpenRouter API key", text: $openRouterKey).textFieldStyle(.roundedBorder)
+                .onChange(of: openRouterKey) { _ in verifiedOpenRouterKey = "" }
+            HStack {
+                Button(store.connectingOpenRouter ? "Checking…" : "Verify key & load models") {
+                    Task { if await store.fetchOpenRouterModels(key: openRouterKey) { verifiedOpenRouterKey = openRouterKey; modelPage = 0 } }
+                }.disabled(openRouterKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.connectingOpenRouter).buttonStyle(.borderedProminent)
+                Spacer()
+                Button("Get a key ↗") { open("https://openrouter.ai/settings/keys") }.buttonStyle(.link)
+            }
+            if !verifiedOpenRouterKey.isEmpty && verifiedOpenRouterKey == openRouterKey {
+                Divider()
+                HStack { Text("Choose models").font(.headline); Spacer(); Text("\(chosenModels.count) selected").font(.caption).foregroundStyle(.secondary) }
+                TextField("Search tool-capable models", text: $modelSearch).textFieldStyle(.roundedBorder).onChange(of: modelSearch) { _ in modelPage = 0 }
+                ForEach(Array(filteredModels.dropFirst(modelPage * 7).prefix(7))) { model in
+                    Toggle(isOn: Binding(get: { chosenModels.contains(model.id) }, set: { if $0 { chosenModels.insert(model.id) } else { chosenModels.remove(model.id) } })) {
+                        VStack(alignment: .leading, spacing: 2) { Text(model.name).font(.caption).lineLimit(1); Text(model.id).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1) }
+                    }.toggleStyle(.checkbox)
+                }
+                if filteredModels.isEmpty { Text("No matching models.").font(.caption).foregroundStyle(.secondary) }
+                HStack {
+                    Button("Previous") { modelPage -= 1 }.disabled(modelPage == 0)
+                    Spacer()
+                    Text("\(filteredModels.count) matches").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Next") { modelPage += 1 }.disabled((modelPage + 1) * 7 >= filteredModels.count)
+                }
+                Button(savingOpenRouter ? "Saving…" : "Save connection") {
+                    savingOpenRouter = true
+                    Task {
+                        if await store.connectOpenRouter(key: openRouterKey, models: chosenModels) { page = "connections"; focusedProvider = "openrouter"; openRouterKey = ""; verifiedOpenRouterKey = "" }
+                        savingOpenRouter = false
+                    }
+                }.buttonStyle(.borderedProminent).disabled(chosenModels.isEmpty || savingOpenRouter || store.proxyStatus != .active)
+            }
+        }
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            proxyStatusView
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            FooterOptionsButton(
-                selectedReasoningEffort: store.data.modelReasoningEffort,
-                onSelectReasoningEffort: { store.setReasoningEffort($0) },
-                onOpenConfig: { NSWorkspace.shared.open(AppPaths.codexConfig) },
-                onQuit: { NSApplication.shared.terminate(nil) }
-            )
-            .frame(width: 22, height: 22)
-            .help("Settings")
-        }
-        .font(.caption)
+        HStack(spacing: 6) {
+            Circle().fill(store.proxyStatus == .active ? Color.green : Color.secondary).frame(width: 6, height: 6)
+            Text(store.proxyStatus == .active ? "Bridge online" : "Bridge offline")
+            Spacer()
+            if page == "connections" { Text("\(ProviderDefinition.all.filter { store.providerConnected($0.id) }.count) connections") }
+            else { Text("Model Harbor") }
+        }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 18).frame(height: 42)
     }
+    private func beginOpenRouter() {
+        store.clearError(); page = "openrouter"; verifiedOpenRouterKey = ""; modelSearch = ""; modelPage = 0
+        let service = store.data.services.first { $0.id == "openrouter" }
+        openRouterKey = service?.apiKey ?? ((try? CredentialStore.read("provider:openrouter")) ?? "")
+        chosenModels = Set(service?.models.map(\.id) ?? [])
+    }
+    private func displayName(_ model: CodexModel) -> String {
+        model.name.replacingOccurrences(of: "moonshotai/", with: "").replacingOccurrences(of: "deepseek-ai/", with: "").replacingOccurrences(of: "zai-org/", with: "").replacingOccurrences(of: "-", with: " ")
+    }
+    private func effortLabel(_ model: CodexModel) -> String {
+        guard focusedProvider == "baseten" else { return "" }
+        return ["moonshotai/Kimi-K3", "zai-org/GLM-5.3", "deepseek-ai/DeepSeek-V4-Pro-0813"].contains(model.id) ? "xhigh" : (model.id == "moonshotai/Kimi-K2.7-Code" ? "thinking" : "high")
+    }
+    private func open(_ url: String) { if let url = URL(string: url) { NSWorkspace.shared.open(url) } }
+    private func legacySection(_ service: CodexService) -> some View {
+        ServiceSectionView(service: service, onAddOpenAIAccount: { isShowingOpenAIAccountWarning = true }, onEdit: {
+            store.clearError(); editorSession = EditorSession(title: "Edit provider", originalID: service.id, form: ServiceFormData(service: service))
+        }).environmentObject(store)
+    }
+    private func saveEditorSession() {
+        guard let editorSession else { return }
+        store.saveService(originalID: editorSession.originalID, form: editorSession.form)
+        if store.errorMessage.isEmpty { self.editorSession = nil; page = "settings"; settingsTab = "Providers" }
+    }
+}
 
-    private var proxyStatusView: some View {
-        HStack(spacing: 4) {
-            switch store.proxyStatus {
-            case .starting:
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.55)
-                    .frame(width: 10, height: 10)
-            case .notRunning:
-                Circle()
-                    .fill(.secondary.opacity(0.5))
-                    .frame(width: 10, height: 10)
-            case .active:
-                Circle()
-                    .fill(.green)
-                    .frame(width: 10, height: 10)
-            case .error:
-                Circle()
-                    .fill(.red)
-                    .frame(width: 10, height: 10)
+private struct PanelHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct PanelWindowSizer: NSViewRepresentable {
+    var height: CGFloat
+    func makeNSView(context: Context) -> SizingView { SizingView() }
+    func updateNSView(_ view: SizingView, context: Context) { view.targetHeight = height; view.resizeWindow() }
+    final class SizingView: NSView {
+        var targetHeight: CGFloat = 480
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); resizeWindow() }
+        func resizeWindow() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window, window.title == "Model Harbor" else { return }
+                let screen = window.screen ?? NSScreen.main
+                let target = min(self.targetHeight, (screen?.visibleFrame.height ?? 850) - 60)
+                guard abs(window.contentLayoutRect.height - target) > 1 else { return }
+                let top = window.frame.maxY
+                window.setContentSize(NSSize(width: 410, height: target))
+                var frame = window.frame
+                frame.origin.y = top - frame.height
+                if let visible = screen?.visibleFrame { frame.origin.y = max(visible.minY, frame.origin.y) }
+                window.setFrame(frame, display: true)
             }
-
-            Text("Model Harbor connection: \(proxyStatusText)")
-                .foregroundStyle(.secondary)
-        }
-        .help(proxyStatusHelp)
-    }
-
-    private var proxyStatusText: String {
-        switch store.proxyStatus {
-        case .starting:
-            return "Starting"
-        case .notRunning:
-            return "Not running"
-        case .active:
-            return "Active"
-        case .error:
-            return "Error"
         }
     }
-
-    private var proxyStatusHelp: String {
-        switch store.proxyStatus {
-        case .starting:
-            return "Model Harbor connection is starting"
-        case .notRunning:
-            return "Model Harbor connection is not running"
-        case .active:
-            return "The local connection is ready. Keep Model Harbor open for Codex, Grok and Baseten."
-        case .error:
-            return "Model Harbor connection failed. Reopen this app to retry."
-        }
-    }
-
-
 }
 
 private struct EditorSession: Identifiable {

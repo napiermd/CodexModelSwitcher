@@ -8,3 +8,7 @@ xcuserdata/
 
 __pycache__/
 *.pyc
+
+# Local design studies and live UI review captures
+.impeccable/review/
+.impeccable/mocks/

@@ -1,0 +1,342 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-16T20:19:47.133877+00:00",
+  "title": "Design System: Model Harbor",
+  "extensions": {
+    "colorMeta": {
+      "native-accent": {
+        "role": "primary",
+        "displayName": "Native cool blue",
+        "tonalRamp": [
+          "oklch(15.00% 0.16794 255.76)",
+          "oklch(26.43% 0.16794 255.76)",
+          "oklch(37.86% 0.16794 255.76)",
+          "oklch(49.29% 0.16794 255.76)",
+          "oklch(60.71% 0.16794 255.76)",
+          "oklch(72.14% 0.16794 255.76)",
+          "oklch(83.57% 0.16794 255.76)",
+          "oklch(95.00% 0.16794 255.76)"
+        ]
+      },
+      "site-paper": {
+        "role": "neutral",
+        "displayName": "Website warm paper",
+        "tonalRamp": [
+          "oklch(15.00% 0.01081 95.16)",
+          "oklch(26.43% 0.01081 95.16)",
+          "oklch(37.86% 0.01081 95.16)",
+          "oklch(49.29% 0.01081 95.16)",
+          "oklch(60.71% 0.01081 95.16)",
+          "oklch(72.14% 0.01081 95.16)",
+          "oklch(83.57% 0.01081 95.16)",
+          "oklch(95.00% 0.01081 95.16)"
+        ]
+      },
+      "site-ink": {
+        "role": "neutral",
+        "displayName": "Website ink teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.03953 195.39)",
+          "oklch(26.43% 0.03953 195.39)",
+          "oklch(37.86% 0.03953 195.39)",
+          "oklch(49.29% 0.03953 195.39)",
+          "oklch(60.71% 0.03953 195.39)",
+          "oklch(72.14% 0.03953 195.39)",
+          "oklch(83.57% 0.03953 195.39)",
+          "oklch(95.00% 0.03953 195.39)"
+        ]
+      },
+      "site-muted": {
+        "role": "neutral",
+        "displayName": "Website muted teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.02647 179.03)",
+          "oklch(26.43% 0.02647 179.03)",
+          "oklch(37.86% 0.02647 179.03)",
+          "oklch(49.29% 0.02647 179.03)",
+          "oklch(60.71% 0.02647 179.03)",
+          "oklch(72.14% 0.02647 179.03)",
+          "oklch(83.57% 0.02647 179.03)",
+          "oklch(95.00% 0.02647 179.03)"
+        ]
+      },
+      "site-teal": {
+        "role": "primary",
+        "displayName": "Website action teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.06490 199.33)",
+          "oklch(26.43% 0.06490 199.33)",
+          "oklch(37.86% 0.06490 199.33)",
+          "oklch(49.29% 0.06490 199.33)",
+          "oklch(60.71% 0.06490 199.33)",
+          "oklch(72.14% 0.06490 199.33)",
+          "oklch(83.57% 0.06490 199.33)",
+          "oklch(95.00% 0.06490 199.33)"
+        ]
+      },
+      "site-teal-hover": {
+        "role": "primary",
+        "displayName": "Website deep action teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.05341 198.68)",
+          "oklch(26.43% 0.05341 198.68)",
+          "oklch(37.86% 0.05341 198.68)",
+          "oklch(49.29% 0.05341 198.68)",
+          "oklch(60.71% 0.05341 198.68)",
+          "oklch(72.14% 0.05341 198.68)",
+          "oklch(83.57% 0.05341 198.68)",
+          "oklch(95.00% 0.05341 198.68)"
+        ]
+      },
+      "site-line": {
+        "role": "neutral",
+        "displayName": "Website sage divider",
+        "tonalRamp": [
+          "oklch(15.00% 0.01614 139.44)",
+          "oklch(26.43% 0.01614 139.44)",
+          "oklch(37.86% 0.01614 139.44)",
+          "oklch(49.29% 0.01614 139.44)",
+          "oklch(60.71% 0.01614 139.44)",
+          "oklch(72.14% 0.01614 139.44)",
+          "oklch(83.57% 0.01614 139.44)",
+          "oklch(95.00% 0.01614 139.44)"
+        ]
+      },
+      "site-mint": {
+        "role": "secondary",
+        "displayName": "Website pale mint",
+        "tonalRamp": [
+          "oklch(15.00% 0.02681 152.35)",
+          "oklch(26.43% 0.02681 152.35)",
+          "oklch(37.86% 0.02681 152.35)",
+          "oklch(49.29% 0.02681 152.35)",
+          "oklch(60.71% 0.02681 152.35)",
+          "oklch(72.14% 0.02681 152.35)",
+          "oklch(83.57% 0.02681 152.35)",
+          "oklch(95.00% 0.02681 152.35)"
+        ]
+      },
+      "site-gold": {
+        "role": "secondary",
+        "displayName": "Website amber",
+        "tonalRamp": [
+          "oklch(15.00% 0.13692 80.03)",
+          "oklch(26.43% 0.13692 80.03)",
+          "oklch(37.86% 0.13692 80.03)",
+          "oklch(49.29% 0.13692 80.03)",
+          "oklch(60.71% 0.13692 80.03)",
+          "oklch(72.14% 0.13692 80.03)",
+          "oklch(83.57% 0.13692 80.03)",
+          "oklch(95.00% 0.13692 80.03)"
+        ]
+      },
+      "site-dark": {
+        "role": "neutral",
+        "displayName": "Website demo teal",
+        "tonalRamp": [
+          "oklch(15.00% 0.03297 198.64)",
+          "oklch(26.43% 0.03297 198.64)",
+          "oklch(37.86% 0.03297 198.64)",
+          "oklch(49.29% 0.03297 198.64)",
+          "oklch(60.71% 0.03297 198.64)",
+          "oklch(72.14% 0.03297 198.64)",
+          "oklch(83.57% 0.03297 198.64)",
+          "oklch(95.00% 0.03297 198.64)"
+        ]
+      },
+      "site-light": {
+        "role": "neutral",
+        "displayName": "Website pale demo text",
+        "tonalRamp": [
+          "oklch(15.00% 0.01291 141.81)",
+          "oklch(26.43% 0.01291 141.81)",
+          "oklch(37.86% 0.01291 141.81)",
+          "oklch(49.29% 0.01291 141.81)",
+          "oklch(60.71% 0.01291 141.81)",
+          "oklch(72.14% 0.01291 141.81)",
+          "oklch(83.57% 0.01291 141.81)",
+          "oklch(95.00% 0.01291 141.81)"
+        ]
+      },
+      "site-focus": {
+        "role": "secondary",
+        "displayName": "Website ochre focus",
+        "tonalRamp": [
+          "oklch(15.00% 0.13102 65.32)",
+          "oklch(26.43% 0.13102 65.32)",
+          "oklch(37.86% 0.13102 65.32)",
+          "oklch(49.29% 0.13102 65.32)",
+          "oklch(60.71% 0.13102 65.32)",
+          "oklch(72.14% 0.13102 65.32)",
+          "oklch(83.57% 0.13102 65.32)",
+          "oklch(95.00% 0.13102 65.32)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "native-provider-title": {
+        "displayName": "Native provider title",
+        "purpose": "The selected provider in the macOS inspector."
+      },
+      "native-model": {
+        "displayName": "Native model row",
+        "purpose": "Read-only saved models."
+      },
+      "site-display": {
+        "displayName": "Website editorial display",
+        "purpose": "Website hero heading. Self-hosted Newsreader."
+      },
+      "site-body": {
+        "displayName": "Website reading text",
+        "purpose": "Website body and reading text. Self-hosted Instrument Sans."
+      }
+    },
+    "shadows": [
+      {
+        "name": "website-routing-demo",
+        "value": "0 22px 52px -28px #142f3055",
+        "purpose": "The public website routing demonstration only. Native window shadow remains system controlled."
+      }
+    ],
+    "motion": [
+      {
+        "name": "website-route-change",
+        "value": "route-change 0.7s ease-out",
+        "purpose": "After a demo choice, its select background moves from #546f55 to #254344. Disabled under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "website-wide-min",
+        "value": "1450px"
+      },
+      {
+        "name": "website-compact-max",
+        "value": "1000px"
+      },
+      {
+        "name": "website-mobile-max",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Native selected provider tab",
+      "kind": "nav",
+      "refersTo": "native-provider-tab-selected",
+      "description": "Primary text on a 20% accent tint. This browser preview expresses the SwiftUI layout; the platform supplies the real symbol and focus rendering.",
+      "html": "<button class=\"ds-provider\" aria-current=\"page\"><svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"m10 2 8 4-8 4-8-4 8-4Zm-8 8 8 4 8-4M2 14l8 4 8-4\"/></svg><span>Baseten <i aria-hidden=\"true\"></i></span></button>",
+      "css": ".ds-provider{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:82px;padding:10px 0;color:CanvasText;background:rgb(24% 55% 94% / 20%);border:0;border-radius:9px;font:500 10px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}.ds-provider svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.5}.ds-provider span{display:flex;align-items:center;gap:4px}.ds-provider i{width:5px;height:5px;border-radius:50%;background:green}.ds-provider:hover{color:CanvasText}.ds-provider:focus-visible{outline:auto}.ds-provider:active{color:CanvasText}"
+    },
+    {
+      "name": "Native connection and activity",
+      "kind": "custom",
+      "description": "A static layout example. Live labels and counts come from bridge state. System green is approximate in this browser preview.",
+      "html": "<div class=\"ds-connection\"><div><strong>Baseten</strong><span class=\"ds-connected\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><circle cx=\"8\" cy=\"8\" r=\"6\"/><path d=\"m5 8 2 2 4-4\"/></svg>Connected</span></div><p>Direct API · Credential ready</p><p>Ready for the next request</p></div>",
+      "css": ".ds-connection{font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:CanvasText}.ds-connection>div{display:flex;align-items:center;justify-content:space-between;gap:18px}.ds-connection strong{font-size:22px;font-weight:600}.ds-connected{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:green}.ds-connected svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5}.ds-connection p{font-size:12px;color:GrayText;margin:5px 0 0}.ds-connection p+p{margin-top:18px}"
+    },
+    {
+      "name": "Native model row",
+      "kind": "custom",
+      "refersTo": "native-model-row",
+      "description": "A read-only saved model with a leading cube and a trailing Baseten reasoning label.",
+      "html": "<div class=\"ds-model\"><svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"m10 2 7 4v8l-7 4-7-4V6l7-4Zm0 8 7-4M10 10 3 6m7 4v8\"/></svg><span>Kimi K3</span><small>xhigh</small></div>",
+      "css": ".ds-model{display:flex;align-items:center;gap:9px;padding:7px 0;color:CanvasText;font:400 13px -apple-system,BlinkMacSystemFont,sans-serif}.ds-model svg{width:12px;height:12px;fill:none;stroke:GrayText;stroke-width:1.2}.ds-model small{margin-left:auto;font-size:10px;font-weight:500;color:GrayText}"
+    },
+    {
+      "name": "Native primary action",
+      "kind": "button",
+      "description": "SwiftUI uses borderedProminent. This HTML preview approximates the accent assignment and delegates geometry to the browser.",
+      "html": "<button class=\"ds-native-primary\">Verify key &amp; load models</button>",
+      "css": ".ds-native-primary{appearance:auto;font:13px -apple-system,BlinkMacSystemFont,sans-serif;background:rgb(24% 55% 94%);color:white;cursor:pointer}.ds-native-primary:hover{background:rgb(24% 55% 94%)}.ds-native-primary:focus-visible{outline:auto}.ds-native-primary:active{background:rgb(24% 55% 94%)}.ds-native-primary:disabled{cursor:default;color:GrayText}"
+    },
+    {
+      "name": "Native secondary action",
+      "kind": "button",
+      "description": "SwiftUI uses bordered controls. The browser supplies this preview control geometry and interaction treatment.",
+      "html": "<button class=\"ds-native-secondary\">Add provider</button>",
+      "css": ".ds-native-secondary{appearance:auto;font:13px -apple-system,BlinkMacSystemFont,sans-serif;color:ButtonText;cursor:pointer}.ds-native-secondary:hover{color:ButtonText}.ds-native-secondary:focus-visible{outline:auto}.ds-native-secondary:active{color:ButtonText}"
+    },
+    {
+      "name": "Native secure field",
+      "kind": "input",
+      "description": "OpenRouter starts with a rounded-border SecureField. No sample credential is included. Browser rendering is illustrative.",
+      "html": "<label class=\"ds-key-label\" for=\"ds-key\">OpenRouter API key</label><input class=\"ds-key\" id=\"ds-key\" type=\"password\" placeholder=\"OpenRouter API key\" autocomplete=\"off\">",
+      "css": ".ds-key-label{display:block;font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:CanvasText;margin-bottom:5px}.ds-key{appearance:auto;font:13px -apple-system,BlinkMacSystemFont,sans-serif;width:100%;color:FieldText;background:Field}.ds-key:hover{color:FieldText}.ds-key:focus-visible{outline:auto}"
+    },
+    {
+      "name": "Native menu bar text",
+      "kind": "custom",
+      "description": "Connection mode follows the selected provider. The H symbol changes to a waveform during activity. The preview is an example, not a live status feed.",
+      "html": "<span class=\"ds-menu-label\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><rect x=\"1.5\" y=\"1.5\" width=\"13\" height=\"13\" rx=\"2\"/><path d=\"M5 4v8m6-8v8M5 8h6\"/></svg>Baseten · Connected</span>",
+      "css": ".ds-menu-label{display:inline-flex;align-items:center;gap:5px;max-width:220px;white-space:nowrap;color:CanvasText;font:400 12px -apple-system,BlinkMacSystemFont,sans-serif}.ds-menu-label svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.2;flex:none}"
+    },
+    {
+      "name": "Website primary action",
+      "kind": "button",
+      "refersTo": "site-button-primary",
+      "description": "A source-build link on warm paper. Uses the existing website CSS tokens when available.",
+      "html": "<a class=\"ds-site-button\" href=\"#start\">Build Model Harbor <svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M5 15 15 5M5 5h10v10\"/></svg></a>",
+      "css": ".ds-site-button{display:inline-flex;justify-content:center;align-items:center;gap:22px;min-height:50px;padding:11px 20px;background:var(--teal,#075154);color:var(--paper,#f5f3eb);text-decoration:none;border-radius:8px;font:600 15px Instrument,sans-serif}.ds-site-button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6}.ds-site-button:hover{background:var(--teal-hover,#063e40)}.ds-site-button:focus-visible{outline:3px solid #b26b06;outline-offset:5px}"
+    },
+    {
+      "name": "Website model select",
+      "kind": "input",
+      "description": "A native HTML select inside the dark illustrative routing demo.",
+      "html": "<label class=\"ds-select-label\" for=\"ds-model\">Demo task model</label><select class=\"ds-site-select\" id=\"ds-model\"><option>Codex subscription</option><option>Baseten</option><option>Grok</option></select>",
+      "css": ".ds-select-label{display:block;margin-bottom:9px;color:var(--ink,#193b3b);font:500 14px Instrument,sans-serif}.ds-site-select{width:100%;min-height:43px;color:var(--light,#edf4ec);background:#254344;border:1px solid #56736c;border-radius:6px;padding:8px 12px;font:400 14px Instrument,sans-serif;cursor:pointer;color-scheme:dark}.ds-site-select:hover{border-color:#adc6b8}.ds-site-select:focus-visible{outline:3px solid var(--gold,#f5bc53);outline-offset:5px}"
+    },
+    {
+      "name": "Website routing demo container",
+      "kind": "card",
+      "refersTo": "site-demo",
+      "description": "The existing dark container frames an explicitly illustrative task demo, not a screenshot of Codex.",
+      "html": "<section class=\"ds-demo\"><h3>Each task keeps its own model.</h3><p>Illustrates routing only. In the app, use Codex's task picker.</p></section>",
+      "css": ".ds-demo{background:var(--dark,#142f30);color:var(--light,#edf4ec);border-radius:16px;padding:26px;box-shadow:0 22px 52px -28px #142f3055;font-family:Instrument,sans-serif}.ds-demo h3{font-size:25px;font-weight:550;margin:0}.ds-demo p{font-size:11px;line-height:1.55;color:#b7cec1;margin:9px 0 0}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The native provider inspector",
+    "overview": "The macOS app uses a compact provider inspector with a toolbar, provider tabs, connection state, recent activity, and flat model rows. Adaptive system surfaces and native controls carry most of the interface. Cool blue identifies the selected tab and primary actions. The navy/platinum aperture monogram supplies the app's identity.\n\nThe public website keeps its warm paper background, teal reading colors, and editorial Newsreader headings. It shares the new mark with the app. Its interactive task-routing demonstration explains the product and remains labeled as illustrative. Keep the native and website rules scoped to their platforms.",
+    "keyCharacteristics": [
+      "Native system typography and keyboard behavior for the macOS utility.",
+      "A readable selected tab with primary text on a lightly tinted background.",
+      "Connection labels, symbols, and activity values drawn from current bridge state.",
+      "A shared navy/platinum mark with separate native and website layouts."
+    ],
+    "rules": [
+      {
+        "name": "The Platform Palette Rule",
+        "body": "Keep the cool native accent and the warm website palette in their respective interfaces. The shared icon does not require matching page backgrounds.",
+        "section": "colors"
+      },
+      {
+        "name": "The Readable Selection Rule",
+        "body": "Selected provider labels and symbols use primary text on the accent tint. Do not color the selected label blue or teal against that tint.",
+        "section": "colors"
+      },
+      {
+        "name": "The Native Type Rule",
+        "body": "Use platform system typography for the macOS utility. Editorial website headings belong on the website.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do use native system colors, fonts, keyboard behavior, and control sizing in the macOS app.",
+      "Do pair provider status colors with visible labels and accessible descriptions.",
+      "Do derive activity and connection counts from actual provider state.",
+      "Do keep the native panel fitted to content until the screen requires scrolling.",
+      "Do retain the generated icon master and its prompt with every derivative workflow.",
+      "Do preserve the website's warm editorial system and clearly illustrative task demo."
+    ],
+    "donts": [
+      "Don't restore the teal branching-route mark or treat old captures as the current identity.",
+      "Don't use tinted text for the selected provider tab.",
+      "Don't present configured Codex credentials as a verified connection before a completed response.",
+      "Don't invent quota bars, account balances, or request totals.",
+      "Don't make Harbor's default or selected provider imply one active model across all Codex tasks.",
+      "Don't describe generated studies, browser previews, or stale review captures as approved production screenshots."
+    ]
+  }
+}

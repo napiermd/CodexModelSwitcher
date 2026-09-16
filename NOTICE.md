@@ -15,3 +15,9 @@ Model Harbor adds independent model routes per Codex task, a local bridge for th
 The Model Harbor icon and website are original project assets, available under the MIT license. Codex, ChatGPT, OpenAI, Grok, xAI, Baseten, and 1Password are names of their respective owners. Model Harbor is an independent community project and is not endorsed by those companies. Provider access remains subject to each provider's account terms.
 
 The website self-hosts Instrument Sans by the Instrument Sans Project Authors and Newsreader by the Newsreader Project Authors. Both fonts use the SIL Open Font License 1.1. Their notices are included beside the font files in `site/assets/fonts/`.
+
+## Model Harbor icon and interface
+
+The current navy/platinum monogram was produced with OpenAI image generation for Model Harbor. The master and exact generation prompt are in `assets/brand/`; shipping icon sizes are derived by `scripts/render-icon.swift`. The generation tool did not expose a selectable version number.
+
+[CodexBar](https://github.com/steipete/CodexBar) informed the native provider inspector, settings separation, and menu-bar customization patterns. This change does not copy CodexBar source, branding, or its provider-usage collectors.

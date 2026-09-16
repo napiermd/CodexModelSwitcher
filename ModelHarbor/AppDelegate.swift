@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 470),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 480),
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "Model Harbor"
             window.isReleasedWhenClosed = false

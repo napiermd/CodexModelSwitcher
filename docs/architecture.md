@@ -93,3 +93,11 @@ Treat the entire Codex directory as private. Metadata can still contain account 
 | `Tests/` | Local checks without real accounts |
 | `scripts/verify-live-switch.py` | Explicit live verification with synthetic tasks |
 | `site/` | Public GitHub Pages site |
+
+## Provider inspection and OpenRouter
+
+`ProviderPresentation.swift` defines the provider registry, menu-bar modes, activity parsing, and tool-capable OpenRouter catalog conversion. The app polls the owner-authenticated local status endpoint every two seconds. Polling never invokes 1Password. Request counters are session-local and track concurrent work independently by provider.
+
+OpenRouter setup validates a key with `GET https://openrouter.ai/api/v1/key` and fetches `GET /models`. The app stores that key in Keychain and sends its working copy only to the owner-authenticated loopback configuration endpoint. The bridge routes explicit `harbor/openrouter/<model>` requests to `https://openrouter.ai/api/v1/responses`, using only the OpenRouter credential. It rejects unknown model IDs. Upstream authentication failures clear the in-memory credential. Disconnect removes the saved key and keeps catalog choices for reconnecting.
+
+The public model catalog declares tools, reasoning, input modalities, and context capacity. These declarations determine available choices; they do not substitute for model-specific live verification. OpenRouter's official Responses schema is maintained in [its TypeScript SDK](https://github.com/OpenRouterTeam/typescript-sdk/blob/main/src/models/responsesrequest.ts).

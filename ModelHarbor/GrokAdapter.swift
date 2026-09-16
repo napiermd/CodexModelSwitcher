@@ -41,7 +41,8 @@ final class GrokAdapter {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/status")!, timeoutInterval: 2)
         request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        let (bytes, _) = try await URLSession.shared.data(for: request)
+        let (bytes, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ProviderError.message("Harbor status is unavailable.") }
         return bytes
     }
 
@@ -55,6 +56,19 @@ final class GrokAdapter {
         let (_, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw NSError(domain: "ModelHarbor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Task repair settings could not be saved. Try again."])
+        }
+    }
+
+    func configureOpenRouter(key: String) async throws {
+        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/providers/openrouter")!, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["key": key])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ProviderError.message("OpenRouter settings could not reach the Harbor bridge. Reopen Model Harbor and try again.")
         }
     }
 

@@ -7,7 +7,7 @@ enum LiveRouting {
     static let catalogURL = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/model-harbor.json")
 
     static func supports(_ serviceID: String) -> Bool {
-        ["grok-oauth", "baseten", "codex-subscription"].contains(serviceID)
+        ["grok-oauth", "baseten", "codex-subscription", "openrouter"].contains(serviceID)
     }
 
     static func modelID(for selection: SelectedModel) -> String {
@@ -28,6 +28,7 @@ enum LiveRouting {
         switch id {
         case "codex-subscription": return "Codex subscription"
         case "grok-oauth": return "Grok"
+        case "openrouter": return "OpenRouter"
         default: return "Baseten"
         }
     }

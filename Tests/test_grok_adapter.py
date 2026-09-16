@@ -56,6 +56,24 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(out['input'],'*** Begin Patch\n*** End Patch')
         self.assertEqual(t.input_items([out])[0],call)
 
+    def test_native_tools_and_cross_provider_history_remain_valid(self):
+        tools=[{'type':'namespace','name':'functions','tools':[{'type':'custom','name':'apply_patch'}]}]
+        history=[{'type':'custom_tool_call','id':'ctc_foreign','call_id':'call1','name':'apply_patch','namespace':'functions','input':'patch'},
+                 {'type':'custom_tool_call_output','id':'ctco_foreign','call_id':'call1','output':'done'},
+                 {'type':'function_call','id':'foreign_item','call_id':'call2','namespace':'mcp__test','name':'read','arguments':'{}'},
+                 {'type':'reasoning','encrypted_content':'foreign'}]
+        native=module.Translation({'tools':tools,'input':history}, native_tools=True)
+        self.assertEqual(native.request['tools'],tools)
+        self.assertEqual(native.request['input'][0],{'type':'custom_tool_call','call_id':'call1','name':'apply_patch','namespace':'functions','input':'patch'})
+        self.assertEqual(native.request['input'][1]['call_id'],'call1')
+        self.assertEqual(native.request['input'][2]['namespace'],'mcp__test')
+        self.assertEqual(len(native.request['input']),3)
+        self.assertFalse(any('id' in item for item in native.request['input']))
+        translated=module.Translation({'tools':tools,'input':history})
+        self.assertEqual(translated.request['input'][0]['type'],'function_call')
+        self.assertNotIn('id',translated.request['input'][0])
+        self.assertEqual(history[0]['id'],'ctc_foreign')
+
     def test_opaque_reasoning_does_not_corrupt_tool_history(self):
         t=self.translation()
         history=[{'type':'reasoning','encrypted_content':'opaque'}, {'type':'function_call_output','call_id':'a','output':'b'}]
@@ -122,23 +140,51 @@ class LiveRoutingTests(unittest.TestCase):
         self.temp.cleanup()
 
     def select(self, provider, model):
+        self.model_id = 'harbor/' + provider + '/' + model
         self.data['selectedModel'] = {'serviceID':provider, 'modelID':model}
         (self.root/'model-switcher.json').write_text(json.dumps(self.data))
 
-    def test_next_turn_switches_but_tool_continuation_stays_on_original_model(self):
-        first = {'client_metadata':{'x-codex-turn-metadata': json.dumps({'thread_id':'t','turn_id':'1'})}}
-        second = {'client_metadata':{'x-codex-turn-metadata': json.dumps({'thread_id':'t','turn_id':'2'})}}
-        self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
-        self.select('baseten', 'moonshotai/Kimi-K3')
+    def test_tasks_and_tool_continuations_keep_independent_models(self):
+        first = {'model':'harbor/grok-oauth/grok-4.6', 'client_metadata':{'thread_id':'a','turn_id':'1'}}
+        second = {'model':'harbor/baseten/moonshotai/Kimi-K3', 'client_metadata':{'thread_id':'b','turn_id':'1'}}
         self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
         self.assertEqual(module.route_for_turn(second, {})['model'], 'moonshotai/Kimi-K3')
         self.select('baseten', 'deepseek-ai/DeepSeek-V4.1-Flash')
-        self.assertEqual(module.route_for_turn({}, {'x-codex-turn-metadata':'{"thread_id":"t","turn_id":"3"}'})['model'], 'deepseek-ai/DeepSeek-V4.1-Flash')
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
+        # A turn keeps its original route even if a client changes model mid-tool-call.
+        first['model'] = 'harbor/codex-subscription/gpt-6-astra'
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
+        first['client_metadata']['turn_id'] = '2'
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'gpt-6-astra')
+        second['client_metadata']['turn_id'] = '2'
+        self.assertEqual(module.route_for_turn(second, {})['model'], 'moonshotai/Kimi-K3')
+        # A restarted bridge derives the route from the task request, not its last default.
+        module.TURN_ROUTES.clear()
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'gpt-6-astra')
+        self.assertEqual(module.route_for_turn(second, {})['model'], 'moonshotai/Kimi-K3')
+
+    def test_legacy_alias_is_frozen_across_default_changes(self):
+        self.data['legacyModel'] = {'serviceID':'grok-oauth','modelID':'grok-4.6'}
+        self.select('baseten', 'moonshotai/Kimi-K3')
+        self.assertEqual(module.requested_route('harbor-selected')['model'], 'grok-4.6')
+        self.select('codex-subscription', 'gpt-6-astra')
+        module.TURN_ROUTES.clear()
+        self.assertEqual(module.requested_route('harbor-selected')['model'], 'grok-4.6')
+        del self.data['legacyModel']
+        self.select('codex-subscription', 'gpt-6-astra')
+        with self.assertRaises(ValueError):
+            module.requested_route('harbor-selected')
+
+    def test_unavailable_or_malformed_model_never_falls_back(self):
+        for model in ('harbor/baseten', 'harbor/baseten/unknown', 'harbor/openai/gpt-6-astra',
+                      'grok-4.6', None, 'harbor/codex-subscription/grok-4.6'):
+            with self.assertRaises(ValueError):
+                module.requested_route(model)
 
     def test_request_snapshot_is_independent_of_later_selection(self):
         from unittest.mock import patch
         with patch.object(module, 'oauth_headers', return_value={'Authorization':'Bearer oauth-test'}):
-            translation, headers, base, route = module.routed_request({'model':'harbor-selected','input':'hello'}, {})
+            translation, headers, base, route = module.routed_request({'model':self.model_id,'input':'hello'}, {})
         self.select('baseten','moonshotai/Kimi-K3')
         self.assertEqual(translation.request['model'],'grok-4.6')
         self.assertEqual(headers['Authorization'],'Bearer oauth-test')
@@ -149,7 +195,7 @@ class LiveRoutingTests(unittest.TestCase):
         from unittest.mock import patch
         self.select('baseten', 'moonshotai/Kimi-K3')
         with patch.object(module, 'oauth_headers') as oauth, patch.object(module, 'baseten_headers', return_value={'Authorization':'Bearer baseten-test'}):
-            t, headers, base, route = module.routed_request({'model':'harbor-selected','reasoning':{'effort':'xhigh'}}, {})
+            t, headers, base, route = module.routed_request({'model':self.model_id,'reasoning':{'effort':'xhigh'}}, {})
         oauth.assert_not_called()
         self.assertEqual(headers, {'Authorization':'Bearer baseten-test'})
         self.assertEqual(base, 'https://inference.baseten.co/v1')
@@ -161,7 +207,7 @@ class LiveRoutingTests(unittest.TestCase):
         incoming = {'Authorization':'Bearer header.payload.signature', 'ChatGPT-Account-ID':'account-1',
                     'X-Model-Harbor-Token':'local-secret', 'Cookie':'must-not-forward'}
         with patch.object(module, 'oauth_headers') as grok, patch.object(module, 'baseten_headers') as baseten:
-            t, headers, base, route = module.routed_request({'model':'harbor-selected','stream':True}, incoming)
+            t, headers, base, route = module.routed_request({'model':self.model_id,'stream':True}, incoming)
         grok.assert_not_called(); baseten.assert_not_called()
         self.assertEqual(t.request['model'], 'gpt-6-astra')
         self.assertEqual(base, 'https://chatgpt.com/backend-api/codex')
@@ -172,7 +218,7 @@ class LiveRoutingTests(unittest.TestCase):
         for invalid in ({}, {'Authorization':'Bearer sk-api-key', 'ChatGPT-Account-ID':'account-1'},
                         {'Authorization':'Bearer header.payload.signature'}):
             with self.assertRaises(ValueError):
-                module.routed_request({'model':'harbor-selected'}, invalid)
+                module.routed_request({'model':self.model_id}, invalid)
 
     def test_other_providers_never_receive_codex_credentials(self):
         from unittest.mock import patch
@@ -181,16 +227,16 @@ class LiveRoutingTests(unittest.TestCase):
         for provider, model, helper in [('grok-oauth','grok-4.6','oauth_headers'), ('baseten','moonshotai/Kimi-K3','baseten_headers')]:
             self.select(provider, model)
             with patch.object(module, helper, return_value={'Authorization':'Bearer own-credential'}):
-                _, headers, _, _ = module.routed_request({'model':'harbor-selected'}, incoming)
+                _, headers, _, _ = module.routed_request({'model':self.model_id}, incoming)
             self.assertEqual(headers, {'Authorization':'Bearer own-credential'})
 
     def test_missing_selection_and_server_side_history_fail_closed(self):
         self.select('openai', '__native__')
-        with self.assertRaisesRegex(ValueError, 'Choose a Codex, Grok or Baseten'):
-            module.routed_request({'model':'harbor-selected'}, {})
+        with self.assertRaisesRegex(ValueError, 'Choose a named Model Harbor model'):
+            module.routed_request({'model':self.model_id}, {})
         with self.assertRaisesRegex(ValueError, 'full conversation history'):
-            module.routed_request({'model':'harbor-selected','previous_response_id':'resp1'}, {})
-        with self.assertRaisesRegex(ValueError, 'Model Harbor selection'):
+            module.routed_request({'model':self.model_id,'previous_response_id':'resp1'}, {})
+        with self.assertRaisesRegex(ValueError, 'Model Harbor model'):
             module.routed_request({'model':'grok-4.6'}, {})
 
     def test_credential_helper_failure_never_falls_back(self):
@@ -211,7 +257,7 @@ class LiveRoutingTests(unittest.TestCase):
         with patch.object(module.subprocess, 'run', return_value=result) as run:
             for model in ['moonshotai/Kimi-K3', 'moonshotai/Kimi-K3', 'deepseek-ai/DeepSeek-V4.1-Flash', 'moonshotai/Kimi-K3']:
                 self.select('baseten', model)
-                _, headers, base, _ = module.routed_request({'model':'harbor-selected','input':'hello'}, {})
+                _, headers, base, _ = module.routed_request({'model':self.model_id,'input':'hello'}, {})
                 self.assertEqual(headers['Authorization'], 'Bearer secret-key')
                 self.assertEqual(base, 'https://inference.baseten.co/v1')
         self.assertEqual(run.call_count, 1)
@@ -341,7 +387,7 @@ class LiveRoutingTests(unittest.TestCase):
                 c.request('POST','/harbor/v1/responses',body='{}',headers={'Authorization':'Bearer wrong-token'})
                 self.assertEqual(c.getresponse().status,401); c.close()
                 c = http.client.HTTPConnection(*server.server_address, timeout=5)
-                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True,'input':'hello'}),headers={'Authorization':'Bearer test-local-bridge-token'})
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':self.model_id,'stream':True,'input':'hello'}),headers={'Authorization':'Bearer test-local-bridge-token'})
                 r = c.getresponse()
                 self.assertEqual(r.status,200)
                 self.assertEqual(r.getheader('X-Model-Harbor-Model'),'grok-4.6')
@@ -350,11 +396,11 @@ class LiveRoutingTests(unittest.TestCase):
                 self.assertEqual(json.loads(opener.request.data)['model'],'grok-4.6')
                 c.close()
                 c = http.client.HTTPConnection(*server.server_address, timeout=5)
-                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True}),
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':self.model_id,'stream':True}),
                           headers={'Authorization':'Bearer codex.access.token','X-Model-Harbor-Token':'wrong-local-token'})
                 self.assertEqual(c.getresponse().status,401); c.close()
                 c = http.client.HTTPConnection(*server.server_address, timeout=5)
-                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True}),
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':self.model_id,'stream':True}),
                           headers={'Authorization':'Bearer codex.access.token','X-Model-Harbor-Token':'test-local-bridge-token',
                                    'ChatGPT-Account-ID':'codex-account'})
                 r = c.getresponse()

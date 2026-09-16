@@ -116,6 +116,7 @@ enum ReasoningEffort: String, CaseIterable, Codable, Identifiable, Equatable {
 struct AppData: Codable {
     var services: [CodexService]
     var selectedModel: SelectedModel?
+    var legacyModel: SelectedModel?
     var openAIAccounts: [OpenAIAccount]
     var selectedOpenAIAccountID: String?
     var modelReasoningEffort: ReasoningEffort
@@ -127,10 +128,12 @@ struct AppData: Codable {
         selectedModel: SelectedModel?,
         openAIAccounts: [OpenAIAccount] = [],
         selectedOpenAIAccountID: String? = nil,
-        modelReasoningEffort: ReasoningEffort = .medium
+        modelReasoningEffort: ReasoningEffort = .medium,
+        legacyModel: SelectedModel? = nil
     ) {
         self.services = services
         self.selectedModel = selectedModel
+        self.legacyModel = legacyModel
         self.openAIAccounts = openAIAccounts
         self.selectedOpenAIAccountID = selectedOpenAIAccountID
         self.modelReasoningEffort = modelReasoningEffort
@@ -139,6 +142,7 @@ struct AppData: Codable {
     enum CodingKeys: String, CodingKey {
         case services
         case selectedModel
+        case legacyModel
         case openAIAccounts
         case selectedOpenAIAccountID
         case modelReasoningEffort
@@ -148,6 +152,7 @@ struct AppData: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         services = try container.decode([CodexService].self, forKey: .services)
         selectedModel = try container.decodeIfPresent(SelectedModel.self, forKey: .selectedModel)
+        legacyModel = try container.decodeIfPresent(SelectedModel.self, forKey: .legacyModel)
         openAIAccounts = try container.decodeIfPresent([OpenAIAccount].self, forKey: .openAIAccounts) ?? []
         selectedOpenAIAccountID = try container.decodeIfPresent(String.self, forKey: .selectedOpenAIAccountID)
         modelReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .modelReasoningEffort) ?? .medium

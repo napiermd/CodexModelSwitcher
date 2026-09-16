@@ -98,17 +98,31 @@ extension SafetyTests {
 }
 
 extension SafetyTests {
-    func testLiveSwitchKeepsCodexConfigurationIdentical() throws {
+    func testDefaultChangesKeepProviderAndCredentialsStable() throws {
         let original = "[model_providers.baseten]\nname = \"Baseten\"\nbase_url = \"https://inference.baseten.co/v1\"\n[model_providers.baseten.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://vault/item/key\"]\n"
         let data = AppData(services: [service("grok-oauth"), service("baseten", existing: true), service("codex-subscription")], selectedModel: nil)
         let grok = try writer.rewriteConfig(original, selected: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"), data: data)
         let baseten = try writer.rewriteConfig(grok, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: data)
         let codex = try writer.rewriteConfig(baseten, selected: SelectedModel(serviceID: "codex-subscription", modelID: "test-model"), data: data)
-        XCTAssertEqual(grok, baseten)
-        XCTAssertEqual(baseten, codex)
-        XCTAssertTrue(baseten.contains("model = \"harbor-selected\""))
+        XCTAssertEqual(grok.replacingOccurrences(of: "harbor/grok-oauth/", with: "harbor/baseten/"), baseten)
+        XCTAssertEqual(baseten.replacingOccurrences(of: "harbor/baseten/", with: "harbor/codex-subscription/"), codex)
+        XCTAssertTrue(baseten.contains("model = \"harbor/baseten/test-model\""))
         XCTAssertTrue(baseten.contains(original))
         XCTAssertFalse(baseten.contains("secret-never-serialize"))
+    }
+
+    func testCatalogHasIndependentRoutesAndHiddenFrozenLegacy() throws {
+        let services = [service("grok-oauth"), service("baseten"), service("codex-subscription")].map { s in var s = s; s.models.removeAll { $0.id == "__native__" }; return s }
+        let data = AppData(services: services, selectedModel: nil,
+                           legacyModel: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"))
+        let json = try JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as! [String: Any]
+        let entries = json["models"] as! [[String: Any]]
+        XCTAssertEqual(entries.compactMap { $0["slug"] as? String }, ["harbor/grok-oauth/test-model", "harbor/baseten/test-model", "harbor/codex-subscription/test-model", "harbor-selected"])
+        XCTAssertEqual(entries.last?["visibility"] as? String, "hide")
+        XCTAssertEqual(LiveRouting.selection(for: "harbor/baseten/test-model", in: data), SelectedModel(serviceID: "baseten", modelID: "test-model"))
+        XCTAssertNil(LiveRouting.selection(for: "harbor/baseten/missing", in: data))
+        let restored = try JSONDecoder().decode(AppData.self, from: JSONEncoder().encode(data))
+        XCTAssertEqual(restored.legacyModel, data.legacyModel)
     }
 
     func testLiveProviderCannotOverwriteAnUnownedProvider() throws {

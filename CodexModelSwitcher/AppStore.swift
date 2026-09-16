@@ -15,6 +15,7 @@ final class AppStore: ObservableObject {
     @Published var grokIsSignedIn = false
     @Published var isGrokLoginRunning = false
     @Published var isBasetenReconnectRunning = false
+    @Published var basetenState = "not_loaded"
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -67,7 +68,7 @@ final class AppStore: ObservableObject {
         isBasetenReconnectRunning = true
         statusMessage = "Unlock Baseten in 1Password once for this Harbor session."
         Task {
-            defer { isBasetenReconnectRunning = false }
+            defer { isBasetenReconnectRunning = false; Task { await refreshConnectionStatus() } }
             do {
                 try await grokAdapter.reconnectBaseten()
                 errorMessage = ""
@@ -77,6 +78,13 @@ final class AppStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func refreshConnectionStatus() async {
+        guard let bytes = try? await grokAdapter.connectionStatus(),
+              let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let baseten = value["baseten_auth"] as? [String: Any] else { return }
+        basetenState = baseten["state"] as? String ?? "not_loaded"
     }
 
     func signInGrok() {
@@ -89,7 +97,7 @@ final class AppStore: ObservableObject {
                 try await GrokAdapter.login()
                 if await refreshGrokAccount() {
                     errorMessage = ""
-                    statusMessage = "Signed in to Grok. Choose a model below, then use Model Harbor selection in Codex."
+                    statusMessage = "Signed in to Grok. Choose a Grok model in the Codex task picker."
                 } else {
                     statusMessage = ""
                     errorMessage = "Browser sign-in finished, but Grok’s connection could not be verified. Try again."
@@ -126,6 +134,7 @@ final class AppStore: ObservableObject {
 
     func load() {
         do {
+            var didMigrate = false
             var candidate = defaultData()
             if FileManager.default.fileExists(atPath: AppPaths.appData.path) {
                 candidate = try JSONDecoder().decode(AppData.self, from: Data(contentsOf: AppPaths.appData))
@@ -143,9 +152,14 @@ final class AppStore: ObservableObject {
                 candidate.services.removeAll { $0.id == subscription.id }
                 candidate.services.insert(subscription, at: 0)
             }
+            if candidate.legacyModel == nil, let selection = candidate.selectedModel, LiveRouting.supports(selection.serviceID) {
+                candidate.legacyModel = selection
+                didMigrate = true
+            }
             try reflectActiveConfiguration(in: &candidate)
             try save(candidate)
             storageReady = true
+            if didMigrate { statusMessage = "Per-task models are ready. Reopen Codex once to load the new picker entries." }
         } catch { storageReady = false; errorMessage = error.localizedDescription }
     }
 
@@ -156,10 +170,12 @@ final class AppStore: ObservableObject {
         var provider = values?["provider"] as? String ?? "openai"
         if provider == "xai-switcher" { provider = "xai" }
         if provider == LiveRouting.providerID {
-            if let selection = candidate.selectedModel,
+            if let model = values?["model"] as? String, let selection = LiveRouting.selection(for: model, in: candidate) {
+                candidate.selectedModel = selection
+            } else if let selection = candidate.selectedModel,
                LiveRouting.supports(selection.serviceID),
                candidate.services.contains(where: { $0.id == selection.serviceID && $0.models.contains(where: { $0.id == selection.modelID }) }) {
-                // The provider stays fixed while the saved model selection changes.
+                // Preserve the pre-upgrade default until a named route is written.
             } else { candidate.selectedModel = nil }
         } else if provider == "openai" {
             candidate.selectedModel = SelectedModel(serviceID: "openai", modelID: "__native__")
@@ -180,6 +196,7 @@ final class AppStore: ObservableObject {
         try FileManager.default.createDirectory(at: AppPaths.codexDirectory, withIntermediateDirectories: true)
         try encoded.write(to: AppPaths.appData, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: AppPaths.appData.path)
+        try writer.updateCatalog(in: candidate)
         data = candidate
     }
 
@@ -227,7 +244,7 @@ final class AppStore: ObservableObject {
             candidate.selectedModel = selection
             try save(candidate)
             statusMessage = LiveRouting.supports(serviceID)
-                ? "Selection saved. Tasks using Model Harbor selection switch on their next turn."
+                ? "Default saved for new tasks. Existing tasks keep their own model."
                 : "Selection saved. Restart Codex to apply."
         }
     }

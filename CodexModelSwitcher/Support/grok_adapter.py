@@ -110,15 +110,23 @@ def flat_name(namespace, name, custom=False):
     return 'cms_' + hashlib.sha256(identity).hexdigest()[:24] + '_' + re.sub(r'[^A-Za-z0-9_-]', '_', name)[:30]
 
 
-def selected_route():
+def requested_route(model_id):
     data = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
-    selection = data.get('selectedModel') or {}
-    provider, model = selection.get('serviceID'), selection.get('modelID')
+    if model_id == 'harbor-selected':
+        selection = data.get('legacyModel') or {}
+        provider, model = selection.get('serviceID'), selection.get('modelID')
+    elif isinstance(model_id, str) and model_id.startswith('harbor/'):
+        parts = model_id.split('/', 2)
+        if len(parts) != 3:
+            raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
+        _, provider, model = parts
+    else:
+        raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
     if provider not in ('grok-oauth', 'baseten', 'codex-subscription'):
-        raise ValueError('Choose a Codex, Grok or Baseten model in Model Harbor.')
+        raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
     service = next((s for s in data['services'] if s['id'] == provider), None)
     if not service or model not in [m['id'] for m in service['models']]:
-        raise ValueError('The selected model is no longer available. Choose another model in Model Harbor.')
+        raise ValueError('This model is no longer available. Choose another model in the Codex task picker.')
     return {'provider': provider, 'model': model}
 
 
@@ -138,7 +146,7 @@ def route_for_turn(source, headers):
         if key in TURN_ROUTES:
             TURN_ROUTES.move_to_end(key)
             return dict(TURN_ROUTES[key])
-        route = selected_route()
+        route = requested_route(source.get('model'))
         if key:
             TURN_ROUTES[key] = route
             # Bound idle history; active turns are touched on every tool-result request.
@@ -246,8 +254,6 @@ def codex_headers(headers):
 
 
 def routed_request(source, headers):
-    if source.get('model') != 'harbor-selected':
-        raise ValueError('Choose Model Harbor selection in Codex to use live switching.')
     if source.get('previous_response_id'):
         raise ValueError('Model Harbor needs full conversation history when switching providers.')
     route = route_for_turn(source, headers)
@@ -266,16 +272,23 @@ def routed_request(source, headers):
     else:
         upstream_headers = oauth_headers()
         base = OAUTH_BASE
-    return Translation(source), upstream_headers, base, route
+    return Translation(source, native_tools=route['provider'] == 'codex-subscription'), upstream_headers, base, route
 
 
 class Translation:
-    def __init__(self, source):
+    def __init__(self, source, native_tools=False):
         self.names = {}
         self.groups = {}
         self.pending = set()
         self.response_status = None
         self.request = copy.deepcopy(source)
+        if native_tools:
+            # Codex supports its own namespace/custom tools. Full history carries
+            # content and call_id links; provider-owned item IDs are not portable.
+            if isinstance(source.get('input'), list):
+                self.request['input'] = [{k: copy.deepcopy(v) for k, v in item.items() if k != 'id'}
+                                         for item in source['input'] if item.get('type') != 'reasoning']
+            return
         if str(source.get('model', '')).startswith('grok-4.20'):
             self.request.pop('reasoning', None)
         self.request['tools'] = self.tools(source.get('tools', []))
@@ -329,6 +342,8 @@ class Translation:
         for item in result:
             if item.get('type') in ('function_call', 'custom_tool_call'):
                 custom = item['type'] == 'custom_tool_call'
+                if custom:
+                    item.pop('id', None)
                 namespace = item.pop('namespace', None)
                 group = flat_name(namespace, 'dispatch') if namespace else None
                 if group in self.groups:
@@ -432,11 +447,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/harbor/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
-            try:
-                body = json.dumps({'selected': selected_route(), 'last_request': LAST_ROUTE,
-                                   'baseten_auth': BASETEN_CREDENTIALS.snapshot}).encode()
-            except (ValueError, OSError, KeyError):
-                return self.error(409, 'Choose a Codex, Grok or Baseten model in Model Harbor.')
+            body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE,
+                               'baseten_auth': BASETEN_CREDENTIALS.snapshot}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))

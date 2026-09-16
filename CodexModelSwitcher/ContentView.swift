@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var store: AppStore
     @State private var editorSession: EditorSession?
     @State private var isShowingOpenAIAccountWarning = false
+    @State private var showOtherConnections = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -31,6 +32,12 @@ struct ContentView: View {
         .background {
             WindowTransparencyConfigurator()
                 .allowsHitTesting(false)
+        }
+        .task {
+            while !Task.isCancelled {
+                await store.refreshConnectionStatus()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
         }
         .onDisappear {
             store.clearStatusMessage()
@@ -97,7 +104,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Model Harbor")
                         .font(.system(.headline, design: .rounded).weight(.semibold))
-                    Text(currentSelectionText)
+                    Text("Connections")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -170,37 +177,51 @@ struct ContentView: View {
 
     private var serviceStack: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Choose Model Harbor selection in Codex once. Changes here apply on your next turn in every task using that option.")
-                .font(.caption)
+            Text("Choose a model in each Codex task. Each task keeps its choice when you move between them.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            ForEach(Array(store.data.services.enumerated()), id: \.element.id) { index, service in
-                VStack(spacing: 0) {
-                    ServiceSectionView(
-                        service: service,
-                        onAddOpenAIAccount: {
-                            isShowingOpenAIAccountWarning = true
-                        },
-                        onEdit: {
-                            store.clearError()
-                            editorSession = EditorSession(
-                                title: "Edit Service",
-                                originalID: service.id,
-                                form: ServiceFormData(service: service)
-                            )
+                .padding(.vertical, 12)
+            ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
+                section(for: service)
+                Divider().padding(.vertical, 5)
+            }
+            HStack {
+                Text("New task default").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
+                        Section(LiveRouting.providerName(service.id)) {
+                            ForEach(service.models) { model in
+                                Button(model.name) { store.select(serviceID: service.id, modelID: model.id) }
+                            }
                         }
-                    )
-                    .environmentObject(store)
-
-                    if index < store.data.services.count - 1 {
-                        Divider()
-                            .padding(.leading, 8)
                     }
+                } label: {
+                    Text(store.selectedModel?.name ?? "Choose model").lineLimit(1)
+                }
+                .fixedSize()
+                .disabled(store.proxyStatus != .active)
+            }
+            .padding(.vertical, 10)
+            DisclosureGroup("Saved accounts & other providers", isExpanded: $showOtherConnections) {
+                ForEach(store.data.services.filter { !LiveRouting.supports($0.id) }) { service in
+                    section(for: service)
                 }
             }
+            .font(.caption)
+            .padding(.vertical, 8)
         }
+    }
+
+    private func section(for service: CodexService) -> some View {
+        ServiceSectionView(service: service, onAddOpenAIAccount: {
+            isShowingOpenAIAccountWarning = true
+        }, onEdit: {
+            store.clearError()
+            editorSession = EditorSession(title: "Edit Service", originalID: service.id, form: ServiceFormData(service: service))
+        })
+        .environmentObject(store)
     }
 
     private func editorView(for editorSession: EditorSession) -> some View {
@@ -294,13 +315,7 @@ struct ContentView: View {
         }
     }
 
-    private var currentSelectionText: String {
-        guard let service = store.selectedService, let model = store.selectedModel else {
-            return "No model selected"
-        }
 
-        return "\(service.name) / \(model.name)"
-    }
 }
 
 private struct EditorSession: Identifiable {
@@ -337,6 +352,15 @@ private struct ServiceSectionView: View {
                 }
             }
 
+            if LiveRouting.supports(service.id) {
+                DisclosureGroup("\(service.models.count) models available") {
+                    ForEach(service.models) { model in
+                        Text(model.name).font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 2)
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            } else {
             VStack(spacing: 3) {
                 ForEach(service.models) { model in
                     Button {
@@ -361,14 +385,17 @@ private struct ServiceSectionView: View {
                 }
             }
 
+            }
+
             if service.id == "codex-subscription" {
-                Text("Uses the ChatGPT subscription signed in to Codex. Switch models here without restarting.")
+                Text("Uses the subscription signed in to Codex.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if service.id == "openai" {
-                Text("Direct connection for saved accounts. Requires restarting Codex; use Current subscription above for live switching.")
+                Text("Switching saved accounts changes the direct connection and requires restarting Codex. Use Current subscription for model changes while Codex stays open.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if service.id == "baseten" {
-                Text("Unlock once per Harbor session. The credential stays in memory while Harbor is open.")
+                Label(store.basetenState == "ready" ? "Unlocked for this session" : (store.basetenState == "needs_reconnect" ? "Reconnect to continue" : "Unlock once per Harbor session"),
+                      systemImage: store.basetenState == "ready" ? "checkmark.circle.fill" : "key")
                     .font(.caption).foregroundStyle(.secondary)
                 Button(store.isBasetenReconnectRunning ? "Connecting…" : "Reconnect Baseten") {
                     store.reconnectBaseten()
@@ -388,7 +415,7 @@ private struct ServiceSectionView: View {
                     Button(store.isGrokLoginRunning ? "Signing in…" : (store.grokIsSignedIn ? "Switch account" : "Sign in")) { store.signInGrok() }
                         .disabled(store.isGrokLoginRunning)
                 }
-                Text("Uses your Grok sign-in. Keep Model Harbor open.")
+                Text("Uses your Grok browser sign-in.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if service.id == "xai" {
@@ -757,7 +784,7 @@ private struct FooterOptionsButton: NSViewRepresentable {
             menu.autoenablesItems = false
 
             let header = NSMenuItem(
-                title: "Reasoning effort",
+                title: "New task reasoning effort",
                 action: nil,
                 keyEquivalent: ""
             )

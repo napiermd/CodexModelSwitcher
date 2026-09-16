@@ -37,6 +37,14 @@ final class GrokAdapter {
         process = nil
     }
 
+    func connectionStatus() async throws -> Data {
+        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/status")!, timeoutInterval: 2)
+        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
+        let (bytes, _) = try await URLSession.shared.data(for: request)
+        return bytes
+    }
+
     func accountStatus() async throws -> Data {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/oauth/status")!, timeoutInterval: 60)

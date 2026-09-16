@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Opt-in live proof: one Codex process and thread, four models, real tool calls.
+"""Opt-in proof of independent task models, in-task switching, resume, and tools.
 
-Uses existing Grok OAuth and Baseten credential helpers. Sends only synthetic
-verification prompts; does not change the user's config, sessions, or selection.
+Sends synthetic prompts only. Uses an isolated Codex home, an existing official
+subscription auth cache, and either the installed bridge or a source bridge.
 """
 import argparse
+import copy
 import importlib.util
 import json
 import os
@@ -19,184 +20,174 @@ import tomllib
 import urllib.request
 
 
+def model_id(route):
+    return 'harbor/' + route[0] + '/' + route[1]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', required=True)
-    parser.add_argument('--subscription', action='store_true', help='Include current ChatGPT subscription; official Codex manages auth.')
-    parser.add_argument('--installed', action='store_true', help='Use the running app; waits for selections made in its menu.')
-    parser.add_argument('--verify-upgrade', action='store_true', help='Start with the old provider config, update it while Codex is open, then test a new task.')
-    parser.add_argument('--baseten-session', action='store_true', help='Verify repeated Baseten turns and tool continuations share one credential lookup.')
+    parser.add_argument('--installed', action='store_true')
+    parser.add_argument('--without-baseten', action='store_true', help='Source verification without requesting a new credential unlock.')
     args = parser.parse_args()
-    if args.baseten_session and (args.subscription or args.verify_upgrade):
-        parser.error('--baseten-session cannot be combined with subscription or upgrade verification')
-    if args.verify_upgrade and (not args.subscription or args.installed):
-        parser.error('--verify-upgrade requires --subscription and uses an isolated bridge')
     repo = pathlib.Path(__file__).resolve().parents[1]
+    real = pathlib.Path.home()/'.codex'
+    saved = json.loads((real/'model-switcher.json').read_text())
+    config = tomllib.loads((real/'config.toml').read_text())
     spec = importlib.util.spec_from_file_location('bridge', repo/'CodexModelSwitcher/Support/grok_adapter.py')
     bridge = importlib.util.module_from_spec(spec); spec.loader.exec_module(bridge)
-    real = pathlib.Path.home()/'.codex'
-    original = tomllib.loads((real/'config.toml').read_text())['model_providers']['baseten']
-    saved = json.loads((real/'model-switcher.json').read_text())
-    models = [('grok-oauth','grok-4.6'), ('baseten','moonshotai/Kimi-K3'),
-              ('baseten','deepseek-ai/DeepSeek-V4.1-Flash'), ('grok-oauth','grok-4.5'), ('grok-oauth','grok-4.6')]
-    if args.subscription:
-        native = json.loads((real/'models_cache.json').read_text())['models']
-        native = [m for m in native if m.get('visibility') == 'list' and m.get('slug') == 'gpt-6-astra']
-        if not native: raise RuntimeError('The current Codex catalog does not include GPT-6 Astra.')
-        saved['services'].append({'id':'codex-subscription', 'models':[{'id':m['slug']} for m in native]})
-        models = [('codex-subscription',native[0]['slug']), ('grok-oauth','grok-4.6'), ('baseten','moonshotai/Kimi-K3'), ('codex-subscription',native[0]['slug'])]
-    if args.baseten_session:
-        models = [('baseten','moonshotai/Kimi-K3'), ('baseten','moonshotai/Kimi-K3'),
-                  ('baseten','deepseek-ai/DeepSeek-V4.1-Flash'), ('baseten','moonshotai/Kimi-K3')]
-    if args.verify_upgrade:
-        models = models[:1]
-    with tempfile.TemporaryDirectory(prefix='harbor-live-') as tmp:
+    codex = ('codex-subscription', 'gpt-6-astra')
+    grok = ('grok-oauth', 'grok-4.6')
+    kimi = ('baseten', 'moonshotai/Kimi-K3')
+    deepseek = ('baseten', 'deepseek-ai/DeepSeek-V4.1-Flash')
+    routes = [codex, grok] if args.without_baseten else [codex, grok, kimi, deepseek]
+    for provider, model in routes:
+        if not any(s['id']==provider and any(m['id']==model for m in s['models']) for s in saved['services']):
+            raise RuntimeError('Required model is missing: '+model)
+    with tempfile.TemporaryDirectory(prefix='harbor-tasks-') as tmp:
         root = pathlib.Path(tmp)
+        server = None
         bridge.CONFIG_DIR = real if args.installed else root
         bridge.TOKEN_PATH = real/'model-harbor-bridge-token' if args.installed else root/'bridge-token'
-        server = None
         port = 48118
         if not args.installed:
             bridge.ensure_bridge_token()
+            (root/'model-switcher.json').write_text(json.dumps(saved))
             server = bridge.http.server.ThreadingHTTPServer(('127.0.0.1',0), bridge.Handler)
             port = server.server_port
-            worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
-        catalog = json.loads((real/'model-catalogs/grok-oauth.json').read_text())
-        entry = catalog['models'][0]
-        entry.update(slug='harbor-selected',display_name='Model Harbor selection', default_reasoning_level='low')
-        (root/'catalog.json').write_text(json.dumps({'models':[entry]}))
-        # Only the existing credential command/config is copied; no provider secret.
-        lines = ['model="harbor-selected"','model_provider="model-harbor"','model_reasoning_effort="low"',
-                 'model_catalog_json='+json.dumps(str(root/'catalog.json')), 'approval_policy="never"', 'sandbox_mode="read-only"',
-                 '[features]', 'apps=false', '[model_providers.model-harbor]', 'name="Model Harbor"', 'wire_api="responses"',
-                 'base_url="http://127.0.0.1:'+str(port)+'/harbor/v1"','supports_websockets=false',
-                 '[model_providers.model-harbor.auth]', 'command="/bin/cat"', 'args=['+json.dumps(str(bridge.TOKEN_PATH))+']']
-        if args.subscription:
-            # Point this short test at the existing official auth cache without
-            # copying or printing its credentials.
-            (root/'auth.json').symlink_to(real/'auth.json')
-            lines = lines[:-3] + ['requires_openai_auth=true',
-                '[model_providers.model-harbor.http_headers]',
-                'X-Model-Harbor-Token='+json.dumps(bridge.TOKEN_PATH.read_text().strip())]
-        def table(path, values):
-            rows=['['+'.'.join(path)+']']
-            for key,val in values.items():
-                if not isinstance(val,dict): rows.append(json.dumps(key)+'='+json.dumps(val))
-            for key,val in values.items():
-                if isinstance(val,dict): rows += table(path+[key],val)
-            return rows
-        lines += table(['model_providers','baseten'],original)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        token = bridge.TOKEN_PATH.read_text().strip()
+        def status():
+            request = urllib.request.Request(f'http://127.0.0.1:{port}/harbor/status',headers={'X-Model-Harbor-Token':token})
+            with urllib.request.urlopen(request,timeout=10) as response: return json.load(response)
+        if status().get('routing') != 'per-task': raise RuntimeError('Bridge needs the per-task update')
+        before_auth = status()['baseten_auth']
+        if args.installed:
+            catalog = json.loads((real/'model-catalogs/model-harbor.json').read_text())
+        else:
+            entries=[]
+            for service in saved['services']:
+                if service['id'] not in [r[0] for r in routes]: continue
+                source=json.loads(pathlib.Path(service['catalogPath']).read_text())['models']
+                for model in service['models']:
+                    entry=copy.deepcopy(next(e for e in source if e['slug']==model['id']))
+                    entry['slug']=model_id((service['id'],model['id']))
+                    entry['display_name']=model['name']+' · '+service['id']
+                    entry['supports_parallel_tool_calls']=False
+                    entries.append(entry)
+            catalog={'models':entries}
+        for route in routes:
+            if not any(e['slug']==model_id(route) for e in catalog['models']): raise RuntimeError('Missing picker entry')
+        (root/'catalog.json').write_text(json.dumps(catalog))
+        (root/'auth.json').symlink_to(real/'auth.json')
         (root/'marker-mcp.py').write_text('''import json,sys,pathlib
 for line in sys.stdin:
  try:q=json.loads(line)
  except ValueError:continue
  method=q.get('method');r={}
  if method=='initialize':r={'protocolVersion':'2024-11-05','capabilities':{'tools':{}},'serverInfo':{'name':'verification','version':'1'}}
- elif method=='tools/list':r={'tools':[{'name':'read_marker','description':'Read the current verification marker; changes each turn.','annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'inputSchema':{'type':'object','properties':{},'additionalProperties':False}}]}
+ elif method=='tools/list':r={'tools':[{'name':'read_marker','description':'Read the fresh marker, replaced before every turn.','annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'inputSchema':{'type':'object','properties':{},'additionalProperties':False}}]}
  elif method=='tools/call':r={'content':[{'type':'text','text':pathlib.Path(__file__).with_name('marker').read_text()}]}
  if 'id' in q:print(json.dumps({'jsonrpc':'2.0','id':q['id'],'result':r}),flush=True)
 ''')
-        lines += ['[mcp_servers.verification]','command='+json.dumps(shutil.which('python3')),
-                  'args=['+json.dumps(str(root/'marker-mcp.py'))+']']
-        final_config = '\n'.join(lines)+'\n'
-        initial_config = final_config
-        if args.verify_upgrade:
-            old_auth = '[model_providers.model-harbor.auth]\ncommand="/bin/cat"\nargs=['+json.dumps(str(bridge.TOKEN_PATH))+']'
-            new_auth = 'requires_openai_auth=true\n[model_providers.model-harbor.http_headers]\nX-Model-Harbor-Token='+json.dumps(bridge.TOKEN_PATH.read_text().strip())
-            initial_config = final_config.replace(new_auth, old_auth)
-            if initial_config == final_config: raise RuntimeError('Upgrade fixture was not changed')
-        (root/'config.toml').write_text(initial_config)
-        env = dict(os.environ, CODEX_HOME=str(root))
-        q = queue.Queue()
-        proc = subprocess.Popen([shutil.which('codex'),'app-server','--stdio'],env=env,cwd=root,
-                                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+        lines=['model="harbor-selected"','model_provider="model-harbor"','model_reasoning_effort="low"',
+               'model_catalog_json='+json.dumps(str(root/'catalog.json')),'approval_policy="never"','sandbox_mode="read-only"',
+               '[features]','apps=false','[model_providers.model-harbor]','name="Model Harbor"','wire_api="responses"',
+               f'base_url="http://127.0.0.1:{port}/harbor/v1"','supports_websockets=false','requires_openai_auth=true',
+               '[model_providers.model-harbor.http_headers]','X-Model-Harbor-Token='+json.dumps(token),
+               '[mcp_servers.verification]','command='+json.dumps(shutil.which('python3')),
+               'args=['+json.dumps(str(root/'marker-mcp.py'))+']']
+        def table(path,values):
+            rows=['['+'.'.join(json.dumps(k) for k in path)+']']
+            for key,val in values.items():
+                if not isinstance(val,dict):rows.append(json.dumps(key)+'='+json.dumps(val))
+            for key,val in values.items():
+                if isinstance(val,dict):rows+=table(path+[key],val)
+            return rows
+        lines+=table(['model_providers','baseten'],config['model_providers']['baseten'])
+        (root/'config.toml').write_text('\n'.join(lines)+'\n')
+        os.chmod(root/'config.toml',0o600)
+        q=queue.Queue()
+        proc=subprocess.Popen([shutil.which('codex'),'app-server','--stdio'],env=dict(os.environ,CODEX_HOME=str(root)),cwd=root,
+                              stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
         def reader():
             for line in proc.stdout:
                 try:q.put(json.loads(line))
                 except ValueError:pass
         threading.Thread(target=reader,daemon=True).start()
-        counter = 0
-        def rpc(method, params):
+        counter=0
+        def rpc(method,params):
             nonlocal counter
-            counter += 1
+            counter+=1
             proc.stdin.write(json.dumps({'id':counter,'method':method,'params':params})+'\n');proc.stdin.flush()
             deadline=time.monotonic()+60
             while time.monotonic()<deadline:
-                value=q.get(timeout=max(0.1,deadline-time.monotonic()))
+                value=q.get(timeout=max(.1,deadline-time.monotonic()))
                 if value.get('id')==counter:
                     if 'error' in value:raise RuntimeError(json.dumps(value['error']))
                     return value['result']
             raise TimeoutError(method)
-        def baseten_status():
-            if not args.installed:
-                return bridge.BASETEN_CREDENTIALS.snapshot
-            request = urllib.request.Request('http://127.0.0.1:48118/harbor/status', headers={'Authorization':'Bearer '+bridge.TOKEN_PATH.read_text().strip()})
-            with urllib.request.urlopen(request,timeout=10) as response:
-                return json.load(response)['baseten_auth']
-        initial_auth = baseten_status() if args.baseten_session else None
-        report=[]
+        threads={};memories={};report=[]
+        def start(name,route):
+            result=rpc('thread/start',{'cwd':str(root),'model':model_id(route),'modelProvider':'model-harbor','approvalPolicy':'never','sandbox':'read-only'})
+            threads[name]=result['thread']['id'];memories[name]='copper'+os.urandom(4).hex()
+        def turn(name,route,first=False,override=True):
+            marker='harbor-'+os.urandom(8).hex();(root/'marker').write_text(marker)
+            prompt=('The word for this conversation is '+memories[name]+'. Remember that exact word from this message. ' if first else 'Use the conversation word I gave you in my first message. ')
+            prompt+='The external marker just changed. Your first action must be a fresh verification MCP read_marker call. Reply with the conversation word and NEW marker, nothing else. The conversation word is in the conversation; do not search files or use a shell. The only tool needed is verification.read_marker.'
+            params={'threadId':threads[name],'input':[{'type':'text','text':prompt}],'effort':'low'}
+            if override:params['model']=model_id(route)
+            rpc('turn/start',params)
+            deadline=time.monotonic()+240;messages=[];calls=0
+            while time.monotonic()<deadline:
+                event=q.get(timeout=max(.1,deadline-time.monotonic()));p=event.get('params',{})
+                if p.get('threadId')!=threads[name]:continue
+                if event.get('method')=='item/completed':
+                    item=p.get('item',{})
+                    if item.get('type')=='agentMessage':messages.append(item.get('text',''))
+                    if item.get('type')=='mcpToolCall' and item.get('status')=='completed':calls+=1
+                if event.get('method')=='turn/completed':
+                    if p['turn']['status']!='completed':raise RuntimeError('Turn failed: '+json.dumps(p['turn'].get('error')))
+                    break
+            else:raise TimeoutError('turn')
+            text='\n'.join(messages)
+            row={'task':name,'model':route[1],'tool_calls':calls,'memory_verified':memories[name] in text,'marker_verified':marker in text,
+                 'route_verified':status()['last_request']=={'provider':route[0],'model':route[1],'state':'completed'},'explicit_override':override}
+            report.append(row);print(json.dumps(row),flush=True)
+            if calls<1 or not all(row[k] for k in ('memory_verified','marker_verified','route_verified')):raise RuntimeError('Verification failed')
         try:
-            rpc('initialize',{'clientInfo':{'name':'harbor_verification','version':'1'},'capabilities':{'experimentalApi':True}})
+            rpc('initialize',{'clientInfo':{'name':'harbor_task_verification','version':'2'},'capabilities':{'experimentalApi':True}})
             proc.stdin.write('{"method":"initialized"}\n');proc.stdin.flush()
-            if args.verify_upgrade:
-                (root/'config.toml').write_text(final_config)
-            started=rpc('thread/start',{'cwd':str(root),'model':'harbor-selected','modelProvider':'model-harbor','approvalPolicy':'never','sandbox':'read-only','ephemeral':True})
-            thread=started['thread']['id']
-            for index,(provider,model) in enumerate(models):
-                marker='harbor-'+os.urandom(8).hex()
-                (root/'marker').write_text(marker)
-                if args.installed:
-                    print(json.dumps({'select_in_harbor':model}),flush=True)
-                    deadline = time.monotonic()+300
-                    while bridge.selected_route() != {'provider':provider,'model':model}:
-                        if time.monotonic()>deadline:raise TimeoutError('Waiting for Model Harbor selection')
-                        time.sleep(0.25)
-                else:
-                    saved['selectedModel']={'serviceID':provider,'modelID':model}
-                    (root/'model-switcher.json').write_text(json.dumps(saved))
-                memory='remember-switch-8529'
-                prompt=('Remember '+memory+'. ' if index==0 else 'Recall the memory word from my first message. ')
-                prompt+=' This is verification turn '+str(index+1)+' ('+os.urandom(6).hex()+'). The external marker file was just replaced. Your first action must be a fresh call to the verification MCP read_marker tool. Previously returned markers are now invalid. Reply with the memory word and the NEW tool result, nothing else.'
-                result=rpc('turn/start',{'threadId':thread,'input':[{'type':'text','text':prompt}],'model':'harbor-selected','effort':'low'})
-                deadline=time.monotonic()+180
-                messages=[];tool_calls=0
-                while time.monotonic()<deadline:
-                    value=q.get(timeout=max(0.1,deadline-time.monotonic()))
-                    method=value.get('method');params=value.get('params',{})
-                    if method=='item/completed':
-                        item=params.get('item',{})
-                        if item.get('type')=='agentMessage':messages.append(item.get('text',''))
-                        if item.get('type')=='mcpToolCall' and item.get('status')=='completed':tool_calls+=1
-                    if method=='turn/completed':
-                        turn=params['turn']
-                        if turn['status']!='completed':raise RuntimeError('Turn failed: '+json.dumps(turn.get('error')))
-                        break
-                else:raise TimeoutError('turn')
-                text='\n'.join(messages)
-                last_route = bridge.LAST_ROUTE
-                if args.installed:
-                    request = urllib.request.Request('http://127.0.0.1:48118/harbor/status', headers={'Authorization':'Bearer '+bridge.TOKEN_PATH.read_text().strip()})
-                    with urllib.request.urlopen(request,timeout=10) as response:
-                        last_route=json.load(response)['last_request']
-                row={'model':model,'provider':provider,'tool_calls':tool_calls,'marker_verified':marker in text,
-                     'memory_verified':memory in text,'route_verified':last_route==dict(model=model,provider=provider,state='completed')}
-                report.append(row);print(json.dumps(row),flush=True)
-                if not all([row['tool_calls']>0,row['marker_verified'],row['memory_verified'],row['route_verified']]):
-                    raise RuntimeError('Live verification failed: '+repr(text))
-            if args.baseten_session:
-                final_auth = baseten_status()
-                helper_reads = final_auth['helper_reads'] - initial_auth['helper_reads']
-                reuses = final_auth['reuses'] - initial_auth['reuses']
-                expected_reads = 0 if initial_auth['state'] == 'ready' else 1
-                if final_auth['state'] != 'ready' or helper_reads != expected_reads or reuses < len(models):
-                    raise RuntimeError('Baseten did not reuse one session credential')
-                print(json.dumps({'baseten_credential_helper_reads':helper_reads,'credential_reuses':reuses}),flush=True)
-            print(json.dumps({'passed':True,'turns':len(report),'codex_process_id':proc.pid,'thread_id':thread,'restarts':0}),flush=True)
+            listed=rpc('model/list',{})
+            visible={e.get('model') for e in listed['data']}
+            if not all(model_id(r) in visible for r in routes):raise RuntimeError('Picker entries missing')
+            print(json.dumps({'picker_model_count':len(visible)}),flush=True)
+            start('A',grok);start('B',codex)
+            turn('A',grok,first=True,override=False)
+            turn('B',codex,first=True,override=False)
+            # Change A only; B's next turn omits model and must remember its original.
+            turn('A',codex)
+            turn('B',codex,override=False)
+            if not args.without_baseten:
+                start('C',kimi);turn('C',kimi,first=True,override=False)
+                turn('A',grok)
+                turn('C',deepseek)
+                turn('B',codex,override=False)
+                turn('C',deepseek,override=False)
+            rpc('thread/unsubscribe',{'threadId':threads['A']})
+            resumed=rpc('thread/resume',{'threadId':threads['A']})
+            expected=grok if not args.without_baseten else codex
+            if resumed['model']!=model_id(expected):raise RuntimeError('Resumed task did not retain model')
+            turn('A',expected,override=False)
+            after_auth=status()['baseten_auth']
+            reads=after_auth['helper_reads']-before_auth['helper_reads']
+            if reads>(0 if before_auth['state']=='ready' or args.without_baseten else 1):raise RuntimeError('Credential helper repeated')
+            print(json.dumps({'passed':True,'tasks':len(threads),'turns':len(report),'codex_process_id':proc.pid,'restarts':0,
+                              'baseten_credential_helper_reads':reads,'credential_reuses':after_auth['reuses']-before_auth['reuses']}),flush=True)
         finally:
             proc.terminate()
             try:proc.wait(timeout=5)
             except subprocess.TimeoutExpired:proc.kill();proc.wait()
-            if server:
-                server.shutdown();server.server_close();worker.join()
+            if server:server.shutdown();server.server_close()
 
 if __name__=='__main__':main()

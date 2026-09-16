@@ -12,6 +12,14 @@ struct CodexConfigWriter {
         try privateWrite(bytes, to: AppPaths.codexDirectory.appendingPathComponent("auth.json"))
     }
 
+    func updateCatalog(in data: AppData) throws {
+        try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let catalog = try LiveRouting.catalog(in: data)
+        if (try? Data(contentsOf: LiveRouting.catalogURL)) != catalog {
+            try privateWrite(catalog, to: LiveRouting.catalogURL)
+        }
+    }
+
     func applySelection(_ selected: SelectedModel, in data: AppData) throws {
         guard let service = data.services.first(where: { $0.id == selected.serviceID }) else { throw AppError.missingService }
         guard service.models.contains(where: { $0.id == selected.modelID }) else { throw AppError.missingModel }
@@ -21,8 +29,7 @@ struct CodexConfigWriter {
         let authURL = AppPaths.codexDirectory.appendingPathComponent("auth.json")
         let previousAuth = try? Data(contentsOf: authURL)
         if LiveRouting.supports(service.id) {
-            try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try privateWrite(LiveRouting.catalog(in: data), to: LiveRouting.catalogURL)
+            try updateCatalog(in: data)
         }
         let updated = try rewriteConfig(current, selected: selected, data: data)
         if LiveRouting.supports(service.id), updated == current { return }
@@ -48,8 +55,8 @@ struct CodexConfigWriter {
         if LiveRouting.supports(service.id) {
             var routed = data
             routed.services.removeAll { $0.id == LiveRouting.providerID }
-            routed.services.append(LiveRouting.service())
-            return try rewriteConfig(content, selected: SelectedModel(serviceID: LiveRouting.providerID, modelID: LiveRouting.modelID), data: routed)
+            routed.services.append(LiveRouting.service(in: data))
+            return try rewriteConfig(content, selected: SelectedModel(serviceID: LiveRouting.providerID, modelID: LiveRouting.modelID(for: selected)), data: routed)
         }
         guard isValidServiceID(service.id), !selected.modelID.contains("\n") else { throw AppError.invalidServiceID }
         var lines = content.components(separatedBy: .newlines)

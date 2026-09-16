@@ -357,9 +357,15 @@ private struct ServiceSectionView: View {
 
             if service.id == "grok-oauth" {
                 HStack {
-                    Text(store.grokAccount).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if store.grokIsSignedIn {
+                            Label("Signed in", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(.tint)
+                        }
+                        Text(store.grokAccount).font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
-                    Button(store.isGrokLoginRunning ? "Signing in…" : "Sign in") { store.signInGrok() }
+                    Button(store.isGrokLoginRunning ? "Signing in…" : (store.grokIsSignedIn ? "Switch account" : "Sign in")) { store.signInGrok() }
                         .disabled(store.isGrokLoginRunning)
                 }
                 Text("Uses your Grok sign-in. Keep Model Harbor open.")

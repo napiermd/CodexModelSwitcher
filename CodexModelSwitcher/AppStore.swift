@@ -12,6 +12,7 @@ final class AppStore: ObservableObject {
     @Published var proxyStatus: ProxyServerStatus = .notRunning
     @Published private(set) var storageReady = false
     @Published var grokAccount = "Checking sign-in…"
+    @Published var grokIsSignedIn = false
     @Published var isGrokLoginRunning = false
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
@@ -59,18 +60,29 @@ final class AppStore: ObservableObject {
         statusMessage = "Finish signing in on Grok’s website."
         Task {
             defer { isGrokLoginRunning = false }
-            do { try await GrokAdapter.login(); await refreshGrokAccount(); statusMessage = "Grok sign-in finished." }
+            do {
+                try await GrokAdapter.login()
+                if await refreshGrokAccount() {
+                    errorMessage = ""
+                    statusMessage = "Signed in to Grok. Restart Codex and start a new task to use your selected model."
+                } else {
+                    statusMessage = ""
+                    errorMessage = "Browser sign-in finished, but Grok’s connection could not be verified. Try again."
+                }
+            }
             catch { errorMessage = error.localizedDescription }
         }
     }
 
-    func refreshGrokAccount() async {
+    @discardableResult
+    func refreshGrokAccount() async -> Bool {
         do {
             let bytes = try await grokAdapter.accountStatus()
             guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                   let entries = value["models"] as? [[String: Any]] else { throw AppError.missingModel }
             grokAccount = value["email"] as? String ?? "Signed in"
-            guard storageReady else { return }
+            grokIsSignedIn = true
+            guard storageReady else { return true }
             let catalog = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/grok-oauth.json")
             try FileManager.default.createDirectory(at: catalog.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONSerialization.data(withJSONObject: ["models": entries]).write(to: catalog, options: .atomic)
@@ -83,7 +95,8 @@ final class AppStore: ObservableObject {
                 candidate.services[index].catalogPath = catalog.path
             }
             try save(candidate)
-        } catch { grokAccount = "Sign in to load your models" }
+            return true
+        } catch { grokIsSignedIn = false; grokAccount = "Sign in to load your models"; return false }
     }
 
     func load() {

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private security report
+    url: https://github.com/napiermd/model-harbor/security/advisories/new
+    about: Report credential handling or security vulnerabilities privately.
+  - name: Setup and troubleshooting
+    url: https://github.com/napiermd/model-harbor/blob/main/docs/getting-started.md
+    about: Check requirements, connection setup, and common problems.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import SwitcherCore
+@testable import HarborCore
 
 final class SafetyTests: XCTestCase {
     let writer = CodexConfigWriter(bridgeToken: "test-local-bridge-token")

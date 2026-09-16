@@ -1,6 +1,6 @@
 # Model Harbor
 
-A personal fork of [hieunc229/CodexModelSwitcher](https://github.com/hieunc229/CodexModelSwitcher), retaining its SwiftUI menu, provider editor, and Codex browser-login flow.
+A community fork maintained by Andrew Napier, based on [hieunc229/CodexModelSwitcher](https://github.com/hieunc229/CodexModelSwitcher), retaining its SwiftUI menu, provider editor, and Codex browser-login flow.
 
 ## Use
 
@@ -19,9 +19,9 @@ Open **Model Harbor** in Applications or click **Harbor** in the menu bar.
 
 Codex account credentials are consolidated in one macOS Keychain entry, under `dev.napier.ModelHarbor`. Metadata excludes credentials. The active Codex `auth.json` remains owner-only. Account switching captures credentials refreshed by Codex before replacing them.
 
-Startup checks Keychain without displaying permission prompts. A legacy vault that cannot be read presents **Unlock saved accounts**. New builds must use the same Apple signing identity and bundle identifier. `scripts/build-app.sh` signs with Andrew's development certificate; it fails if that certificate is unavailable rather than silently using ad-hoc signing. This is a locally signed application, not a notarized public release.
+Startup checks Keychain without displaying permission prompts. A legacy vault that cannot be read presents **Unlock saved accounts**. New builds must use the same Apple signing identity and bundle identifier. `scripts/build-app.sh` accepts a stable signing identity or reuses the installed app's identity. It fails if that identity is unavailable. `--ad-hoc` explicitly builds a local evaluation copy. This is a locally signed application, not a notarized public release.
 
-The one-time `--migrate-vault` command can recover the three previously imported accounts from the existing Codex Switcher sessions, preferring the current Codex credential. It verifies every account with OpenAI before creating the new vault and never overwrites an existing vault. Old Keychain entries are retained.
+The one-time `--migrate-vault` command can recover previously imported accounts from the existing Codex Switcher sessions, preferring the current Codex credential. It verifies every account with OpenAI before creating the new vault and never overwrites an existing vault. Old Keychain entries are retained.
 
 Grok OAuth uses `https://cli-chat-proxy.grok.com/v1`. The installed official Grok client owns login and token refresh, including its refresh lock. Model Harbor reads the resulting session and runs `grok models` if refresh is needed. An expired or denied OAuth session fails without falling back to API billing. Available models and account permissions are controlled by xAI. See [Grok authentication](https://docs.x.ai/build/enterprise).
 

@@ -1,0 +1,33 @@
+name: Bug report
+description: Something reproducibly failed in Model Harbor.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Remove account emails, tokens, passwords, private prompts, and paths. Report security issues privately using the Security tab."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the expected behavior and what you actually saw.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a small example without private data.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Harbor commit, macOS, Codex, Python, and Grok CLI versions. Include provider and model if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Screenshots or error text with all sensitive data removed.

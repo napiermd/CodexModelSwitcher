@@ -1,0 +1,19 @@
+name: Feature request
+description: Propose a workflow or provider improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include the provider and authentication method if relevant.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

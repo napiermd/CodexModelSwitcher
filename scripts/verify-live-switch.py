@@ -34,7 +34,7 @@ def main():
     real = pathlib.Path.home()/'.codex'
     saved = json.loads((real/'model-switcher.json').read_text())
     config = tomllib.loads((real/'config.toml').read_text())
-    spec = importlib.util.spec_from_file_location('bridge', repo/'CodexModelSwitcher/Support/grok_adapter.py')
+    spec = importlib.util.spec_from_file_location('bridge', repo/'ModelHarbor/Support/grok_adapter.py')
     bridge = importlib.util.module_from_spec(spec); spec.loader.exec_module(bridge)
     codex = ('codex-subscription', 'gpt-6-astra')
     grok = ('grok-oauth', 'grok-4.6')

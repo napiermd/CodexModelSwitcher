@@ -1,0 +1,36 @@
+name: Checks
+on:
+  push:
+    branches: [main, safe-accounts-and-providers]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Swift behavior checks
+        run: swift test
+      - name: Python behavior checks
+        run: python3 -m unittest discover -s Tests -p 'test_*.py'
+      - name: Build evaluation app
+        run: ./scripts/build-app.sh --ad-hoc
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Check site and examples
+        run: python3 scripts/check-site.py
+      - name: Check JavaScript syntax
+        run: node --check site/demo.js

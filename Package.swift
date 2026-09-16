@@ -1,13 +1,13 @@
 // swift-tools-version: 5.9
 import PackageDescription
 let package = Package(
-    name: "SwitcherCore",
+    name: "HarborCore",
     platforms: [.macOS(.v13)],
-    products: [.library(name: "SwitcherCore", targets: ["SwitcherCore"])],
+    products: [.library(name: "HarborCore", targets: ["HarborCore"])],
     targets: [
-        .target(name: "SwitcherCore", path: "CodexModelSwitcher",
-            exclude: ["AppStore.swift", "ContentView.swift", "AppDelegate.swift", "CodexModelSwitcherApp.swift",
-                      "InstallationVerification.swift", "VisualEffects.swift", "Support", "Assets.xcassets", "CodexModelSwitcher.entitlements"],
+        .target(name: "HarborCore", path: "ModelHarbor",
+            exclude: ["AppStore.swift", "ContentView.swift", "AppDelegate.swift", "ModelHarborApp.swift",
+                      "InstallationVerification.swift", "VisualEffects.swift", "Support", "Assets.xcassets", "ModelHarbor.entitlements"],
             sources: ["Types.swift", "Utils.swift", "CodexConfigWriter.swift", "CredentialStore.swift", "OpenAIAuthManager.swift", "GrokAdapter.swift", "ConfigValidation.swift", "LiveRouting.swift"]),
-        .testTarget(name: "SwitcherCoreTests", dependencies: ["SwitcherCore"], path: "Tests", exclude: ["test_grok_adapter.py", "__pycache__"])
+        .testTarget(name: "HarborCoreTests", dependencies: ["HarborCore"], path: "Tests", exclude: ["test_grok_adapter.py", "__pycache__"])
     ])

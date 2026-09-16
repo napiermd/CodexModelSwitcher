@@ -15,3 +15,12 @@ Saved Codex accounts and other direct providers are under a collapsed disclosure
 Baseten displays real cache state from the local status endpoint, which never invokes 1Password. A visible Reconnect Baseten button provides recovery after a canceled unlock or key change. Requests never relaunch the unlock prompt after failure. Grok displays verified browser sign-in status and its account action.
 
 A one-time migration message explains that Codex must reopen to load the new model list. Each model thereafter stays with its task. The proposed Codex sidebar from the design mockup is illustrative; this fork does not modify Codex's native interface.
+
+
+## Public website and repository
+
+Extend Model Harbor's teal and amber mark onto a warm paper background. Use Newsreader for large editorial headings, Instrument Sans for navigation and reading text, and system monospace only for code. Self-host fonts. The public page gives task-level selection the most visual space through an interactive, clearly labeled demonstration. Avoid a generic feature-card grid.
+
+The homepage leads with the benefit and a source-build link. Follow with the routing demo, connection methods, source transparency, setup, limitations, and contribution links. Each model selection changes only its own demonstration task. Preserve that behavior on narrow screens. Use visible keyboard focus, sufficient contrast, reduced-motion support, and native selects. Do not present the demo as a screenshot of the Codex interface.
+
+The mark remains a pale branching route in a deep teal macOS icon shape, with one amber node. Master geometry lives in the icon renderer and the vector brand asset. No third-party logo or upstream screenshot is used as the Model Harbor identity.

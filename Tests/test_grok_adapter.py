@@ -3,7 +3,7 @@ import json
 import pathlib
 import unittest
 
-path = pathlib.Path(__file__).parents[1] / 'CodexModelSwitcher/Support/grok_adapter.py'
+path = pathlib.Path(__file__).parents[1] / 'ModelHarbor/Support/grok_adapter.py'
 spec = importlib.util.spec_from_file_location('grok_adapter', path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

@@ -40,7 +40,34 @@ The script also reuses the signing identity of `/Applications/Model Harbor.app` 
 5. Reopen Codex **once** to load the new catalog. Start a task using Harbor and choose a named model in that task's picker.
 6. Choose another model in another task. Return to the first task; its choice stays with it. Changing the new-task default does not change existing tasks.
 
-A task created with a direct provider retains that provider. Create a Harbor task for cross-provider switching. You do not need a new task for every model change within Harbor. Separate saved Codex accounts are shared connection settings, not per-task identities; switching those accounts still requires restarting Codex.
+A task created with a direct provider retains that provider. Selecting a Harbor model in an older OpenAI task changes the model name but does not migrate its provider. Repair that task using the next section, or start a Harbor task. You do not need a new task for every model change within Harbor. Separate saved Codex accounts are shared connection settings, not per-task identities; switching those accounts still requires restarting Codex.
+
+## Repair an older OpenAI task
+
+If Codex reports **"The 'harbor/...' model is not supported when using Codex with a ChatGPT account,"** the task may still have its original `openai` provider. Both the provider and the model determine the connection. The picker changes the model only.
+
+This case was missed by the initial live verification, which covered tasks created with Harbor. A live `thread/resume` provider override also does not migrate the task's saved provider. Repeatedly selecting models or signing in again will not repair it.
+
+The included repair script changes one affected task to the Harbor provider and preserves its selected Harbor model, task ID, title, and conversation. It only accepts an OpenAI task whose selected model is present in the installed Harbor catalog. It reads no credentials and makes no provider or MCP requests.
+
+1. Copy the affected task's UUID from its Codex task link or local task metadata. Replace `TASK_ID` below with that exact UUID.
+2. Preview the repair while Codex is open:
+
+   ```sh
+   python3 scripts/repair-task-provider.py TASK_ID
+   ```
+
+3. Let running tasks finish, then quit Codex/ChatGPT and any Codex CLI sessions. Keep Model Harbor running. Apply the repair:
+
+   ```sh
+   python3 scripts/repair-task-provider.py TASK_ID --apply
+   ```
+
+4. Reopen Codex and return to the same task. Choose a loaded Harbor model and continue. This is a one-time migration for an older task, not a restart for each model change.
+
+The script refuses to write while Codex is running. It saves the complete original rollout and its routing metadata under `~/.codex/model-harbor-task-backups/`, checks the conversation's SHA-256 digest before replacing the file, and changes only the selected task's provider in Codex's local index, preserving its selected model. Other tasks and global defaults stay unchanged. Backups contain private conversation history; do not attach them to public issues.
+
+This is an offline repair of Codex's local storage, not an official provider-migration API. Storage formats can change. The script rejects inconsistent metadata, unknown history formats, and custom database locations. If interrupted or if a storage check fails, keep the backup and report the error without the conversation files.
 
 ## Configure Baseten
 

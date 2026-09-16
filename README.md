@@ -15,6 +15,8 @@ Harbor manages connections and a **new task default**. Each task keeps its own m
 
 > **Source preview.** Build locally with Xcode. There is no notarized public installer yet. Reopen Codex once to load Harbor's model catalog. After that, model changes within Harbor tasks do not require a restart. Switching a saved Codex account through the separate direct connection still does.
 
+> **Older tasks:** A task created with the native OpenAI provider does not switch providers when you choose a Harbor model. If you see "model is not supported when using Codex with a ChatGPT account," use the [one-time task repair](docs/getting-started.md#repair-an-older-openai-task). It preserves the conversation and requires closing Codex once.
+
 ## Bring your connections
 
 | Connection | Authentication | What Harbor does |

@@ -10,6 +10,8 @@ Codex subscription models come from Codex's local catalog. Grok models come from
 
 Baseten reads `~/.codex/model-catalogs/baseten-frontier.json`. Start with [the example](../examples/baseten-models.json), change the `slug` to an actual model ID, and set its capabilities accurately. Restart Harbor to read changes and reopen Codex to reload newly added catalog entries. Switching among entries already loaded does not require restarting Codex.
 
+The bundled [Baseten capability manifest](../ModelHarbor/Support/baseten-models.json) refreshes the five supported Baseten entries when Harbor starts; unknown custom entries are retained. Edit that manifest in source to change the built-in capabilities or fixed [agent roles](agent-teams.md).
+
 Harbor generates `model-harbor.json`; edit the source provider catalog instead of that generated file. Route IDs must stay unique and stable if existing tasks are to retain their selection.
 
 ## Add another provider

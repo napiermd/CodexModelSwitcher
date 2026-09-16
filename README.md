@@ -30,6 +30,12 @@ Older OpenAI tasks that select a Harbor model can use [automatic task route repa
 
 Provider eligibility and model availability depend on your accounts. Grok OAuth is not a guarantee that every Grok subscription includes this access. Harbor does not provide provider credits. There is no OpenRouter connection in the default setup.
 
+## Mixed-model coding teams
+
+Use Kimi K3 for planning, with GLM 5.3, DeepSeek V4 Pro 0813, and Kimi K2.7 Code in separate coding worktrees. The bundled launcher pins each worker’s model and verified reasoning setting, then returns results to your coordinating task. Codex can stay open.
+
+See [agent teams](docs/agent-teams.md) for reusable roles, installation, concurrent workers, review, and the distinction between native subagents and worktree isolation.
+
 ## Build and run
 
 Install Xcode 16+ and Homebrew Python 3.14. Sign in to Codex and run it once to populate its local configuration and model catalog.

@@ -191,7 +191,7 @@ class LiveRoutingTests(unittest.TestCase):
         self.assertEqual(base, module.OAUTH_BASE)
         self.assertEqual(route, {'provider':'grok-oauth','model':'grok-4.6'})
 
-    def test_no_oauth_credential_goes_to_baseten_and_reasoning_is_bounded(self):
+    def test_no_oauth_credential_goes_to_baseten_and_reasoning_is_preserved(self):
         from unittest.mock import patch
         self.select('baseten', 'moonshotai/Kimi-K3')
         with patch.object(module, 'oauth_headers') as oauth, patch.object(module, 'baseten_headers', return_value={'Authorization':'Bearer baseten-test'}):
@@ -199,7 +199,7 @@ class LiveRoutingTests(unittest.TestCase):
         oauth.assert_not_called()
         self.assertEqual(headers, {'Authorization':'Bearer baseten-test'})
         self.assertEqual(base, 'https://inference.baseten.co/v1')
-        self.assertEqual(t.request['reasoning']['effort'], 'high')
+        self.assertEqual(t.request['reasoning']['effort'], 'xhigh')
 
     def test_subscription_uses_only_codex_supplied_auth_and_never_api_billing(self):
         from unittest.mock import patch

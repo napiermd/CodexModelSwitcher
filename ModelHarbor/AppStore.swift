@@ -179,6 +179,10 @@ final class AppStore: ObservableObject {
                 candidate.legacyModel = selection
                 didMigrate = true
             }
+            if let manifest = Bundle.main.url(forResource: "baseten-models", withExtension: "json") {
+                try BasetenCatalog.install(in: &candidate, manifest: Data(contentsOf: manifest),
+                    destination: AppPaths.codexDirectory.appendingPathComponent("model-catalogs/baseten-frontier.json"))
+            }
             try reflectActiveConfiguration(in: &candidate)
             try save(candidate)
             storageReady = true

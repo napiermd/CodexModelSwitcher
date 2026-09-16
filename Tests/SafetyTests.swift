@@ -8,6 +8,34 @@ final class SafetyTests: XCTestCase {
                      models: [CodexModel(id: "test-model", name: "Test"), CodexModel(id: "__native__", name: "Native")], usesExistingProvider: existing)
     }
 
+    func testBasetenTeamCatalogPreservesSelectionAndCustomModels() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manifestURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ModelHarbor/Support/baseten-models.json")
+        let manifest = try Data(contentsOf: manifestURL)
+        let selected = SelectedModel(serviceID: "baseten", modelID: "test-model")
+        var data = AppData(services: [service("baseten", existing: true)], selectedModel: selected)
+        let destination = directory.appendingPathComponent("baseten.json")
+        try BasetenCatalog.install(in: &data, manifest: manifest, destination: destination)
+        XCTAssertEqual(data.selectedModel, selected)
+        XCTAssertEqual(data.services[0].apiKey, "secret-never-serialize")
+        XCTAssertTrue(data.services[0].models.contains(where: { $0.id == "test-model" }))
+        XCTAssertTrue(data.services[0].models.contains(where: { $0.id == "zai-org/GLM-5.3" }))
+        let once = try Data(contentsOf: destination)
+        try BasetenCatalog.install(in: &data, manifest: manifest, destination: destination)
+        XCTAssertEqual(try Data(contentsOf: destination), once)
+        let catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let models = try XCTUnwrap(catalog["models"] as? [[String: Any]])
+        let glm = try XCTUnwrap(models.first { $0["slug"] as? String == "harbor/baseten/zai-org/GLM-5.3" })
+        XCTAssertEqual(glm["default_reasoning_level"] as? String, "xhigh")
+        let deepseek = try XCTUnwrap(models.first { $0["slug"] as? String == "harbor/baseten/deepseek-ai/DeepSeek-V4-Pro-0813" })
+        XCTAssertEqual(deepseek["input_modalities"] as? [String], ["text"])
+        let kimi = try XCTUnwrap(models.first { $0["slug"] as? String == "harbor/baseten/moonshotai/Kimi-K2.7-Code" })
+        XCTAssertEqual(kimi["context_window"] as? Int, 262000)
+        XCTAssertEqual((kimi["supported_reasoning_levels"] as? [[String: String]])?.map { $0["effort"]! }, ["high"])
+    }
+
     func testMetadataNeverEncodesSecrets() throws {
         let account = OpenAIAccount(id: "account", name: "Account", authJSON: "private-oauth-token", accountID: "id", email: nil, createdAt: Date())
         let data = AppData(services: [service("example")], selectedModel: nil, openAIAccounts: [account])

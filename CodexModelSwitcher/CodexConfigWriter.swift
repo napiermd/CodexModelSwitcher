@@ -19,7 +19,12 @@ struct CodexConfigWriter {
         let current = try String(contentsOf: AppPaths.codexConfig, encoding: .utf8)
         let authURL = AppPaths.codexDirectory.appendingPathComponent("auth.json")
         let previousAuth = try? Data(contentsOf: authURL)
+        if LiveRouting.supports(service.id) {
+            try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try privateWrite(LiveRouting.catalog(in: data), to: LiveRouting.catalogURL)
+        }
         let updated = try rewriteConfig(current, selected: selected, data: data)
+        if LiveRouting.supports(service.id), updated == current { return }
         // Commit credentials before writing a config that references them.
         _ = try data.saveCredentialsAndEncodeMetadata()
         let backup = AppPaths.codexDirectory.appendingPathComponent("config.toml.backup-\(UUID().uuidString)")
@@ -39,6 +44,12 @@ struct CodexConfigWriter {
 
     func rewriteConfig(_ content: String, selected: SelectedModel, data: AppData) throws -> String {
         guard let service = data.services.first(where: { $0.id == selected.serviceID }) else { throw AppError.missingService }
+        if LiveRouting.supports(service.id) {
+            var routed = data
+            routed.services.removeAll { $0.id == LiveRouting.providerID }
+            routed.services.append(LiveRouting.service())
+            return try rewriteConfig(content, selected: SelectedModel(serviceID: LiveRouting.providerID, modelID: LiveRouting.modelID), data: routed)
+        }
         guard isValidServiceID(service.id), !selected.modelID.contains("\n") else { throw AppError.invalidServiceID }
         var lines = content.components(separatedBy: .newlines)
         let keys: Set<String> = ["model", "model_provider", "model_catalog_json"]
@@ -53,7 +64,7 @@ struct CodexConfigWriter {
         if selected.modelID != "__native__" { prefix.append("model = \"\(tomlEscape(selected.modelID))\"") }
         if service.id != "openai" { prefix.append("model_provider = \"\(service.id == "xai" ? "xai-switcher" : service.id)\"") }
         if let catalog = service.catalogPath {
-            guard FileManager.default.fileExists(atPath: catalog) else { throw AppError.missingModel }
+            guard service.id == LiveRouting.providerID || FileManager.default.fileExists(atPath: catalog) else { throw AppError.missingModel }
             prefix.append("model_catalog_json = \"\(tomlEscape(catalog))\"")
         }
         if service.id == "openai", data.selectedOpenAIAccountID != nil {
@@ -79,7 +90,8 @@ struct CodexConfigWriter {
                         if line.hasPrefix("[") && line != header && !line.hasPrefix("[model_providers.\(service.id).") { break }
                         end += 1
                     }
-                    lines.removeSubrange(start..<end)
+                    let removalStart = start > 0 && lines[start - 1].isEmpty ? start - 1 : start
+                    lines.removeSubrange(removalStart..<end)
                 }
                 lines.append(contentsOf: ["", marker, header,
                     "name = \"\(tomlEscape(service.name))\"",
@@ -88,9 +100,10 @@ struct CodexConfigWriter {
                     throw NSError(domain: "CodexModelSwitcher", code: 2, userInfo: [NSLocalizedDescriptionKey:
                         "The upstream compatibility proxy is disabled pending tool and authentication verification."])
                 }
-                if service.id == "grok-oauth" {
+                if service.id == LiveRouting.providerID {
                     let tokenPath = AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token").path
-                    lines.append(contentsOf: ["[model_providers.grok-oauth.auth]", "command = \"/bin/cat\"",
+                    lines.append("supports_websockets = false")
+                    lines.append(contentsOf: ["[model_providers.model-harbor.auth]", "command = \"/bin/cat\"",
                         "args = [\"\(tomlEscape(tokenPath))\"]"])
                 } else if !service.apiKey.isEmpty {
                     lines.append(contentsOf: ["[model_providers.\(service.id).auth]", "command = \"/usr/bin/security\"",

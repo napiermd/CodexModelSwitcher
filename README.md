@@ -9,7 +9,7 @@ A macOS menu-bar app for switching Codex accounts and model providers, forked fr
 - Grok browser sign-in, account-specific model discovery, and a local Responses adapter.
 - A signed app and consolidated Keychain storage for Codex accounts.
 
-Open **Model Harbor** in Applications, or click **Harbor** in the menu bar. Choose an account or model, then restart Codex and start a new task. Keep Model Harbor open when using Grok.
+Open **Model Harbor** in Applications, or click **Harbor** in the menu bar. Choose a Grok or Baseten model here, then choose **Model Harbor selection** in Codex. After that, changes in Harbor take effect on your next turn without restarting Codex. Keep Model Harbor open. Native Codex account changes still require restarting Codex.
 
 See [FORK.md](FORK.md) for authentication, installation, verification, and limitations. Build with `scripts/build-app.sh`; the signing identity can be set through `MODEL_HARBOR_SIGNING_IDENTITY` and must stay consistent across updates.
 

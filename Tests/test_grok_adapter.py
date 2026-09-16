@@ -67,7 +67,6 @@ class TranslationTests(unittest.TestCase):
             t.output({'type':'function_call','name':t.request['tools'][0]['name'],
                       'arguments':'{"tool":"missing","arguments":"{}"}'})
 
-if __name__=='__main__':unittest.main()
 
 class OAuthTests(unittest.TestCase):
     def test_rejects_api_key_session(self):
@@ -100,3 +99,110 @@ class OAuthTests(unittest.TestCase):
         with patch.object(module,'session',return_value=old), patch.object(module,'grok_binary',return_value='/fake/grok'), patch.object(module.subprocess,'run'):
             with self.assertRaisesRegex(ValueError,'could not refresh'):
                 module.oauth_headers()
+
+class LiveRoutingTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from unittest.mock import patch
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temp.name)
+        self.config = patch.object(module, 'CONFIG_DIR', self.root)
+        self.config.start()
+        module.TURN_ROUTES.clear()
+        self.data = {'services': [
+            {'id':'grok-oauth','models':[{'id':'grok-4.6'}]},
+            {'id':'baseten','models':[{'id':'moonshotai/Kimi-K3'}, {'id':'deepseek-ai/DeepSeek-V4.1-Flash'}]}
+        ]}
+        self.select('grok-oauth','grok-4.6')
+
+    def tearDown(self):
+        self.config.stop()
+        self.temp.cleanup()
+
+    def select(self, provider, model):
+        self.data['selectedModel'] = {'serviceID':provider, 'modelID':model}
+        (self.root/'model-switcher.json').write_text(json.dumps(self.data))
+
+    def test_next_turn_switches_but_tool_continuation_stays_on_original_model(self):
+        first = {'client_metadata':{'x-codex-turn-metadata': json.dumps({'thread_id':'t','turn_id':'1'})}}
+        second = {'client_metadata':{'x-codex-turn-metadata': json.dumps({'thread_id':'t','turn_id':'2'})}}
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
+        self.select('baseten', 'moonshotai/Kimi-K3')
+        self.assertEqual(module.route_for_turn(first, {})['model'], 'grok-4.6')
+        self.assertEqual(module.route_for_turn(second, {})['model'], 'moonshotai/Kimi-K3')
+        self.select('baseten', 'deepseek-ai/DeepSeek-V4.1-Flash')
+        self.assertEqual(module.route_for_turn({}, {'x-codex-turn-metadata':'{"thread_id":"t","turn_id":"3"}'})['model'], 'deepseek-ai/DeepSeek-V4.1-Flash')
+
+    def test_request_snapshot_is_independent_of_later_selection(self):
+        from unittest.mock import patch
+        with patch.object(module, 'oauth_headers', return_value={'Authorization':'Bearer oauth-test'}):
+            translation, headers, base, route = module.routed_request({'model':'harbor-selected','input':'hello'}, {})
+        self.select('baseten','moonshotai/Kimi-K3')
+        self.assertEqual(translation.request['model'],'grok-4.6')
+        self.assertEqual(headers['Authorization'],'Bearer oauth-test')
+        self.assertEqual(base, module.OAUTH_BASE)
+        self.assertEqual(route, {'provider':'grok-oauth','model':'grok-4.6'})
+
+    def test_no_oauth_credential_goes_to_baseten_and_reasoning_is_bounded(self):
+        from unittest.mock import patch
+        self.select('baseten', 'moonshotai/Kimi-K3')
+        with patch.object(module, 'oauth_headers') as oauth, patch.object(module, 'baseten_headers', return_value={'Authorization':'Bearer baseten-test'}):
+            t, headers, base, route = module.routed_request({'model':'harbor-selected','reasoning':{'effort':'xhigh'}}, {})
+        oauth.assert_not_called()
+        self.assertEqual(headers, {'Authorization':'Bearer baseten-test'})
+        self.assertEqual(base, 'https://inference.baseten.co/v1')
+        self.assertEqual(t.request['reasoning']['effort'], 'high')
+
+    def test_missing_selection_and_server_side_history_fail_closed(self):
+        self.select('openai', '__native__')
+        with self.assertRaisesRegex(ValueError, 'Choose a Grok or Baseten'):
+            module.routed_request({'model':'harbor-selected'}, {})
+        with self.assertRaisesRegex(ValueError, 'full conversation history'):
+            module.routed_request({'model':'harbor-selected','previous_response_id':'resp1'}, {})
+        with self.assertRaisesRegex(ValueError, 'Model Harbor selection'):
+            module.routed_request({'model':'grok-4.6'}, {})
+
+    def test_credential_helper_failure_never_falls_back(self):
+        from unittest.mock import patch
+        (self.root/'config.toml').write_text('[model_providers.baseten]\nbase_url="https://inference.baseten.co/v1"\n[model_providers.baseten.auth]\ncommand="/fake/op"\nargs=["read","op://a/b/c"]\n')
+        with patch.object(module.subprocess, 'run', side_effect=module.subprocess.CalledProcessError(1,['/fake/op'])) as run:
+            with self.assertRaises(module.subprocess.CalledProcessError):
+                module.baseten_headers()
+        self.assertTrue(run.call_args.kwargs['capture_output'])
+
+    def test_http_bridge_requires_local_token_and_preserves_routed_stream(self):
+        import threading, urllib.request, urllib.error, io
+        from unittest.mock import patch
+        token = self.root/'token'; token.write_text('test-local-bridge-token')
+        response = {'type':'response.completed','response':{'id':'r','model':'grok-4.6','status':'completed','output':[]}}
+        body = ('event: response.completed\ndata: '+json.dumps(response)+'\n\n').encode()
+        class Upstream(io.BytesIO):
+            status = 200
+            headers = {'Content-Type':'text/event-stream'}
+        class Opener:
+            def open(self, request, timeout):
+                self.request = request
+                return Upstream(body)
+        opener = Opener()
+        with patch.object(module,'TOKEN_PATH',token), patch.object(module,'oauth_headers',return_value={'Authorization':'Bearer upstream-oauth'}), patch.object(module.urllib.request,'build_opener',return_value=opener):
+            server = module.http.server.ThreadingHTTPServer(('127.0.0.1',0),module.Handler)
+            worker = threading.Thread(target=server.serve_forever,daemon=True); worker.start()
+            import http.client
+            try:
+                c = http.client.HTTPConnection(*server.server_address, timeout=5)
+                c.request('POST','/harbor/v1/responses',body='{}',headers={'Authorization':'Bearer wrong-token'})
+                self.assertEqual(c.getresponse().status,401); c.close()
+                c = http.client.HTTPConnection(*server.server_address, timeout=5)
+                c.request('POST','/harbor/v1/responses',body=json.dumps({'model':'harbor-selected','stream':True,'input':'hello'}),headers={'Authorization':'Bearer test-local-bridge-token'})
+                r = c.getresponse()
+                self.assertEqual(r.status,200)
+                self.assertEqual(r.getheader('X-Model-Harbor-Model'),'grok-4.6')
+                self.assertIn(b'response.completed',r.read())
+                self.assertEqual(opener.request.get_header('Authorization'),'Bearer upstream-oauth')
+                self.assertEqual(json.loads(opener.request.data)['model'],'grok-4.6')
+                c.close()
+            finally:
+                server.shutdown(); server.server_close(); worker.join()
+
+if __name__ == '__main__':
+    unittest.main()

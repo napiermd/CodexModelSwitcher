@@ -35,7 +35,7 @@ final class SafetyTests: XCTestCase {
         let output = try writer.rewriteConfig(input, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: AppData(services: [service("baseten", existing: true)], selectedModel: nil))
         XCTAssertTrue(output.contains(input))
         XCTAssertFalse(output.contains("secret-never-serialize"))
-        XCTAssertTrue(output.contains("model_provider = \"baseten\""))
+        XCTAssertTrue(output.contains("model_provider = \"model-harbor\""))
     }
 
     func testRefusesToOverwriteUnownedProvider() {
@@ -63,12 +63,12 @@ extension SafetyTests {
         let data = AppData(services: [oauth], selectedModel: selection)
         let output = try writer.rewriteConfig(source, selected: selection, data: data)
         XCTAssertTrue(output.contains(source))
-        XCTAssertTrue(output.contains("model_provider = \"grok-oauth\""))
-        XCTAssertTrue(output.contains("/oauth/v1"))
+        XCTAssertTrue(output.contains("model_provider = \"model-harbor\""))
+        XCTAssertTrue(output.contains("/harbor/v1"))
         XCTAssertTrue(output.contains("command = \"/bin/cat\""))
         XCTAssertTrue(output.contains("model-harbor-bridge-token"))
         let again = try writer.rewriteConfig(output, selected: selection, data: data)
-        XCTAssertEqual(again.components(separatedBy: "[model_providers.grok-oauth]").count, 2)
+        XCTAssertEqual(again.components(separatedBy: "[model_providers.model-harbor]").count, 2)
     }
     func testGrokCopiesAuthenticationWithoutChangingSourceProvider() throws {
         let original = "[model_providers.xai]\nname = \"xAI\"\nbase_url = \"https://api.x.ai/v1\"\n[model_providers.xai.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://example/item/key\"]\n"
@@ -94,5 +94,23 @@ extension SafetyTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = try ConfigLock(directory: directory)
         try withExtendedLifetime(first) { XCTAssertThrowsError(try ConfigLock(directory: directory)) }
+    }
+}
+
+extension SafetyTests {
+    func testLiveSwitchKeepsCodexConfigurationIdentical() throws {
+        let original = "[model_providers.baseten]\nname = \"Baseten\"\nbase_url = \"https://inference.baseten.co/v1\"\n[model_providers.baseten.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://vault/item/key\"]\n"
+        let data = AppData(services: [service("grok-oauth"), service("baseten", existing: true)], selectedModel: nil)
+        let grok = try writer.rewriteConfig(original, selected: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"), data: data)
+        let baseten = try writer.rewriteConfig(grok, selected: SelectedModel(serviceID: "baseten", modelID: "test-model"), data: data)
+        XCTAssertEqual(grok, baseten)
+        XCTAssertTrue(baseten.contains("model = \"harbor-selected\""))
+        XCTAssertTrue(baseten.contains(original))
+        XCTAssertFalse(baseten.contains("secret-never-serialize"))
+    }
+
+    func testLiveProviderCannotOverwriteAnUnownedProvider() throws {
+        let data = AppData(services: [service("grok-oauth")], selectedModel: nil)
+        XCTAssertThrowsError(try writer.rewriteConfig("[model_providers.model-harbor]\nname = \"Mine\"\n", selected: SelectedModel(serviceID: "grok-oauth", modelID: "test-model"), data: data))
     }
 }

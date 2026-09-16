@@ -14,6 +14,7 @@ final class GrokAdapter {
         child.arguments = ["-u", script.path]
         var environment = ProcessInfo.processInfo.environment
         environment["MODEL_HARBOR_TOKEN_PATH"] = AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token").path
+        environment["MODEL_HARBOR_CONFIG_DIR"] = AppPaths.codexDirectory.path
         child.environment = environment
         child.standardOutput = FileHandle.nullDevice
         child.standardError = FileHandle.nullDevice

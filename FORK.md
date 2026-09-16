@@ -9,7 +9,8 @@ Open **Model Harbor** in Applications or click **Harbor** in the menu bar.
 - **Codex:** choose one of your saved OAuth accounts. The add-account button opens Codex's browser sign-in.
 - **Baseten:** direct inference using your existing provider authentication, including 1Password. No OpenRouter integration is added.
 - **Grok:** your official Grok browser session. Models are fetched from that account. **Sign in** runs the installed official `grok login --oauth` flow; credentials remain in Grok's own private store. Model Harbor never receives your password.
-- After selecting an account or model, restart Codex and start a new task. Existing tasks keep their original settings. Keep Model Harbor open for Grok.
+- **Live model switching:** select **Model Harbor selection** in a task using the Model Harbor provider. Grok ↔ Baseten and model changes then apply on the next turn, without restarting Codex. All tasks using this option follow the same Harbor selection. A turn already in progress, including tool continuations, stays on its original model.
+- A task previously created under OpenAI or a direct provider keeps that provider. On first setup, create a task using the Model Harbor provider; if the new provider/catalog is not visible yet, reload Codex once. Subsequent Grok/Baseten switches need no reload. Native Codex OAuth account switching still requires restart. Keep Model Harbor open for both Grok and Baseten.
 
 ## Authentication
 
@@ -21,7 +22,9 @@ The one-time `--migrate-vault` command can recover the three previously imported
 
 Grok OAuth uses `https://cli-chat-proxy.grok.com/v1`. The installed official Grok client owns login and token refresh, including its refresh lock. Model Harbor reads the resulting session and runs `grok models` if refresh is needed. An expired or denied OAuth session fails without falling back to API billing. Available models and account permissions are controlled by xAI. See [Grok authentication](https://docs.x.ai/build/enterprise).
 
-The loopback adapter listens on `127.0.0.1:48118`. OAuth requests require a random owner-only local bridge credential; Codex never receives the upstream OAuth token. The adapter rejects browser-origin requests and redirects and does not log tokens, headers, or request content. The legacy API route remains for existing configurations but is not offered in Model Harbor's provider list.
+The shared provider is `model-harbor`, with the model alias `harbor-selected`. Its catalog uses the smallest configured context window across the supported providers. It reads the selected model from the existing atomic metadata file for each new turn. Codex turn IDs pin tool continuations to that model; requests without turn IDs take a per-request snapshot. No provider credentials are stored in the routing metadata. The authenticated `/harbor/status` endpoint reports the selected route and the most recent forwarded route, without prompt content.
+
+The loopback adapter listens on `127.0.0.1:48118`. OAuth requests require a random owner-only local bridge credential; Codex never receives the upstream OAuth token. The adapter rejects browser-origin requests and redirects and does not log tokens, headers, or request content. Baseten requests go directly to `https://inference.baseten.co/v1/responses` using the existing credential helper, including 1Password. They never receive the Grok OAuth credential. The old Grok OAuth and API routes remain fixed to Grok for existing tasks and are not silently retargeted.
 
 ## Tool compatibility
 
@@ -41,6 +44,6 @@ scripts/build-app.sh
 
 The tests cover credential-free metadata, provider preservation, native model restoration, configuration locking, namespace translation, local OAuth credentials, official-client refresh, and refusal to fall back to API keys.
 
-On this Mac, nine Swift tests and ten Python tests pass. All three Codex sessions authenticated with HTTP 200. Real Grok OAuth inference and a namespaced tool/result round trip through the installed Codex CLI passed. A changed, re-signed build read the existing consolidated Keychain vault without another approval. Browser sign-in uses the official client; the live OAuth tests reuse the existing signed-in session.
+On this Mac, eleven Swift tests and sixteen Python tests pass. All three Codex sessions authenticated with HTTP 200. Real Grok OAuth inference and a namespaced tool/result round trip through the installed Codex CLI passed. A changed, re-signed build read the existing consolidated Keychain vault without another approval. Browser sign-in uses the official client. A live five-turn test used one Codex app-server process and one conversation, switching Grok 4.6 → Kimi K3 → DeepSeek V4.1 Flash → Grok 4.5 → Grok 4.6. Each turn called a real MCP test tool and recalled prior conversation context, with zero restarts. The test also passed against the installed signed app while selections were changed through its actual menu. Run `python3 scripts/verify-live-switch.py --live` to repeat this opt-in test; it uses synthetic prompts and existing credentials in an isolated temporary configuration. Add `--installed` to exercise the running app; the verifier waits for each selection in Harbor and leaves the menu changes to the operator.
 
 `MODEL_SWITCHER_CONFIG_DIR` and `MODEL_SWITCHER_KEYCHAIN_SERVICE` isolate installation tests. The `--verify-accounts` mode requires both an isolated config directory and a `dev.napier.switcher.verification.*` Keychain namespace. Never commit credentials, account metadata, private config, or Keychain exports.

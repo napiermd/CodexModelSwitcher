@@ -1,4 +1,4 @@
-"""Local Responses adapter. Credentials are supplied per request, never stored here."""
+"""Local Responses bridge for Grok OAuth and direct Baseten inference."""
 import copy
 import hashlib
 import http.server
@@ -15,13 +15,20 @@ import hmac
 import pathlib
 import secrets
 import subprocess
+import tomllib
+from collections import OrderedDict
 
-ADDRESS = ('127.0.0.1', 48118)
+ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 MAX_BODY = 32 * 1024 * 1024
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
 TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
 AUTH_PATH = pathlib.Path.home() / '.grok/auth.json'
 AUTH_LOCK = threading.Lock()
+CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.Path.home() / '.codex')))
+ROUTE_LOCK = threading.Lock()
+TURN_ROUTES = OrderedDict()
+LAST_ROUTE = None
+
 
 
 def grok_binary():
@@ -102,11 +109,91 @@ def flat_name(namespace, name, custom=False):
     return 'cms_' + hashlib.sha256(identity).hexdigest()[:24] + '_' + re.sub(r'[^A-Za-z0-9_-]', '_', name)[:30]
 
 
+def selected_route():
+    data = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
+    selection = data.get('selectedModel') or {}
+    provider, model = selection.get('serviceID'), selection.get('modelID')
+    if provider not in ('grok-oauth', 'baseten'):
+        raise ValueError('Choose a Grok or Baseten model in Model Harbor.')
+    service = next((s for s in data['services'] if s['id'] == provider), None)
+    if not service or model not in [m['id'] for m in service['models']]:
+        raise ValueError('The selected model is no longer available. Choose another model in Model Harbor.')
+    return {'provider': provider, 'model': model}
+
+
+def route_for_turn(source, headers):
+    # Codex sends a canonical turn ID across inference/tool-result requests.
+    metadata = source.get('client_metadata') or {}
+    nested = metadata.get('x-codex-turn-metadata') or headers.get('x-codex-turn-metadata', '{}')
+    if isinstance(nested, str):
+        try:
+            nested = json.loads(nested)
+        except ValueError:
+            nested = {}
+    turn_id = nested.get('turn_id') or metadata.get('turn_id')
+    thread_id = nested.get('thread_id') or metadata.get('thread_id') or metadata.get('session_id', '')
+    key = (str(thread_id), str(turn_id)) if turn_id else None
+    with ROUTE_LOCK:
+        if key in TURN_ROUTES:
+            TURN_ROUTES.move_to_end(key)
+            return dict(TURN_ROUTES[key])
+        route = selected_route()
+        if key:
+            TURN_ROUTES[key] = route
+            # Bound idle history; active turns are touched on every tool-result request.
+            if len(TURN_ROUTES) > 4096:
+                TURN_ROUTES.popitem(last=False)
+        return dict(route)
+
+
+def baseten_headers():
+    config = tomllib.loads((CONFIG_DIR / 'config.toml').read_text())
+    provider = config.get('model_providers', {}).get('baseten', {})
+    if provider.get('base_url', '').rstrip('/') != 'https://inference.baseten.co/v1':
+        raise ValueError('Baseten must use the direct inference.baseten.co endpoint.')
+    auth = provider.get('auth') or {}
+    if auth.get('command'):
+        # Reuse the existing local provider's credential helper (e.g. 1Password).
+        result = subprocess.run([auth['command'], *auth.get('args', [])],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=min(auth.get('timeout_ms', 30000) / 1000, 60), check=True)
+        key = result.stdout.strip()
+    elif provider.get('env_key'):
+        key = os.environ.get(provider['env_key'], '').strip()
+    else:
+        raise ValueError('Baseten authentication is not configured.')
+    if not key or '\n' in key or '\r' in key:
+        raise ValueError('Baseten authentication returned no usable credential.')
+    return {'Authorization': 'Bearer ' + key, 'User-Agent': 'ModelHarbor/1.0'}
+
+
+def routed_request(source, headers):
+    if source.get('model') != 'harbor-selected':
+        raise ValueError('Choose Model Harbor selection in Codex to use live switching.')
+    if source.get('previous_response_id'):
+        raise ValueError('Model Harbor needs full conversation history when switching providers.')
+    route = route_for_turn(source, headers)
+    source = copy.deepcopy(source)
+    source['model'] = route['model']
+    source['store'] = False
+    if route['provider'] == 'baseten':
+        reasoning = source.get('reasoning')
+        if isinstance(reasoning, dict) and reasoning.get('effort') == 'xhigh':
+            reasoning['effort'] = 'high'
+        upstream_headers = baseten_headers()
+        base = 'https://inference.baseten.co/v1'
+    else:
+        upstream_headers = oauth_headers()
+        base = OAUTH_BASE
+    return Translation(source), upstream_headers, base, route
+
+
 class Translation:
     def __init__(self, source):
         self.names = {}
         self.groups = {}
         self.pending = set()
+        self.response_status = None
         self.request = copy.deepcopy(source)
         if str(source.get('model', '')).startswith('grok-4.20'):
             self.request.pop('reasoning', None)
@@ -221,6 +308,8 @@ class Translation:
         if not payload or payload == '[DONE]':
             return block + b'\n\n'
         event = json.loads(payload)
+        if event.get('type') in ('response.completed', 'response.failed', 'response.incomplete'):
+            self.response_status = event.get('response', {}).get('status') or event['type'].split('.')[-1]
         item = event.get('item', {})
         if event.get('type') == 'response.output_item.added' and item.get('name') in self.groups:
             self.pending.add(item.get('id'))
@@ -259,6 +348,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
+        if self.path == '/harbor/status':
+            if self.headers.get('Origin') or not self.local_authorized():
+                return self.error(401, 'Local authorization required')
+            try:
+                body = json.dumps({'selected': selected_route(), 'last_request': LAST_ROUTE}).encode()
+            except (ValueError, OSError, KeyError):
+                return self.error(409, 'Choose a Grok or Baseten model in Model Harbor.')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == '/oauth/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
@@ -288,17 +390,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return False
 
     def do_POST(self):
+        global LAST_ROUTE
         started = False
         try:
             oauth = self.path == '/oauth/v1/responses'
-            if self.path not in ('/v1/responses', '/oauth/v1/responses'):
+            routed = self.path == '/harbor/v1/responses'
+            if self.path not in ('/v1/responses', '/oauth/v1/responses', '/harbor/v1/responses'):
                 return self.error(404, 'Only Responses requests are supported')
             if self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
                 return self.error(400, 'Browser origins and transfer-encoded requests are not supported')
             authorization = self.headers.get('Authorization', '')
             if not authorization.startswith('Bearer ') or len(authorization) < 12:
                 return self.error(401, 'A provider credential is required')
-            if oauth and not self.local_authorized():
+            if (oauth or routed) and not self.local_authorized():
                 return self.error(401, 'Local authorization required')
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY:
@@ -312,11 +416,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.error(415, 'Unsupported content encoding')
             if len(raw) > MAX_BODY:
                 return self.error(413, 'Decoded body exceeds the adapter limit')
-            translation = Translation(json.loads(raw))
-            headers = oauth_headers() if oauth else {'Authorization': authorization}
+            source = json.loads(raw)
+            route = None
+            if routed:
+                translation, headers, base, route = routed_request(source, self.headers)
+            else:
+                translation = Translation(source)
+                headers = oauth_headers() if oauth else {'Authorization': authorization}
+                base = OAUTH_BASE if oauth else 'https://api.x.ai/v1'
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='started')
             headers.update({'Content-Type': 'application/json',
                             'Accept': 'text/event-stream' if translation.request.get('stream') else 'application/json'})
-            request = urllib.request.Request((OAUTH_BASE if oauth else 'https://api.x.ai/v1') + '/responses',
+            request = urllib.request.Request(base + '/responses',
                 data=json.dumps(translation.request, separators=(',', ':')).encode(),
                 headers=headers)
             opener = urllib.request.build_opener(NoRedirect)
@@ -325,6 +438,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(upstream.status)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Cache-Control', 'no-cache')
+                if route:
+                    self.send_header('X-Model-Harbor-Provider', route['provider'])
+                    self.send_header('X-Model-Harbor-Model', route['model'])
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.close_connection = True
@@ -341,12 +457,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if block:
                         self.wfile.write(translation.event(b'\n'.join(block)))
                 else:
-                    self.wfile.write(json.dumps(translation.output(json.load(upstream))).encode())
+                    response = json.load(upstream)
+                    translation.response_status = response.get('status')
+                    self.wfile.write(json.dumps(translation.output(response)).encode())
+                if route:
+                    with ROUTE_LOCK:
+                        LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
         except urllib.error.HTTPError as error:
             if not started:
                 # Provider errors contain schema diagnostics, never request headers.
                 body = error.read(16384)
                 self.error(error.code, body.decode('utf-8', errors='replace'))
+        except ValueError as error:
+            if not started:
+                self.error(400, str(error))
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
             self.close_connection = True
         except Exception as error:

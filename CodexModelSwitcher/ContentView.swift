@@ -54,7 +54,7 @@ struct ContentView: View {
     }
 
     private var maxBodyHeight: CGFloat {
-        editorSession == nil ? 360 : maxPanelHeight - 52
+        editorSession == nil ? min(500, maxPanelHeight - 80) : maxPanelHeight - 52
     }
 
     private var header: some View {
@@ -165,11 +165,17 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
         }
-        .frame(height: 300)
+        .frame(height: min(410, maxBodyHeight - 64))
     }
 
     private var serviceStack: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Text("Choose Model Harbor selection in Codex once. Changes here apply on your next turn in every task using that option.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             ForEach(Array(store.data.services.enumerated()), id: \.element.id) { index, service in
                 VStack(spacing: 0) {
                     ServiceSectionView(
@@ -256,7 +262,7 @@ struct ContentView: View {
                     .frame(width: 10, height: 10)
             }
 
-            Text("Grok connection: \(proxyStatusText)")
+            Text("Model Harbor connection: \(proxyStatusText)")
                 .foregroundStyle(.secondary)
         }
         .help(proxyStatusHelp)
@@ -278,13 +284,13 @@ struct ContentView: View {
     private var proxyStatusHelp: String {
         switch store.proxyStatus {
         case .starting:
-            return "Grok connection is starting"
+            return "Model Harbor connection is starting"
         case .notRunning:
-            return "Grok connection is not running"
+            return "Model Harbor connection is not running"
         case .active:
-            return "Grok is ready. Keep this app open while using Grok."
+            return "The local connection is ready. Keep Model Harbor open for Grok and Baseten."
         case .error:
-            return "Grok connection failed. Reopen this app to retry."
+            return "Model Harbor connection failed. Reopen this app to retry."
         }
     }
 

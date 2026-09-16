@@ -34,7 +34,14 @@ final class AppStore: ObservableObject {
                 Task {
                     for _ in 0..<50 {
                         try? grokAdapter.start()
-                        if await grokAdapter.isHealthy() { proxyStatus = .active; await refreshGrokAccount(); return }
+                        if await grokAdapter.isHealthy() {
+                            proxyStatus = .active
+                            await refreshGrokAccount()
+                            if let selected = data.selectedModel, LiveRouting.supports(selected.serviceID) {
+                                perform { try writer.applySelection(selected, in: data) }
+                            }
+                            return
+                        }
                         try? await Task.sleep(nanoseconds: 100_000_000)
                     }
                     proxyStatus = .error
@@ -64,7 +71,7 @@ final class AppStore: ObservableObject {
                 try await GrokAdapter.login()
                 if await refreshGrokAccount() {
                     errorMessage = ""
-                    statusMessage = "Signed in to Grok. Restart Codex and start a new task to use your selected model."
+                    statusMessage = "Signed in to Grok. Choose a model below, then use Model Harbor selection in Codex."
                 } else {
                     statusMessage = ""
                     errorMessage = "Browser sign-in finished, but Grok’s connection could not be verified. Try again."
@@ -126,7 +133,13 @@ final class AppStore: ObservableObject {
         let values = try JSONSerialization.jsonObject(with: status) as? [String: Any]
         var provider = values?["provider"] as? String ?? "openai"
         if provider == "xai-switcher" { provider = "xai" }
-        if provider == "openai" {
+        if provider == LiveRouting.providerID {
+            if let selection = candidate.selectedModel,
+               LiveRouting.supports(selection.serviceID),
+               candidate.services.contains(where: { $0.id == selection.serviceID && $0.models.contains(where: { $0.id == selection.modelID }) }) {
+                // The provider stays fixed while the saved model selection changes.
+            } else { candidate.selectedModel = nil }
+        } else if provider == "openai" {
             candidate.selectedModel = SelectedModel(serviceID: "openai", modelID: "__native__")
         } else if let model = values?["model"] as? String,
                   candidate.services.contains(where: { $0.id == provider && $0.models.contains(where: { $0.id == model }) }) {
@@ -183,16 +196,16 @@ final class AppStore: ObservableObject {
 
     func select(serviceID: String, modelID: String) {
         perform {
-            if serviceID == "xai" || serviceID == "grok-oauth", proxyStatus != .active {
-                throw NSError(domain: "Switcher", code: 1, userInfo: [NSLocalizedDescriptionKey: "The Grok adapter is not ready. Reopen the switcher and try again."])
+            if serviceID == "xai" || LiveRouting.supports(serviceID), proxyStatus != .active {
+                throw NSError(domain: "Switcher", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model Harbor’s connection is not ready. Reopen Model Harbor and try again."])
             }
             var candidate = try capturingActiveAccount()
             let selection = SelectedModel(serviceID: serviceID, modelID: modelID)
             try writer.applySelection(selection, in: candidate)
             candidate.selectedModel = selection
             try save(candidate)
-            statusMessage = serviceID == "xai" || serviceID == "grok-oauth"
-                ? "Grok selected. Restart Codex; keep this switcher open."
+            statusMessage = LiveRouting.supports(serviceID)
+                ? "Selection saved. Tasks using Model Harbor selection switch on their next turn."
                 : "Selection saved. Restart Codex to apply."
         }
     }

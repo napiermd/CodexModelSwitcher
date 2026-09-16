@@ -16,6 +16,11 @@ final class AppStore: ObservableObject {
     @Published var isGrokLoginRunning = false
     @Published var isBasetenReconnectRunning = false
     @Published var basetenState = "not_loaded"
+    @Published var taskRepairsEnabled = false
+    @Published var taskRepairState = "checking"
+    @Published var pendingTaskRepairs = 0
+    @Published var repairedTaskCount = 0
+    @Published var savingTaskRepairs = false
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -80,11 +85,29 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func setTaskRepairsEnabled(_ enabled: Bool) {
+        guard !savingTaskRepairs else { return }
+        savingTaskRepairs = true
+        Task {
+            defer { savingTaskRepairs = false }
+            do {
+                try await grokAdapter.setTaskRepairsEnabled(enabled)
+                await refreshConnectionStatus()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func refreshConnectionStatus() async {
         guard let bytes = try? await grokAdapter.connectionStatus(),
               let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let baseten = value["baseten_auth"] as? [String: Any] else { return }
         basetenState = baseten["state"] as? String ?? "not_loaded"
+        if let repairs = value["task_repairs"] as? [String: Any] {
+            taskRepairsEnabled = repairs["enabled"] as? Bool ?? false
+            taskRepairState = repairs["state"] as? String ?? "checking"
+            pendingTaskRepairs = repairs["pending"] as? Int ?? 0
+            repairedTaskCount = repairs["repaired"] as? Int ?? 0
+        }
     }
 
     func signInGrok() {

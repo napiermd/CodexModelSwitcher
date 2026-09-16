@@ -18,11 +18,21 @@ flowchart LR
 
 Each model has an explicit route ID, such as `harbor/grok-oauth/<model>` or `harbor/baseten/<model>`. `LiveRouting.swift` builds the catalog. The bridge validates the requested route against configured models. It does not look at the app's default to decide which model an existing task uses.
 
-Codex also persists the task's provider. A model-picker change does not migrate that provider. An older `openai` task paired with a `harbor/...` model therefore sends the Harbor model name to the native OpenAI connection and fails before reaching Harbor. See the [offline task repair](getting-started.md#repair-an-older-openai-task) for that case.
+Codex also persists the task's provider. A model-picker change does not migrate that provider. An older `openai` task paired with a `harbor/...` model therefore sends the Harbor model name to the native OpenAI connection and fails before reaching Harbor. See the [task route repair](getting-started.md#repair-an-older-openai-task) for that case.
 
 Codex persists the model choice for each task. A `(thread_id, turn_id)` pair pins tool continuations to the route that began the turn. Changing the model affects a subsequent turn. A hidden legacy route remains fixed to its pre-upgrade model for older tasks.
 
 The **New task default** updates configuration for future tasks. Accounts remain shared connections; this does not isolate a separate OAuth identity for every task.
+
+## Repairing saved routes
+
+`Support/task_repair.py` is the shared engine for the app and command-line repair. Monitoring is read-only until the user enables automatic repair. Each pass finds OpenAI tasks with an installed Harbor selection; it does not change native models or other providers.
+
+For a live-app repair, the engine takes Codex's `thread-writer-locks/.coordination.lock`, opens and exclusively locks the selected task's lock file, then releases coordination. It holds the task lock through validation, backup, file publication and SQLite commit. Codex's active writer or publication lock causes repair to wait. The engine never deletes the shared lock file and never stops a task. Missing lock support requires the offline command instead.
+
+The backup journal records original and replacement file hashes plus the conversation-body hash. A crash between replacing the rollout and committing SQLite leaves a prepared journal. Recovery takes the same task lock and finishes only an exact original/replacement state; subsequent conversation changes stop recovery. Reports and backups are private local files. Repair settings use the existing authenticated loopback API and reject browser-origin requests.
+
+The end-to-end check reproduces a native-provider failure, verifies refusal while Codex owns the task lock, archives the task, repairs it, then restores and completes the same task through Harbor in the same Codex process. All verification traffic uses synthetic data and loopback model endpoints.
 
 ## Credentials and request destinations
 
@@ -39,6 +49,18 @@ The bridge listens on `127.0.0.1:48118`. Requests require the local token. It re
 **Conversation content goes to the provider selected for that turn.** When you switch providers within a task, the replayed conversation and tool results may be sent to the new provider. The local bridge is not a promise that model inference stays on your Mac. Review your provider's data terms before using private material.
 
 Harbor does not log prompts, request headers, or tokens. Its protected status endpoint reports the latest forwarded route and credential-cache state. This is operational status, not a per-task conversation log or proof of a model's underlying weights.
+
+## Baseten pacing and overload recovery
+
+All tasks using the same Baseten model share a FIFO queue in the running bridge. A model has one upstream request in flight at a time; other models and providers have independent lanes. This accounts for tool continuations and simultaneous tasks using the same allowance.
+
+The bridge starts conservatively at 500,000 tokens and 120 requests per minute. Baseten's response headers replace those defaults with the account's effective limits. Before dispatch, Harbor reserves a conservative estimate of input, tool definitions, and output. On completion it reconciles that reservation with actual input and output usage, including cached input. It also respects the remaining capacity reported by Baseten. Estimates are not exact tokenization, and traffic from other clients can still consume the account's allowance.
+
+An HTTP 429 or 529 rejection gets up to three retries. Delays start at 10 seconds, double to a 60-second base, and add up to 20% jitter. A longer `Retry-After` takes precedence, including HTTP-date values. Cooldowns remain shared when Codex retries the request or another task uses the model. Each request has a 120-second queue/retry budget, checked between upstream attempts; an individual network operation retains its 180-second timeout. Long cooldowns are returned to Codex rather than retried early. The bridge preserves structured provider errors, rate-limit headers, request IDs, and the remaining retry delay.
+
+Retries use the same cached credential. Authentication failures, ambiguous network failures, and responses that have already started streaming are never automatically replayed. A disconnected client is removed from the queue or backoff wait before another request is sent. The protected status endpoint includes per-model limits, queue size, cooldown, and request/retry counters without credentials or conversation content. Queue and cooldown state live in memory until Harbor quits.
+
+Pacing cannot create provider capacity or raise an account limit. Persistent 529s may still end the turn. See [Baseten's rate-limit documentation](https://docs.baseten.co/inference/model-apis/pricing-and-limits).
 
 ## Tools and history
 

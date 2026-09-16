@@ -46,28 +46,43 @@ A task created with a direct provider retains that provider. Selecting a Harbor 
 
 If Codex reports **"The 'harbor/...' model is not supported when using Codex with a ChatGPT account,"** the task may still have its original `openai` provider. Both the provider and the model determine the connection. The picker changes the model only.
 
-This case was missed by the initial live verification, which covered tasks created with Harbor. A live `thread/resume` provider override also does not migrate the task's saved provider. Repeatedly selecting models or signing in again will not repair it.
+Model changes in an existing native task do not update its saved provider. Repeatedly selecting models or signing in again will not repair it.
 
-The included repair script changes one affected task to the Harbor provider and preserves its selected Harbor model, task ID, title, and conversation. It only accepts an OpenAI task whose selected model is present in the installed Harbor catalog. It reads no credentials and makes no provider or MCP requests.
+Enable **Repair inactive task routes automatically** in Harbor. Harbor checks saved routes every ten seconds. It repairs only tasks saved under `openai` whose selected model is in your installed Harbor catalog. It preserves the task ID, selected model, title, and conversation. The setting survives Harbor restarts.
 
-1. Copy the affected task's UUID from its Codex task link or local task metadata. Replace `TASK_ID` below with that exact UUID.
-2. Preview the repair while Codex is open:
+A loaded task holds Codex's writer lock, even between turns. Harbor waits for that lock rather than modifying a live task. To release an affected task sooner:
 
-   ```sh
-   python3 scripts/repair-task-provider.py TASK_ID
-   ```
+1. Let its work finish, then archive it in Codex. Archiving can also archive its spawned child tasks.
+2. Wait for Harbor's pending-repair count to clear.
+3. Restore the task and any child tasks you want visible. Continue using its existing conversation.
 
-3. Let running tasks finish, then quit Codex/ChatGPT and any Codex CLI sessions. Keep Model Harbor running. Apply the repair:
+Codex can stay open during this repair. Once migrated, the task can switch among loaded Harbor models normally. Alternatively, quit Codex and let Harbor repair the saved tasks automatically before reopening it.
 
-   ```sh
-   python3 scripts/repair-task-provider.py TASK_ID --apply
-   ```
+### Command-line repair
 
-4. Reopen Codex and return to the same task. Choose a loaded Harbor model and continue. This is a one-time migration for an older task, not a restart for each model change.
+Preview every affected task without changing anything:
 
-The script refuses to write while Codex is running. It saves the complete original rollout and its routing metadata under `~/.codex/model-harbor-task-backups/`, checks the conversation's SHA-256 digest before replacing the file, and changes only the selected task's provider in Codex's local index, preserving its selected model. Other tasks and global defaults stay unchanged. Backups contain private conversation history; do not attach them to public issues.
+```sh
+python3 scripts/repair-task-provider.py --all
+```
 
-This is an offline repair of Codex's local storage, not an official provider-migration API. Storage formats can change. The script rejects inconsistent metadata, unknown history formats, and custom database locations. If interrupted or if a storage check fails, keep the backup and report the error without the conversation files.
+Repair an unloaded task using Codex's own per-task writer lock:
+
+```sh
+python3 scripts/repair-task-provider.py TASK_ID --apply --unloaded
+```
+
+For versions without that lock namespace, quit every Codex/ChatGPT and Codex CLI process, then use the offline fallback:
+
+```sh
+python3 scripts/repair-task-provider.py --all --apply
+```
+
+The engine saves the complete original rollout and routing metadata under `~/.codex/model-harbor-task-backups/`. It verifies the conversation's SHA-256 digest, replaces only the provider in the rollout metadata, and updates the local task index. The private repair journal lets a subsequent automatic pass finish an interrupted file/index commit only when the exact expected states match. Conflicting state stops automatic repairs and retains the backup. **Retry repairs** retries after the underlying issue has been reviewed.
+
+The private report is `~/.codex/model-harbor-repair-report.json`. Backups contain conversation history; do not attach them to public issues. No credentials or model requests are involved in repairs.
+
+This changes Codex's local storage and uses its writer-lock protocol, tested with Codex CLI 0.150.1. It is not an official provider-migration API. Unknown history formats, inconsistent metadata, custom database locations, and unavailable lock protocols fail closed. The offline fallback remains available.
 
 ## Configure Baseten
 
@@ -95,6 +110,7 @@ An `env_key` may be used instead of a helper. A Finder-launched app does not nor
 | No Harbor models in Codex | Choose a new-task default, then reopen Codex to load its catalog. |
 | No subscription models | Sign in to Codex, run it once, and reopen Harbor so it can read the catalog. |
 | Browser says signed in, but Harbor does not | Confirm the official Grok CLI can list your models. Account access is controlled by xAI. |
+| Baseten returns 429 or 529 | Harbor now paces requests across tasks and waits before retrying. Cached tokens count toward the token limit. Persistent 429s may need a higher allowance; persistent 529s mean provider capacity is unavailable. See [pacing and recovery](architecture.md#baseten-pacing-and-overload-recovery). |
 | Baseten is missing | Check both its provider section and the catalog's exact filename. |
 | A canceled fingerprint prompt keeps the connection paused | Click Reconnect Baseten when you are ready to unlock. |
 | macOS asks again for Keychain access after rebuilding | Check whether the signing identity changed. Use one stable certificate for ongoing use. |

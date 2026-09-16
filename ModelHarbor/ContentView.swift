@@ -177,6 +177,7 @@ struct ContentView: View {
 
     private var serviceStack: some View {
         VStack(alignment: .leading, spacing: 0) {
+            taskRoutingStatus
             Text("Choose a model in each Codex task. Each task keeps its choice when you move between them.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -242,6 +243,34 @@ struct ContentView: View {
         if store.errorMessage.isEmpty {
             self.editorSession = nil
         }
+    }
+
+    private var taskRoutingStatus: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Repair inactive task routes automatically", isOn: Binding(
+                get: { store.taskRepairsEnabled },
+                set: { store.setTaskRepairsEnabled($0) }
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(store.savingTaskRepairs || store.proxyStatus != .active)
+            if store.taskRepairState == "error" {
+                Text("Automatic task repair stopped. Check the repair files in your Codex folder before retrying.")
+                    .font(.caption).foregroundStyle(.red)
+                Button("Retry repairs") { store.setTaskRepairsEnabled(true) }
+            } else if store.pendingTaskRepairs > 0 {
+                Text("\(store.pendingTaskRepairs) task routes need repair. Loaded tasks wait until Codex releases them. To repair sooner, finish the task, archive it, then restore it after this count clears.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if store.taskRepairState == "ready" {
+                Text(store.repairedTaskCount > 0
+                     ? "\(store.repairedTaskCount) task routes repaired. Model choices and conversations preserved."
+                     : "Task routes checked. No incompatible Harbor selections.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Checking saved task routes…").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.bottom, 8)
     }
 
     private var footer: some View {

@@ -45,6 +45,19 @@ final class GrokAdapter {
         return bytes
     }
 
+    func setTaskRepairsEnabled(_ enabled: Bool) async throws {
+        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = enabled ? "enable" : "disable"
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/repairs/\(action)")!, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.httpBody = Data()
+        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw NSError(domain: "ModelHarbor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Task repair settings could not be saved. Try again."])
+        }
+    }
+
     func accountStatus() async throws -> Data {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/oauth/status")!, timeoutInterval: 60)

@@ -1,5 +1,10 @@
 """Local Responses bridge for Codex subscriptions, Grok OAuth and Baseten."""
 import copy
+import io
+import math
+import random
+import select
+from email.utils import parsedate_to_datetime
 import hashlib
 import http.server
 import json
@@ -16,7 +21,7 @@ import pathlib
 import secrets
 import subprocess
 import tomllib
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 MAX_BODY = 32 * 1024 * 1024
@@ -29,6 +34,7 @@ CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.
 ROUTE_LOCK = threading.Lock()
 TURN_ROUTES = OrderedDict()
 LAST_ROUTE = None
+TASK_REPAIRS = None
 
 
 
@@ -275,12 +281,214 @@ def routed_request(source, headers):
     return Translation(source, native_tools=route['provider'] == 'codex-subscription'), upstream_headers, base, route
 
 
+class PacingTimeout(Exception):
+    def __init__(self, retry_after):
+        self.retry_after = max(1, math.ceil(retry_after))
+        super().__init__('Model Harbor is waiting for Baseten capacity. Retry after the cooldown.')
+
+
+def retry_after_seconds(headers, now=None):
+    value = headers.get('Retry-After', '')
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        try:
+            seconds = parsedate_to_datetime(value).timestamp() - (time.time() if now is None else now)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    return max(0, seconds) if math.isfinite(seconds) else 0
+
+
+def provider_response_headers(headers):
+    return {name.lower(): value for name, value in headers.items()
+            if (name.lower().startswith('x-ratelimit-') or name.lower() in ('retry-after', 'x-request-id'))
+            and '\r' not in value and '\n' not in value}
+
+
+class BasetenPacer:
+    """One FIFO lane per model; reservations include cached input and output."""
+    def __init__(self, clock=time.monotonic, jitter=random.uniform):
+        self.clock, self.jitter = clock, jitter
+        self.condition = threading.Condition()
+        self.queue = deque()
+        self.active = False
+        # Conservative startup values; provider headers replace these limits.
+        self.tpm, self.rpm = 500_000, 120
+        self.token_due = self.request_due = self.cooldown = 0
+        self.remaining_tokens = self.remaining_requests = None
+        self.observed_at = clock()
+        self.failures = self.retries = self.requests = 0
+        self.last_status = None
+        self.token_base = self.reserved_tokens = 0
+
+    def pause(self, seconds, deadline, cancelled, waiting):
+        if cancelled():
+            raise BrokenPipeError('Client disconnected while waiting')
+        if self.clock() >= deadline:
+            raise PacingTimeout(seconds)
+        waiting(max(0, seconds))
+        self.condition.wait(min(0.5, max(0.01, seconds), deadline - self.clock()))
+
+    def enter(self, deadline, cancelled, waiting):
+        ticket = object()
+        with self.condition:
+            self.queue.append(ticket)
+            try:
+                while self.active or self.queue[0] is not ticket:
+                    self.pause(max(1, self.cooldown - self.clock()), deadline, cancelled, waiting)
+                if cancelled():
+                    raise BrokenPipeError('Client disconnected while queued')
+                self.active = True
+            finally:
+                self.queue.remove(ticket)
+                self.condition.notify_all()
+
+    def leave(self):
+        with self.condition:
+            self.active = False
+            self.condition.notify_all()
+
+    def delay(self, tokens):
+        now = self.clock()
+        waits = [0, self.token_due - now, self.request_due - now, self.cooldown - now]
+        for needed, remaining, limit in ((min(tokens, self.tpm), self.remaining_tokens, self.tpm),
+                                         (1, self.remaining_requests, self.rpm)):
+            if remaining is not None:
+                available = min(limit, remaining + (now - self.observed_at) * limit / 60)
+                waits.append((needed - available) * 60 / limit)
+        return max(waits)
+
+    def reserve(self, tokens, deadline, cancelled, waiting):
+        with self.condition:
+            while True:
+                delay = self.delay(tokens)
+                if cancelled():
+                    raise BrokenPipeError('Client disconnected before dispatch')
+                if self.clock() >= deadline:
+                    raise PacingTimeout(delay)
+                if delay <= 0:
+                    break
+                self.pause(delay, deadline, cancelled, waiting)
+            now = self.clock()
+            self.token_base = max(now, self.token_due)
+            self.reserved_tokens = tokens
+            self.token_due = self.token_base + tokens * 60 / self.tpm
+            self.request_due = now + 60 / self.rpm
+            self.requests += 1
+
+    def observe(self, headers, status):
+        with self.condition:
+            for name, attribute in (('x-ratelimit-limit-tokens', 'tpm'), ('x-ratelimit-limit-requests', 'rpm')):
+                try:
+                    value = int(headers.get(name, ''))
+                    if value > 0:
+                        setattr(self, attribute, value)
+                except (ValueError, TypeError):
+                    pass
+            for name, attribute in (('x-ratelimit-remaining-tokens', 'remaining_tokens'),
+                                    ('x-ratelimit-remaining-requests', 'remaining_requests')):
+                try:
+                    value = int(headers.get(name, ''))
+                    setattr(self, attribute, max(0, value))
+                except (ValueError, TypeError):
+                    setattr(self, attribute, None)
+            self.observed_at = self.clock()
+            self.last_status = status
+            if status in (429, 529):
+                self.failures += 1
+                delay = max(retry_after_seconds(headers),
+                            min(60, 10 * 2 ** min(self.failures - 1, 3)) * self.jitter(1, 1.2))
+                self.cooldown = max(self.cooldown, self.clock() + delay)
+                # Explicitly rejected requests consumed no model tokens.
+                self.token_due = self.token_base
+            elif 200 <= status < 300:
+                self.token_due = self.token_base + self.reserved_tokens * 60 / self.tpm
+                self.failures = 0
+
+    def finish(self, usage):
+        if not isinstance(usage, dict):
+            return
+        incoming, outgoing = usage.get('input_tokens'), usage.get('output_tokens')
+        if (type(incoming) is not int or type(outgoing) is not int or incoming < 0 or outgoing < 0):
+            return
+        with self.condition:
+            # input_tokens already includes cached tokens. Never subtract them.
+            self.token_due = self.token_base + (incoming + outgoing) * 60 / self.tpm
+
+    def snapshot(self):
+        with self.condition:
+            return {'tokens_per_minute': self.tpm, 'requests_per_minute': self.rpm,
+                    'active': self.active, 'queued': len(self.queue), 'requests': self.requests,
+                    'retries': self.retries, 'last_status': self.last_status,
+                    'cooldown_seconds': math.ceil(max(0, self.cooldown - self.clock())),
+                    'next_request_seconds': math.ceil(max(0, self.token_due - self.clock(),
+                                                          self.request_due - self.clock(), self.cooldown - self.clock()))}
+
+
+BASETEN_PACERS = {}
+BASETEN_PACERS_LOCK = threading.Lock()
+
+
+def baseten_pacer(model):
+    with BASETEN_PACERS_LOCK:
+        return BASETEN_PACERS.setdefault(model, BasetenPacer())
+
+
+def baseten_traffic_status():
+    with BASETEN_PACERS_LOCK:
+        return {model: pacer.snapshot() for model, pacer in BASETEN_PACERS.items()}
+
+
+def estimated_tokens(request):
+    # No provider tokenizer is shipped. Use a conservative wire-size estimate,
+    # then reconcile with actual usage after the response, including output.
+    payload = json.dumps({key: request[key] for key in ('instructions', 'input', 'tools') if key in request},
+                         ensure_ascii=False, separators=(',', ':')).encode()
+    output = request.get('max_output_tokens')
+    reserve = output if type(output) is int and output > 0 else 4096
+    return math.ceil(len(payload) / 3) + reserve
+
+
+def open_baseten(opener, request, pacer, tokens, deadline, cancelled, waiting):
+    last_error = None
+    for attempt in range(4):
+        try:
+            pacer.reserve(tokens, deadline, cancelled, waiting)
+        except PacingTimeout:
+            if last_error is not None:
+                raise last_error
+            raise
+        except BrokenPipeError:
+            if last_error is not None:
+                last_error.close()
+            raise
+        if last_error is not None:
+            last_error.close()
+        if attempt:
+            pacer.retries += 1
+        try:
+            response = opener.open(request, timeout=180)
+            pacer.observe(response.headers, response.status)
+            return response
+        except urllib.error.HTTPError as error:
+            # Read and close the rejected response before waiting. No retry is
+            # made for ambiguous network failures or after a stream has started.
+            body = error.read(65536)
+            last_error = urllib.error.HTTPError(error.url, error.code, error.reason, error.headers, io.BytesIO(body))
+            error.close()
+            pacer.observe(last_error.headers, last_error.code)
+            if last_error.code not in (429, 529) or attempt == 3 or pacer.clock() >= deadline:
+                raise last_error
+    raise last_error
+
+
 class Translation:
     def __init__(self, source, native_tools=False):
         self.names = {}
         self.groups = {}
         self.pending = set()
         self.response_status = None
+        self.usage = None
         self.request = copy.deepcopy(source)
         if native_tools:
             # Codex supports its own namespace/custom tools. Full history carries
@@ -406,6 +614,7 @@ class Translation:
         event = json.loads(payload)
         if event.get('type') in ('response.completed', 'response.failed', 'response.incomplete'):
             self.response_status = event.get('response', {}).get('status') or event['type'].split('.')[-1]
+            self.usage = event.get('response', {}).get('usage')
         item = event.get('item', {})
         if event.get('type') == 'response.output_item.added' and item.get('name') in self.groups:
             self.pending.add(item.get('id'))
@@ -433,11 +642,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def error(self, code, message):
-        body = json.dumps({'error': message}).encode()
+    def error(self, code, message, headers=None, provider_body=None):
+        body = json.dumps({'error': message}).encode() if provider_body is None else provider_body
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
+        for name, value in provider_response_headers(headers or {}).items():
+            self.send_header(name, value)
         self.send_header('Connection', 'close')
         self.end_headers()
         self.wfile.write(body)
@@ -448,7 +659,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
             body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE,
-                               'baseten_auth': BASETEN_CREDENTIALS.snapshot}).encode()
+                               'baseten_auth': BASETEN_CREDENTIALS.snapshot,
+                               'baseten_traffic': baseten_traffic_status(),
+                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -470,7 +683,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path != '/health':
             return self.error(404, 'Not found')
-        body = b'{"adapter":"codex-model-switcher-grok","version":1}'
+        body = b'{"adapter":"codex-model-switcher-grok","version":2,"baseten_pacing":true,"task_repairs":true}'
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -485,11 +698,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except OSError:
             return False
 
+    def client_disconnected(self):
+        readable, _, _ = select.select([self.connection], [], [], 0)
+        return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+
     def do_POST(self):
         global LAST_ROUTE
         started = False
         route = None
+        pacer = None
+        acquired = False
         try:
+            if self.path in ('/harbor/repairs/enable', '/harbor/repairs/disable'):
+                if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                if int(self.headers.get('Content-Length', '0')) != 0:
+                    return self.error(400, 'Task repair settings do not accept a body')
+                if TASK_REPAIRS is None:
+                    return self.error(503, 'Task repair service is unavailable')
+                TASK_REPAIRS.set_enabled(self.path.endswith('/enable'))
+                body = json.dumps(TASK_REPAIRS.snapshot).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == '/harbor/baseten/reconnect':
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
@@ -544,11 +778,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data=json.dumps(translation.request, separators=(',', ':')).encode(),
                 headers=headers)
             opener = urllib.request.build_opener(NoRedirect)
-            with opener.open(request, timeout=180) as upstream:
+            def waiting(seconds):
+                global LAST_ROUTE
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=math.ceil(seconds))
+            if route and route['provider'] == 'baseten':
+                pacer = baseten_pacer(route['model'])
+                deadline = pacer.clock() + 120
+                pacer.enter(deadline, self.client_disconnected, waiting)
+                acquired = True
+                upstream_response = open_baseten(opener, request, pacer, estimated_tokens(translation.request),
+                                                 deadline, self.client_disconnected, waiting)
+            else:
+                upstream_response = opener.open(request, timeout=180)
+            with upstream_response as upstream:
+                if route:
+                    with ROUTE_LOCK:
+                        LAST_ROUTE = dict(route, state='streaming')
                 content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
                 self.send_response(upstream.status)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Cache-Control', 'no-cache')
+                for name, value in provider_response_headers(upstream.headers).items():
+                    self.send_header(name, value)
                 if route:
                     self.send_header('X-Model-Harbor-Provider', route['provider'])
                     self.send_header('X-Model-Harbor-Model', route['model'])
@@ -580,6 +832,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     response = json.load(upstream)
                     translation.response_status = response.get('status')
+                    translation.usage = response.get('usage')
                     if route:
                         with ROUTE_LOCK:
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
@@ -588,25 +841,52 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
         except urllib.error.HTTPError as error:
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='failed', http_status=error.code)
             if route and route['provider'] == 'baseten' and error.code in (401, 403):
                 BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
             if not started:
                 # Provider errors contain schema diagnostics, never request headers.
-                body = error.read(16384)
-                self.error(error.code, body.decode('utf-8', errors='replace'))
+                body = error.read(65536)
+                response_headers = provider_response_headers(error.headers)
+                if pacer and error.code in (429, 529):
+                    response_headers['retry-after'] = str(max(1, math.ceil(pacer.cooldown - pacer.clock())))
+                try:
+                    json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    body = json.dumps({'error': body.decode('utf-8', errors='replace')}).encode()
+                self.error(error.code, None, headers=response_headers, provider_body=body)
+            error.close()
+        except PacingTimeout as error:
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=error.retry_after)
+            if not started:
+                self.error(429, str(error), headers={'Retry-After': str(error.retry_after)})
         except ValueError as error:
             if not started:
                 self.error(400, str(error))
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='disconnected')
             self.close_connection = True
         except Exception as error:
             if not started:
                 self.error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
+        finally:
+            if acquired:
+                pacer.finish(translation.usage)
+                pacer.leave()
 
 
 if __name__ == '__main__':
     ensure_bridge_token()
+    from task_repair import RepairMonitor
+    TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
+    TASK_REPAIRS.start()
     server = http.server.ThreadingHTTPServer(ADDRESS, Handler)
     server.daemon_threads = True
     parent_pid = os.getppid()

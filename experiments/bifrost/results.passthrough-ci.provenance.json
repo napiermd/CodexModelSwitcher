@@ -1,0 +1,12 @@
+{
+  "run_id": 35275679952,
+  "repository": "napiermd/model-harbor",
+  "workflow": "Bifrost native contract",
+  "pull_request": 15,
+  "head_sha": "aed7f638c166b84b4e411d967df8336a331adcd5",
+  "checkout_mode": "GitHub pull-request merge checkout; head SHA is not asserted as checkout SHA",
+  "artifact_name": "bifrost-native-contract",
+  "report_sha256": "80603d135e91e6d543e682567d0e2269f726bd999fbc57a086e7082104e77aa4",
+  "report_copied_without_modification": true,
+  "live_azure_tested": false
+}

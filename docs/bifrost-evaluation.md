@@ -2,13 +2,15 @@
 
 ## Decision
 
-**No-go for production replacement.** The pinned Bifrost v2.2.0 ARM64 container ran against an isolated synthetic Azure Responses server on September 17, 2026. The initial 17-case request matrix reported 14 passes and three failed checks. One reported pass, cancellation, remains provisional until its stricter attribution check is rerun. A focused rerun confirmed that encrypted reasoning content was not preserved and that a 429 retry happened before Retry-After elapsed. No live Azure credential, request, or performance comparison was used.
+**Native Azure passthrough is a viable transport candidate; production replacement remains no-go.** On September 17, 2026 the pinned Bifrost v2.2.0 AMD64 image passed all 24 synthetic contract cases through `/azure_passthrough/openai/v1/responses` with configured gateway retries disabled. The complete report, version/content checks, and empty cleanup-error list were verified in GitHub Actions run `35275679952`. This establishes synthetic transport compatibility for that surface and pin. No live Azure credential, request, latency comparison, or desktop migration was used.
+
+The earlier converted-route ARM64 matrix and its failures remain valid historical evidence: encrypted reasoning was stripped and Retry-After was violated. Passthrough bypasses that conversion/retry path; it does not fix it. The original cancellation result remains provisional for that old run; the native CI run passes the stricter request-specific check.
 
 Bifrost remains a candidate for an Azure transport behind Harbor. Harbor would still own desktop integration, per-task model identities, subscription adapters, and safe admission/retirement. This pilot does not resolve the separate blocker: no verified lifecycle source for existing desktop tasks. Keep the active gateway and existing runtime ownership intact; use coordinated maintenance until authoritative turn events and reconciliation are available.
 
 ## Reproduce the candidate
 
-`experiments/bifrost/pin.json` records image tag v2.2.0, immutable ARM64/AMD64 digests, source tag `transports/v2.2.0`, and source commit `ed79592fc4771f12f2717dd7c9ab668e663a08f3`. The ARM64 digest was pulled and executed; its startup banner identified v2.2.0. The Python helper image is also pinned. AMD64 was not tested. See `experiments/bifrost/README.md` for commands.
+`experiments/bifrost/pin.json` records image tag v2.2.0, immutable ARM64/AMD64 digests, source tag `transports/v2.2.0`, and source commit `ed79592fc4771f12f2717dd7c9ab668e663a08f3`. Both platform digests were pulled and executed in separate experiments: ARM64 for the original converted-route study, AMD64 for the native passthrough CI run. Each successful report verified the v2.2.0 startup banner. The Python helper image is also pinned. Native passthrough on ARM64 remains unverified because its local attempt failed during startup. See `experiments/bifrost/README.md` for commands.
 
 This is the OSS image without an enterprise license. The source license is Apache 2.0. The release README describes clustering and other advanced deployment features as enterprise capabilities. This experiment does not depend on, test, or establish licensing for those features.
 
@@ -75,17 +77,34 @@ The expanded matrix adds opaque input/output fields (including streamed terminal
 
 Twenty-seven hermetic harness tests pass, including the ten existing driver/cleanup regressions. Review also closed three evidence gaps: the client now reads past a terminal frame through EOF, intermediate opaque streaming items/deltas are checked, and worker overlap is attributed to the worker barrier rather than unrelated active requests. The historical 17-case evidence remains unchanged; the expanded 24-case matrix and native-surface attempt are recorded separately.
 
-### Native-surface execution remains unverified
+### Native-surface CI result
+
+GitHub Actions run `35275679952`, at PR #15 head `aed7f638c166b84b4e411d967df8336a331adcd5`, exercised the exact AMD64 digest on a fresh Ubuntu runner. `results.passthrough-ci.json` is an unchanged copy of the retained artifact; `results.passthrough-ci.provenance.json` records its SHA-256, run, image/source context, and the distinction between PR head and GitHub's merge checkout.
+
+All **24 cases passed**, including the complete-matrix, expected-version, content-sentinel, and cleanup gates:
+
+- Encrypted input history, author/recipient/nested fields, JSON output, and streamed added/done/delta payloads survived exactly.
+- HTTP 429, 500, 502, 503, and 529 each reached the upstream once and returned the original status. `Retry-After: 1` reached the client unchanged. Rejected encrypted content returned 400 after one unchanged attempt; it was not stripped and retried.
+- A model-scoped incorrect synthetic key reached the mock and returned 401 once. Other valid-key requests continued successfully.
+- Partial failure and disconnect after delivered output caused one upstream attempt and no false completion.
+- Cancellation followed a complete nonempty delta; the request-specific upstream disconnect was observed after **500.75 ms**, with no replay throughout the two-second observation window.
+- The stalled mock returned HTTP 504 after **3,004.81 ms**, with one attempt. This single clean-run result does not establish repeated tail-latency bounds or explain every earlier host delay.
+- All three workers crossed their barrier concurrently, returned their own IDs/text, and caused exactly three upstream requests. The group completed in **50.37 ms** against the immediate synthetic fixture. Queue capacity, fairness, and real Azure performance are unverified.
+- Literal input/output/cached/reasoning token counts were preserved in JSON and streamed completion payloads. Empty pricing catalogs provide no verified monetary cost or billing provenance.
+
+The dedicated workflow fails if the full matrix, content/version gates, or cleanup fail. It publishes no host ports, uses only synthetic credentials and internal Docker networking, and retains the report on failure. These checks do not enable production adoption automatically.
+
+### Local native-surface startup failure
 
 `experiments/bifrost/results.passthrough-startup-failed.json` records the September 17 attempt. Docker's start command exceeded 60 seconds even though later inspection showed the candidate running and still starting its health check. No test request was sent and zero matrix rows were produced. Subsequent host Docker inspections and cleanup commands timed out. A Docker query through the running Colima VM later confirmed both invocation-owned containers absent. The report retains original cleanup errors and records the follow-up separately.
 
-The VM diagnostic at 14:06 PDT reported 7,922 MiB total memory, 308 MiB available, and no swap. This is a host constraint observed after the failure, not proof of its cause. No other containers, VM settings, installed apps, or live routes were changed. The native-surface matrix must still run successfully in a responsive isolated environment before it can change the production no-go decision.
+The VM diagnostic at 14:06 PDT reported 7,922 MiB total memory, 308 MiB available, and no swap. This is a host constraint observed after the failure, not proof of its cause. No other containers, VM settings, installed apps, or live routes were changed. The subsequent AMD64 CI run passed in isolation, as recorded above. The local ARM64 startup failure is retained and does not become a transport pass.
 
 ## Remaining gates
 
-1. Fix or safely bypass the encrypted-reasoning and Retry-After failures, explain the inconsistent deadline result, and rerun the complete matrix with durable diagnostics and the full content-sentinel audit.
-2. Extend conformance coverage for the actual Codex request/event forms, invalid authentication, three concurrent workers, bounded queues, and usage/cost provenance. These original SAY-3344 requirements remain untested. Verify immutable pin provenance in the deployment process.
-3. After conformance passes, compare an isolated Azure deployment against the existing Harbor route using synthetic content and secure credential handoff. Measure matched repeated first-output/total-latency distributions, errors, cancellation, and retry timing; record sample sizes. No such benchmark is claimed here.
+1. The native AMD64 surface now bypasses the observed encrypted-history and retry failures and passes the complete synthetic matrix with durable diagnostics/content checks. Still verify the intended deployment platform and repeated deadline measurements; the local ARM64 startup failure remains unresolved.
+2. Synthetic invalid authentication, three concurrent workers, opaque event forms, and token-count fidelity now pass. Complete coverage against actual Codex request/event fixtures, bounded queue/pacing behavior, and monetary cost provenance. Verify immutable pin provenance in the eventual deployment process.
+3. Compare an isolated Azure deployment against the existing Harbor route using synthetic content and secure credential handoff. Measure matched repeated first-output/total-latency distributions, errors, cancellation, and retry timing; record sample sizes. No such benchmark is claimed here.
 4. Establish response-ID/connection affinity and one retry owner across the client, Harbor, Bifrost, and upstream. Never automatically retry after partial tool/text output.
 5. Complete independent-runtime, authoritative desktop lifecycle, admission, and retirement work before replacing a live gateway.
 

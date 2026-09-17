@@ -31,7 +31,7 @@ An isolated test of installed `codex-cli 0.150.1` observed exactly one POST for 
 ## Verification and limits
 
 - `Tests/test_azure_transport.py`: bounded DNS, late results, connect/cancel races, TLS stall, trickling data, dispatch tracking, and cleanup.
-- `Tests/test_azure_handler_deadline.py`: real loopback provider and Harbor handlers; queue plus transport deadline, partial output, nonstream timeout, cancellation, nonreading client, readiness, and no replay.
+- `Tests/test_azure_handler_deadline.py`: real loopback provider and Harbor handlers; queue plus transport deadline, partial output, nonstream timeout, cancellation, nonreading client, readiness, truncated verification framing, and no replay.
 - `Tests/test_azure_error_budget.py`: truncated/oversized error framing and a header write that exhausts the budget before the body can be written.
 - `Tests/SafetyTests.swift`: parsed TOML scope, all routed providers, repeated generation, replacement of prior managed retry values, and preservation of unrelated provider settings.
 

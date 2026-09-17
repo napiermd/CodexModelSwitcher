@@ -55,8 +55,10 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                     else:
                         self.send_response(200)
                         self.send_header('Content-Type', 'text/event-stream' if owner.mode in ('stream', 'backpressure') else 'application/json')
+                        if owner.mode == 'verify-truncated':
+                            self.send_header('Content-Length', '100')
                         self.end_headers()
-                        if owner.mode == 'complete':
+                        if owner.mode in ('complete', 'verify-truncated'):
                             self.wfile.write(b'{"status":"completed","output":[]}')
                             return
                         if owner.mode == 'backpressure':
@@ -226,6 +228,16 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
             finally:
                 client.close()
         self.assertEqual(self.runtime.status()['uncertain_turns'], 1)
+        self.assertEqual(self.attempts, 1)
+
+    def test_verification_rejects_completed_json_with_truncated_http_framing(self):
+        self.mode = 'verify-truncated'
+        route = {'provider': 'azure', 'model': 'coding-prod'}
+        bridge.record_readiness(route, bridge.configuration_revision(), 'verified')
+        status, body = self.request(path='/harbor/verify', body={'model': 'harbor/azure/coding-prod'})
+        self.assertEqual((status, body['result']), (503, 'unavailable'))
+        self.assertFalse(bridge.provider_status()['azure_ready'])
+        self.assertEqual(bridge.AZURE_ADMISSION.snapshot()['keys'], 0)
         self.assertEqual(self.attempts, 1)
 
     def test_dispatched_verification_timeout_invalidates_stale_proof(self):

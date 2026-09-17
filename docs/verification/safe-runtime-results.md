@@ -91,3 +91,5 @@ Generated shared Codex provider configuration sets both request and stream retri
 Local validation passed 326 Python tests in 65.064 seconds with warnings treated as errors and 73 Swift tests. The signed app build passed. All ten production-entrypoint tests passed against its packaged resources in 12.761 seconds with bytecode writes disabled. Focused transport/handler tests cover actual sockets, including a nonreading downstream client. Review found incomplete-error framing and per-write budget gaps; both were fixed with regressions before staging.
 
 No live provider calls, installed app changes, global configuration edits, or task-history rewrites were made. Actual desktop completion/handoff, cross-runtime pacing, composed Bifrost routing, and real Azure history/performance parity remain open. See [the policy](../azure-request-policy.md) for exact scope.
+
+A final independent review also found that probe `read1()` could accept a completed JSON prefix despite an unmet Content-Length. Verification now rejects that response and clears stale readiness; the real-HTTP regression returns 503 after exactly one upstream request.

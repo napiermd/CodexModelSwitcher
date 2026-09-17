@@ -1173,6 +1173,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise TimeoutError('Verification deadline or response limit exceeded')
                 if budget:
                     budget.check()
+                if getattr(response, 'length', 0):
+                    raise ValueError('Verification response ended before its declared length')
                 value = json.loads(body)
                 result = 'verified' if response.status == 200 and value.get('status') == 'completed' else 'invalid_response'
             if budget:

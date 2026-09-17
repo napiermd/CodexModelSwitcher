@@ -13,10 +13,20 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native-azure-contract:
-    runs-on: ubuntu-latest
+    name: Native Azure contract (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 12
     env:
-      REPORT_PATH: /tmp/harbor-bifrost-native-contract.json
+      REPORT_DIR: /tmp/harbor-bifrost-native-contract
+      EXPECTED_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -27,36 +37,57 @@ jobs:
       - name: Pull exact transport and synthetic helper images
         run: |
           python3 - <<'PY'
-          import json, platform, subprocess
+          import json, os, platform, subprocess
           from pathlib import Path
           pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
           arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[platform.machine()]
+          assert arch == os.environ['EXPECTED_ARCH'], 'Runner architecture differs from matrix assignment'
           for image in (pin['images'][arch], pin['mock_image']):
               subprocess.run(['docker', 'pull', image], check=True, timeout=180)
           PY
       - name: Exercise native Azure passthrough with zero gateway retries
-        run: python3 -B experiments/bifrost/pilot.py --surface azure-passthrough --output "$REPORT_PATH"
+        run: |
+          mkdir -p "$REPORT_DIR"
+          for sample in 1 2 3; do
+            python3 -B experiments/bifrost/pilot.py --surface azure-passthrough --output "$REPORT_DIR/sample-$sample.json"
+          done
       - name: Require complete conformance evidence
         if: always()
         run: |
           python3 - <<'PY'
-          import json, os
+          import hashlib, json, os, subprocess
           from pathlib import Path
-          report = json.loads(Path(os.environ['REPORT_PATH']).read_text())
-          failures = {row['case']: [name for name, passed in row.get('checks', {}).items() if not passed]
-                      for row in report['cases'] if not row['passed']}
-          print(json.dumps({'image': report['image'], 'surface': report['surface'],
-                            'cases': len(report['cases']), 'failures': failures,
-                            'all_synthetic_gates_passed': report['all_synthetic_gates_passed'],
-                            'cleanup_errors': report['cleanup_errors']}, indent=2))
-          assert report['all_synthetic_gates_passed'], 'Native transport conformance failed; see report'
-          assert not report['cleanup_errors'], 'Pilot cleanup was not verified'
+          directory = Path(os.environ['REPORT_DIR'])
+          pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
+          expected_image = pin['images'][os.environ['EXPECTED_ARCH']]
+          summaries = []
+          for sample in range(1, 4):
+              path = directory / f'sample-{sample}.json'
+              report = json.loads(path.read_text())
+              failures = {row['case']: [name for name, passed in row.get('checks', {}).items() if not passed]
+                          for row in report['cases'] if not row['passed']}
+              summary = {'sample': sample, 'image': report['image'], 'surface': report['surface'],
+                         'cases': len(report['cases']), 'failures': failures,
+                         'all_synthetic_gates_passed': report['all_synthetic_gates_passed'],
+                         'cleanup_errors': report['cleanup_errors'],
+                         'report_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+              summaries.append(summary)
+              print(json.dumps(summary, indent=2))
+              assert report['image'] == expected_image, 'Report image differs from the matrix architecture pin'
+              assert report['surface'] == 'azure-passthrough' and report['max_retries'] == 0
+              assert report['all_synthetic_gates_passed'], 'Native transport conformance failed; see report'
+              assert not report['cleanup_errors'], 'Pilot cleanup was not verified'
+          provenance = {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                        'repository': os.environ['GITHUB_REPOSITORY'], 'architecture': os.environ['EXPECTED_ARCH'],
+                        'checkout_sha': subprocess.check_output(['git', 'rev-parse', '--verify', 'HEAD'], text=True).strip(),
+                        'live_azure_tested': False, 'samples': summaries}
+          (directory / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
           PY
       - name: Retain synthetic report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bifrost-native-contract
-          path: ${{ env.REPORT_PATH }}
+          name: bifrost-native-contract-${{ matrix.arch }}
+          path: ${{ env.REPORT_DIR }}
           if-no-files-found: error
           retention-days: 14

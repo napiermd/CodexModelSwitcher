@@ -15,6 +15,7 @@ import re
 import socket
 import urllib.error
 import urllib.request
+import urllib.parse
 import datetime
 import hmac
 import pathlib
@@ -39,6 +40,7 @@ LAST_ROUTE = None
 TASK_REPAIRS = None
 PROVIDER_ACTIVITY = {}
 OPENROUTER_KEY = ''
+AZURE_CONNECTION = None
 USAGE_COLLECTOR = None
 
 
@@ -77,7 +79,7 @@ def provider_activity_finish(route, status, http_status=None):
 
 def provider_status():
     with ROUTE_LOCK:
-        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY), 'openrouter_ready': bool(OPENROUTER_KEY)}
+        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY), 'openrouter_ready': bool(OPENROUTER_KEY), 'azure_ready': bool(AZURE_CONNECTION)}
 
 
 def openrouter_headers():
@@ -88,6 +90,46 @@ def openrouter_headers():
     return {'Authorization': 'Bearer ' + key, 'X-Title': 'Model Harbor'}
 
 
+
+
+def azure_endpoint(value):
+    if not isinstance(value, str):
+        raise ValueError('Invalid Azure endpoint')
+    parts = urllib.parse.urlsplit(value.strip())
+    if (parts.scheme != 'https' or not re.fullmatch(r'[a-z0-9][a-z0-9-]*\.(openai\.azure\.com|services\.ai\.azure\.com)', parts.hostname or '')
+            or parts.username is not None or parts.password is not None or parts.port is not None
+            or parts.query or parts.fragment or parts.path not in ('', '/', '/openai/v1', '/openai/v1/')):
+        raise ValueError('Use a direct HTTPS Azure OpenAI resource endpoint.')
+    return 'https://' + parts.hostname + '/openai/v1'
+
+
+def azure_headers():
+    with ROUTE_LOCK:
+        connection = copy.deepcopy(AZURE_CONNECTION)
+    if not connection:
+        raise ValueError('Connect Azure OpenAI in Model Harbor before using this deployment.')
+    data = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
+    service = next((s for s in data['services'] if s['id'] == 'azure'), None)
+    if not service or azure_endpoint(service.get('baseURL')) != connection['endpoint']:
+        raise ValueError('Azure endpoint changed. Verify the connection again in Model Harbor.')
+    return {'api-key': connection['key'], 'User-Agent': 'ModelHarbor/1.0'}, connection['endpoint']
+
+
+def azure_request(source):
+    catalog = json.loads((CONFIG_DIR / 'model-catalogs/azure.json').read_text())
+    entry = next((m for m in catalog.get('models', []) if m.get('slug') == source['model']), None)
+    if not entry or entry.get('default_reasoning_level') not in ('none', 'low', 'medium', 'high', 'xhigh'):
+        raise ValueError('Verify this Azure deployment in Model Harbor before using it.')
+    # The catalog exposes one verified setting; inherited task effort must not override it.
+    effort = entry['default_reasoning_level']
+    source['reasoning'] = dict(source.get('reasoning') or {}, effort=effort)
+    # Codex host metadata and subscription priority are not Azure Responses fields.
+    source.pop('client_metadata', None)
+    source.pop('service_tier', None)
+    if isinstance(source.get('reasoning'), dict) and source['reasoning'].get('effort') == 'none':
+        source.pop('reasoning', None)
+    source['input'] = baseten_tool_images(source.get('input', []))
+    return source
 
 
 def grok_binary():
@@ -180,7 +222,7 @@ def requested_route(model_id):
         _, provider, model = parts
     else:
         raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
-    if provider not in ('grok-oauth', 'baseten', 'codex-subscription', 'openrouter'):
+    if provider not in ('grok-oauth', 'baseten', 'codex-subscription', 'openrouter', 'azure'):
         raise ValueError('Choose a named Model Harbor model in the Codex task picker.')
     service = next((s for s in data['services'] if s['id'] == provider), None)
     if not service or model not in [m['id'] for m in service['models']]:
@@ -363,6 +405,9 @@ def routed_request(source, headers):
         reasoning = source.get('reasoning')
         if isinstance(reasoning, dict) and reasoning.get('effort') == 'none':
             source.pop('reasoning', None)
+    elif route['provider'] == 'azure':
+        upstream_headers, base = azure_headers()
+        source = azure_request(source)
     elif route['provider'] == 'codex-subscription':
         upstream_headers = codex_headers(headers)
         base = CODEX_BASE
@@ -941,7 +986,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
 
     def do_POST(self):
-        global LAST_ROUTE, OPENROUTER_KEY
+        global LAST_ROUTE, OPENROUTER_KEY, AZURE_CONNECTION
         started = False
         activity_started = False
         activity_status = 'failed'
@@ -951,7 +996,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         acquired = False
         last_heartbeat = float("-inf")
         try:
-            if self.path == '/harbor/providers/openrouter':
+            if self.path in ('/harbor/providers/openrouter', '/harbor/providers/azure'):
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
                 length = int(self.headers.get('Content-Length', '0'))
@@ -961,8 +1006,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 key = value.get('key') if isinstance(value, dict) else None
                 if not isinstance(key, str) or len(key) > 4096 or any(c.isspace() for c in key):
                     return self.error(400, 'Invalid connection settings')
+                endpoint = azure_endpoint(value.get('endpoint')) if self.path.endswith('/azure') and key else None
                 with ROUTE_LOCK:
-                    OPENROUTER_KEY = key
+                    if self.path.endswith('/azure'):
+                        AZURE_CONNECTION = {'key': key, 'endpoint': endpoint} if key else None
+                    else:
+                        OPENROUTER_KEY = key
                 body = b'{"configured":true}'
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -1118,6 +1167,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if route and route['provider'] == 'openrouter' and error.code in (401, 403):
                 with ROUTE_LOCK:
                     OPENROUTER_KEY = ''
+            if route and route['provider'] == 'azure' and error.code in (401, 403):
+                with ROUTE_LOCK:
+                    if AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
+                        AZURE_CONNECTION = None
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='failed', http_status=error.code)

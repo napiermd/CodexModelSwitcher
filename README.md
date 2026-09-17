@@ -5,7 +5,7 @@
 <p align="center"><a href="https://napiermd.github.io/model-harbor/">Website & interactive demo</a> · <a href="docs/getting-started.md">Get started</a> · <a href="docs/architecture.md">How it works</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 <p align="center"><a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-075154"></a> <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-075154"> <a href="https://github.com/napiermd/model-harbor/actions/workflows/ci.yml"><img alt="Checks" src="https://github.com/napiermd/model-harbor/actions/workflows/ci.yml/badge.svg"></a></p>
 
-Model Harbor connects your Codex subscription, Grok sign-in, Baseten, and optional OpenRouter account to Codex. Choose a model in each task, track account usage and API spend, and keep the bridge available in the Dock or menu bar.
+Model Harbor connects your Codex subscription, Grok sign-in, Azure OpenAI, Baseten, and optional OpenRouter account to Codex. Choose a model in each task, track account usage and API spend, and keep the bridge available in the Dock or menu bar.
 
 > **Source preview.** Build locally with Xcode. A notarized public installer is not available yet. Load Harbor's catalog with one Codex restart, then switch among loaded models within existing Harbor tasks. See [setup and compatibility](docs/getting-started.md).
 
@@ -45,11 +45,14 @@ Follow the [setup guide](docs/getting-started.md) to connect providers, choose a
 | --- | --- | --- |
 | Current Codex subscription | ChatGPT sign-in managed by Codex | Uses the current account and its available model catalog. |
 | Grok | Official Grok CLI browser OAuth | Uses the official client's session, refresh flow, and account models. |
+| Azure OpenAI | API key in macOS Keychain | Tests your named deployment with the Responses API, then routes directly to your Azure resource. |
 | Baseten | Direct API credential or credential helper | Calls Baseten directly. A helper such as 1Password unlocks once per Harbor session. |
 | OpenRouter | API key in macOS Keychain | Verifies your key, discovers tool-capable models, and uses your OpenRouter account. |
 | Saved Codex accounts | Browser OAuth and macOS Keychain | Provides a separate direct-account switching workflow that requires restarting Codex. |
 
 Provider access, available models, and charges depend on your accounts. Grok OAuth does not guarantee that every subscription includes CLI access. Harbor supplies no provider credits. OpenRouter is optional and has its own billing.
+
+Use **Add provider → Azure** to add your resource endpoint, key, and deployment name; see [Azure setup](docs/azure.md). Use **Settings → Providers** to hide connections such as Baseten without removing credentials or changing existing tasks. Azure billing and quota are currently viewed in the Azure dashboard.
 
 Use **Add provider → OpenRouter** for the verified-key setup. The **Custom provider** editor supports compatible direct Responses endpoints. Adding another provider to live Harbor routing requires implementation and compatibility checks. See [customization](docs/customization.md).
 

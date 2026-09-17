@@ -72,3 +72,7 @@ Open `http://localhost:4173`. GitHub Pages deploys `site/` when changes reach `m
 | `MODEL_SWITCHER_KEYCHAIN_SERVICE` | Isolated Keychain service for tests |
 
 The historical test variable names are retained for compatibility. Never point an automated test at your everyday Keychain namespace. See `InstallationVerification.swift` for its explicit isolation checks.
+
+## Provider visibility
+
+Use **Settings → Providers → Visible providers** to hide a provider in Harbor while retaining its configuration and existing task routes. This also filters the usage picker. Azure setup offers to hide Baseten and use the verified Azure deployment as the default for new tasks. See [Azure setup](azure.md).

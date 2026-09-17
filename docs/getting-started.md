@@ -147,3 +147,7 @@ An `env_key` may be used instead of a helper. A Finder-launched app does not nor
 ## Return to your previous setup
 
 Quit Harbor before changing its config. Harbor creates private backups beside Codex configuration files. Review the backup you want to restore, or set your previous model/provider in Codex's config while preserving unrelated settings. Reopen Codex after removing the Harbor provider/catalog settings. Keep backups, account files, and Keychain entries until you have confirmed the old setup works. Deleting the app alone does not restore the config.
+
+## Azure OpenAI
+
+Use **Add provider → Azure** to verify your resource endpoint, API key, and deployment. The [Azure guide](azure.md) covers deployment options, the one-time catalog reload, and hiding Baseten through Settings → Providers.

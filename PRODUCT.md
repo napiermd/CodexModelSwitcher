@@ -10,7 +10,7 @@ Andrew Napier maintains Model Harbor for people who use Codex with multiple mode
 
 ## Mechanism
 
-A local authenticated Responses bridge maps explicit model IDs to the current Codex subscription, Grok OAuth, direct Baseten, or selected OpenRouter models. Codex stores each task's model. Harbor manages shared connections and a default for new tasks. Saved Codex account switching remains a separate operation that requires restarting Codex.
+A local authenticated Responses bridge maps explicit model IDs to the current Codex subscription, Grok OAuth, direct Baseten, verified Azure OpenAI deployments, or selected OpenRouter models. Codex stores each task's model. Harbor manages shared connections and a default for new tasks. Saved Codex account switching remains a separate operation that requires restarting Codex.
 
 ## Connection truth
 
@@ -47,3 +47,7 @@ Model Harbor is Andrew Napier's fork of Hieu Nguyen's CodexModelSwitcher. Preser
 ## Website
 
 Purpose confirmed by Andrew: make the program shareable, understandable, customizable, and useful to the community. Implementation choice: static HTML, CSS, and a small JavaScript demo, published through GitHub Pages. The demo is explicitly illustrative. It never controls the installed app.
+
+### Azure deployments and visibility
+
+Azure setup verifies a named deployment through the Responses API before saving its resource key in Keychain. The bridge uses the deployment name and verified reasoning option, bypassing the Baseten queue. Image input is opt-in and included in verification. Azure billing is not imported; the usage view links to Azure. Settings → Providers controls visible Harbor tabs without removing credentials or existing task routes.

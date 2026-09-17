@@ -35,6 +35,7 @@ struct ContentView: View {
         case "settings": return "Settings"
         case "add": return "Add provider"
         case "openrouter": return "Connect OpenRouter"
+        case "azure": return "Connect Azure OpenAI"
         default: return "Model Harbor"
         }
     }
@@ -120,6 +121,7 @@ struct ContentView: View {
             case "settings": settings
             case "add": addProvider
             case "openrouter": openRouterSetup
+            case "azure": AzureSetupView { page = "connections"; focusedProvider = "azure" }
             case "usage": UsageView()
             default: connections
             }
@@ -199,6 +201,7 @@ struct ContentView: View {
             return connected ? "Direct API · Credential ready" : (store.basetenState == "needs_reconnect" ? "Direct API · Reconnect required" : "Direct API · Unlock once for this session")
         }
         if focusedProvider == "grok-oauth" && store.grokIsSignedIn { return "Browser sign-in · \(store.grokAccount)" }
+        if focusedProvider == "azure" { return connected ? "Azure OpenAI · Key saved in Keychain" : "Your Azure resource and deployments" }
         if focusedProvider == "openrouter" { return connected ? "API key · Saved in Keychain" : "One connection, multiple model providers" }
         return "Uses the account signed in to Codex"
     }
@@ -234,6 +237,11 @@ struct ContentView: View {
             } else { Button(store.isBasetenReconnectRunning ? "Connecting…" : "Connect Baseten") { store.reconnectBaseten() }.disabled(store.isBasetenReconnectRunning || store.proxyStatus != .active).buttonStyle(.borderedProminent) }
         case "grok-oauth":
             Button(store.isGrokLoginRunning ? "Signing in…" : (connected ? "Switch account…" : "Sign in to Grok")) { store.signInGrok() }.disabled(store.isGrokLoginRunning).buttonStyle(.bordered)
+        case "azure":
+            Menu(connected ? "Manage connection" : "Connect Azure OpenAI") {
+                Button(connected ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }
+                if connected { Button("Disconnect") { Task { await store.disconnectAzure() } } }
+            }.fixedSize()
         case "openrouter":
             if connected {
                 Menu("Manage connection") {
@@ -264,6 +272,7 @@ struct ContentView: View {
                 }))
                 Button("Connect CodexBar history…") { store.connectCodexBarHistory() }
                 Text("Usage checks reuse existing sign-ins and unlocked keys. They never open 1Password. CodexBar history includes local token-value estimates and its selected Claude account.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if settingsTab == "Providers" {
                 Text("Visible providers").font(.headline)
                 ForEach(ProviderDefinition.all) { entry in
                     Toggle(entry.name, isOn: Binding(get: { !hiddenProviders.split(separator: ",").contains(Substring(entry.id)) }, set: { visible in
@@ -273,13 +282,15 @@ struct ContentView: View {
                         if hidden.contains(focusedProvider) { focusedProvider = ProviderDefinition.all.first { !hidden.contains($0.id) }!.id }
                     }))
                 }
-            } else if settingsTab == "Providers" {
+                Text("Hiding a provider removes its Harbor tab. Its credentials and existing task routes stay available.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Text("Connections").font(.headline)
                 ForEach(ProviderDefinition.all) { entry in
                     HStack {
                         Image(systemName: entry.symbol).frame(width: 22)
                         VStack(alignment: .leading, spacing: 3) { Text(entry.name).font(.subheadline.weight(.medium)); Text(entry.method).font(.caption).foregroundStyle(.secondary) }
                         Spacer()
-                        Button(store.providerConnected(entry.id) ? "Manage" : "Connect") { focusedProvider = entry.id; if entry.id == "openrouter" { beginOpenRouter() } else { page = "connections" } }
+                        Button(store.providerConnected(entry.id) ? "Manage" : "Connect") { focusedProvider = entry.id; if entry.id == "openrouter" { beginOpenRouter() } else if entry.id == "azure" { store.clearError(); page = "azure" } else { page = "connections" } }
                     }
                 }
                 Divider()
@@ -324,7 +335,7 @@ struct ContentView: View {
                     Spacer()
                     Button(store.providerConnected(entry.id) ? "Manage" : "Connect") {
                         focusedProvider = entry.id
-                        if entry.id == "openrouter" { beginOpenRouter() } else { page = "connections" }
+                        if entry.id == "openrouter" { beginOpenRouter() } else if entry.id == "azure" { store.clearError(); page = "azure" } else { page = "connections" }
                     }
                 }
                 Divider()

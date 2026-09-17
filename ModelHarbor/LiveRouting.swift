@@ -15,7 +15,7 @@ enum LiveRouting {
     }
 
     static func selection(for modelID: String, in data: AppData) -> SelectedModel? {
-        for service in data.services where supports(service.id) {
+        for service in data.pickerServices {
             for model in service.models {
                 let selection = SelectedModel(serviceID: service.id, modelID: model.id)
                 if Self.modelID(for: selection) == modelID { return selection }
@@ -48,7 +48,7 @@ enum LiveRouting {
 
     static func catalog(in data: AppData) throws -> Data {
         var entries: [[String: Any]] = []
-        for service in data.services where supports(service.id) {
+        for service in data.pickerServices {
             let source: [[String: Any]]
             if let path = service.catalogPath,
                let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)),
@@ -69,7 +69,7 @@ enum LiveRouting {
                 entry["slug"] = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
                 entry["display_name"] = "\(model.name) · \(providerName(service.id))"
                 entry["description"] = "Uses \(providerName(service.id)) through Model Harbor. Selected independently for this task."
-                entry["visibility"] = "list"
+                entry["visibility"] = data.modelPicker.isVisible(SelectedModel(serviceID: service.id, modelID: model.id)) ? "list" : "hide"
                 entry["supported_in_api"] = true
                 entry["priority"] = entries.count
                 entry["supports_parallel_tool_calls"] = false

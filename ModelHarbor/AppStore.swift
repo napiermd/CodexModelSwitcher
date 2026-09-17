@@ -362,6 +362,37 @@ final class AppStore: ObservableObject {
         data = candidate
     }
 
+    func setModelVisible(_ selection: SelectedModel, visible: Bool) {
+        perform {
+            var candidate = data
+            try candidate.setPickerVisibility(visible, for: selection)
+            try savePickerPreferences(candidate)
+        }
+    }
+
+    func setProviderModelsVisible(_ providerID: String, visible: Bool) {
+        perform {
+            var candidate = data
+            try candidate.setPickerVisibility(visible, forProvider: providerID)
+            try savePickerPreferences(candidate)
+        }
+    }
+
+    private func savePickerPreferences(_ candidate: AppData) throws {
+        // Both Codable encoders omit credentials; changing a shortlist never accesses Keychain.
+        let encoded = try JSONEncoder().encode(candidate)
+        try writer.updateCatalog(in: candidate)
+        do {
+            try encoded.write(to: AppPaths.appData, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: AppPaths.appData.path)
+        } catch {
+            try? writer.updateCatalog(in: data)
+            throw error
+        }
+        data = candidate
+        statusMessage = "Model list saved. Reopen Codex when your tasks are idle to refresh its picker. Existing tasks keep their models."
+    }
+
     private func perform(_ operation: () throws -> Void) {
         guard storageReady else { return }
         do { try operation(); errorMessage = "" }
@@ -402,6 +433,7 @@ final class AppStore: ObservableObject {
             }
             var candidate = try capturingActiveAccount()
             let selection = SelectedModel(serviceID: serviceID, modelID: modelID)
+            if LiveRouting.supports(serviceID) { try candidate.setPickerVisibility(true, for: selection) }
             try writer.applySelection(selection, in: candidate)
             candidate.selectedModel = selection
             try save(candidate)
@@ -559,12 +591,15 @@ final class AppStore: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func connectAzure(endpoint: String, key: String, deployment: AzureDeployment, makeDefault: Bool) async -> Bool {
+    func connectAzure(endpoint: String, key: String, deployment: AzureDeployment, makeDefault: Bool, hideBasetenModels: Bool = false) async -> Bool {
         guard storageReady, !connectingAzure else { return false }
         connectingAzure = true
         errorMessage = ""; statusMessage = ""
         defer { connectingAzure = false }
         do {
+            if hideBasetenModels && !makeDefault && data.selectedModel?.serviceID == "baseten" {
+                throw ProviderError.message("Enable Use for new tasks before hiding Baseten, or choose another default in Settings → Models.")
+            }
             let endpoint = try AzureAPI.endpoint(endpoint).absoluteString
             let key = try AzureAPI.validateKey(key)
             let existing = data.services.first { $0.id == "azure" }
@@ -591,7 +626,10 @@ final class AppStore: ObservableObject {
             candidate.services.removeAll { $0.id == "azure" }
             candidate.services.append(CodexService(id: "azure", name: "Azure OpenAI", baseURL: endpoint,
                 envKey: "AZURE_OPENAI_API_KEY", apiKey: key, models: models, catalogPath: path.path))
-            if makeDefault { candidate.selectedModel = SelectedModel(serviceID: "azure", modelID: deployment.name) }
+            let selection = SelectedModel(serviceID: "azure", modelID: deployment.name)
+            try candidate.setPickerVisibility(true, for: selection)
+            if makeDefault { candidate.selectedModel = selection }
+            if hideBasetenModels { try candidate.setPickerVisibility(false, forProvider: "baseten") }
             try save(candidate)
             try await grokAdapter.configureAzure(endpoint: endpoint, key: key)
             if makeDefault, let selected = candidate.selectedModel { try writer.applySelection(selected, in: candidate) }

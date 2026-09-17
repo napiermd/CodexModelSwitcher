@@ -16,7 +16,7 @@ flowchart LR
 
 ## Selection belongs to the task
 
-Each model has an explicit route ID, such as `harbor/grok-oauth/<model>` or `harbor/baseten/<model>`. `LiveRouting.swift` builds the catalog. The bridge validates the requested route against configured models. It does not look at the app's default to decide which model an existing task uses.
+Each model has an explicit route ID, such as `harbor/grok-oauth/<model>` or `harbor/baseten/<model>`. `LiveRouting.swift` builds the catalog. `ModelPickerPreferences` stores hidden provider IDs and fully qualified model IDs in credential-free app metadata. Hidden choices stay in the catalog with `visibility: hide`; routing validation still accepts them for existing tasks. Visibility writes do not read or write Keychain. The bridge validates the requested route against configured models. It does not look at the app's default to decide which model an existing task uses.
 
 Codex also persists the task's provider. A model-picker change does not migrate that provider. An older `openai` task paired with a `harbor/...` model therefore sends the Harbor model name to the native OpenAI connection and fails before reaching Harbor. See the [task route repair](getting-started.md#repair-an-older-openai-task) for that case.
 

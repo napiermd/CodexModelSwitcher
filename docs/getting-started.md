@@ -36,7 +36,7 @@ The script also reuses the signing identity of `/Applications/Model Harbor.app` 
 1. Open Harbor from the menu bar. The current Codex subscription's models load from Codex's local catalog.
 2. Select the Grok tab and use **Sign in to Grok** and finish the official browser authorization. Your password stays with the provider. Confirm that Harbor displays the signed-in account and available models.
 3. If using Baseten, complete the next section before reopening Harbor.
-4. Choose a **New task default** under **Settings → Advanced**. This writes the stable `model-harbor` provider and catalog settings to your Codex configuration.
+4. Choose a **New task default** under **Settings → Models**. This writes the stable `model-harbor` provider and catalog settings to your Codex configuration.
 5. Reopen Codex **once** to load the new catalog. Start a task using Harbor and choose a named model in that task's picker.
 6. Choose another model in another task. Return to the first task; its choice stays with it. Changing the new-task default does not change existing tasks.
 
@@ -68,7 +68,7 @@ Use **Manage connection → Choose models** to update the list, or **Disconnect*
 
 Select a provider tab for its connection, model list, requests in progress, and last completed response. **Bridge online** means the local process is available. **Connected** means the provider credential or session is ready; a provider can still return capacity or billing errors. Codex starts at **Configured** and becomes **Connected** after a completed response through Harbor. Completed-request counts reset when Harbor restarts.
 
-The panel expands to fit content. It uses scrolling only when the available screen height is insufficient. General contains window, startup, appearance, and warm-up settings. Menu bar contains display modes and usage refresh. Providers contains connections and saved accounts; Advanced contains routing and confirmed Codex restart controls.
+The panel expands to fit content. It uses scrolling only when the available screen height is insufficient. General contains window, startup, appearance, and warm-up settings. Menu bar contains display modes and usage refresh. Models contains the Codex shortlist and new-task default. Providers contains tab visibility, connections and saved accounts; Advanced contains routing and confirmed Codex restart controls.
 
 ## Repair an older OpenAI task
 
@@ -150,4 +150,4 @@ Quit Harbor before changing its config. Harbor creates private backups beside Co
 
 ## Azure OpenAI
 
-Use **Add provider → Azure** to verify your resource endpoint, API key, and deployment. The [Azure guide](azure.md) covers deployment options, the one-time catalog reload, and hiding Baseten through Settings → Providers.
+Use **Add provider → Azure** to verify your resource endpoint, API key, and deployment. The [Azure guide](azure.md) covers deployment options, the one-time catalog reload, and hiding Baseten models through Settings → Models. Harbor tab visibility is separate under Settings → Providers.

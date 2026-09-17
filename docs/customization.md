@@ -6,7 +6,7 @@ Model Harbor is MIT licensed. Fork it, inspect the routes, change the interface,
 
 ## Customize the menu bar
 
-Use **Settings → Menu bar** for display mode, icon visibility, provider visibility, usage refresh, and optional CodexBar history. Display modes include remaining quota, today's spend, and the next reset alongside connection, activity, model, count, name, and icon choices. At least one provider remains visible. Provider connection follows the selected Harbor tab. Activity and last requested model refer to real bridge traffic across all tasks, not the foreground Codex task.
+Use **Settings → Menu bar** for display mode, icon visibility, usage refresh, and optional CodexBar history. Display modes include remaining quota, today's spend, and the next reset alongside connection, activity, model, count, name, and icon choices. At least one provider remains visible. Provider connection follows the selected Harbor tab. Activity and last requested model refer to real bridge traffic across all tasks, not the foreground Codex task.
 
 ## Customize startup and window behavior
 
@@ -74,5 +74,7 @@ Open `http://localhost:4173`. GitHub Pages deploys `site/` when changes reach `m
 The historical test variable names are retained for compatibility. Never point an automated test at your everyday Keychain namespace. See `InstallationVerification.swift` for its explicit isolation checks.
 
 ## Provider visibility
+
+Use **Settings → Models** to choose which provider groups and individual models appear in Codex. These choices persist in local metadata without accessing Keychain. Hidden entries retain their routes for existing tasks, and provider groups stay hidden when their catalog grows. Choose a visible new-task default on the same page. Reopen Codex once after editing the shortlist, when tasks are idle, to load the updated picker.
 
 Use **Settings → Providers → Visible providers** to hide a provider in Harbor while retaining its configuration and existing task routes. This also filters the usage picker. Azure setup offers to hide Baseten and use the verified Azure deployment as the default for new tasks. See [Azure setup](azure.md).

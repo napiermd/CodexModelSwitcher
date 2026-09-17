@@ -113,6 +113,24 @@ These ranges describe six synthetic observations on hosted Linux runners. They a
 
 The VM diagnostic at 14:06 PDT reported 7,922 MiB total memory, 308 MiB available, and no swap. This is a host constraint observed after the failure, not proof of its cause. No other containers, VM settings, installed apps, or live routes were changed. The subsequent AMD64 CI run passed in isolation, as recorded above. The local ARM64 startup failure is retained and does not become a transport pass.
 
+## Actual provider pressure result
+
+Actions run `35279368950`, PR head `6920a037ad81939bcebb294396f1b27d7b94440d`, executed the separate pressure study against both pinned platform images. The actual PR merge checkout was `e941310edb66d3fd5e750e5b7d41013aac2befe8`. Both reports passed evidence, version, content, and cleanup checks. Their unchanged files are `experiments/bifrost/results.pressure-amd64-ci.json` and `results.pressure-arm64-ci.json`; `results.pressure-ci.provenance.json` records their SHA-256 hashes, run, checkout, images, and adjacent native-contract sample hashes.
+
+With provider `concurrency=1`, `buffer_size=1`, and `drop_excess_requests=true`, both platforms produced the same measured behavior:
+
+| Observation | AMD64 | ARM64 |
+|---|---|---|
+| Held request plus two concurrent followers | One follower queued; one returned queue-full 503 | Same |
+| Upstream attempts for held / queued / rejected IDs | 1 / 1 / 0 | 1 / 1 / 0 |
+| Queued dispatch | Began after the held request was released | Same |
+| Second stream delivered while first remained open | Yes, observed at client and upstream | Yes, observed at client and upstream |
+| Active-stream bound of one | Disproved | Disproved |
+
+All accepted responses retained their own IDs, output, usage, and native request payload; no unexpected requests occurred. The separate three-sample 24-case native contract matrix also passed on each architecture in this run. A successful pressure observation is a **negative capability result for active-stream throttling**: worker concurrency is not a lifetime semaphore for streamed inference. `pacing_verified` stays false. Queue-full rejection also does not establish request/token-rate pacing or fairness.
+
+Therefore the tested OSS configuration cannot by itself provide the swarm admission control Harbor needs. A proposed production path still needs a bounded scheduler that holds capacity until stream completion or cancellation, accounts for time in queue, and coordinates its attempt budget with the caller. No live route was changed in response to this result.
+
 ## Retry ownership at the Harbor boundary
 
 `Tests/test_azure_provider.py` now exercises the real Harbor HTTP handler for 429 and 503 with numeric, HTTP-date, missing, and malformed `Retry-After` headers. Across eight combinations and sixteen explicit client requests, each request makes exactly one upstream attempt, preserves the raw status/header/body, closes the error body, and retains the Azure credential. This verifies transparent forwarding. It does not implement or prove a parsed backoff schedule.
@@ -124,7 +142,7 @@ The Azure branch in `grok_adapter.py` currently opens one upstream request with 
 ## Remaining gates
 
 1. The native ARM64 and AMD64 surfaces pass three complete synthetic matrices each, bypassing the observed converted-route history/retry failures with durable diagnostics and content checks. Real deployment environment behavior remains unverified; the local Colima startup failure is unresolved. The measured synthetic samples do not establish real-provider latency bounds.
-2. Synthetic invalid authentication, three concurrent workers, opaque event forms, and token-count fidelity now pass. Complete coverage against actual Codex request/event fixtures, bounded queue/pacing behavior, and monetary cost provenance. Verify immutable pin provenance in the eventual deployment process.
+2. Synthetic invalid authentication, three concurrent workers, opaque event forms, and token-count fidelity now pass. Complete coverage against actual Codex request/event fixtures and monetary cost provenance. The provider buffer is bounded in the pressure study, but active-stream limiting is disproved; implement and verify a lifetime admission policy before adoption. Verify immutable pin provenance in the eventual deployment process.
 3. Compare an isolated Azure deployment against the existing Harbor route using synthetic content and secure credential handoff. Measure matched repeated first-output/total-latency distributions, errors, cancellation, and retry timing; record sample sizes. No such benchmark is claimed here.
 4. Establish response-ID/connection affinity and one retry owner across the client, Harbor, Bifrost, and upstream. Never automatically retry after partial tool/text output.
 5. Complete independent-runtime, authoritative desktop lifecycle, admission, and retirement work before replacing a live gateway.

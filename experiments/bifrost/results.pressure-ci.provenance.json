@@ -1,0 +1,87 @@
+{
+  "run_id": 35279368950,
+  "repository": "napiermd/model-harbor",
+  "head_sha": "6920a037ad81939bcebb294396f1b27d7b94440d",
+  "live_azure_tested": false,
+  "scope": "Synthetic pinned Bifrost provider queue and stream lifetime; valid observation is not a pacing guarantee",
+  "architectures": {
+    "amd64": {
+      "artifact_name": "bifrost-native-contract-amd64",
+      "checkout_sha": "e941310edb66d3fd5e750e5b7d41013aac2befe8",
+      "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+      "report_file": "results.pressure-amd64-ci.json",
+      "report_sha256": "7a5dee49b5f87308cc176396ede3cd8d0251749813db5e915ad5ad6b13730a77",
+      "contract_samples": [
+        {
+          "sample": 1,
+          "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "e110433362c4c08558cc5322fcc1d08782248d22facfaa5b321df500877dd43a"
+        },
+        {
+          "sample": 2,
+          "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "d080d9943bf5047f2720b7b8c571215f6aa05b14e355febbcfab7794280dd72b"
+        },
+        {
+          "sample": 3,
+          "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "9014455c8924bbc0e9764ef5c92b2f526b57675ce9c1aada64d58c07388e3592"
+        }
+      ]
+    },
+    "arm64": {
+      "artifact_name": "bifrost-native-contract-arm64",
+      "checkout_sha": "e941310edb66d3fd5e750e5b7d41013aac2befe8",
+      "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "report_file": "results.pressure-arm64-ci.json",
+      "report_sha256": "2a82215cbaa62c72372cfc3816b9276aa35895b4793a3f786ef5f52615cc2f8e",
+      "contract_samples": [
+        {
+          "sample": 1,
+          "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "7825761f20a14af41030c2895aa36684b24cf8b934bb55fa081f7851399601ed"
+        },
+        {
+          "sample": 2,
+          "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "ba71375c73c52731378da4a3cc5530dc792beb9b27a178991f186211479ee8fd"
+        },
+        {
+          "sample": 3,
+          "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+          "surface": "azure-passthrough",
+          "cases": 24,
+          "failures": {},
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "report_sha256": "35cd29c3abc526c38669f7a4f16a187c90e70178ff99c178cc80ba0e52e9bbeb"
+        }
+      ]
+    }
+  }
+}

@@ -45,6 +45,8 @@ This sets provider concurrency to one, buffer size to one, and `drop_excess_requ
 
 A passing pressure report means the observation is complete. `pacing_verified` remains false. If both upstream and client observe overlapping streams, `active_stream_bound_disproved` is true: the worker setting did not limit established streams to one. An observation of no overlap within two seconds alone does not prove a lifetime bound. This experiment does not claim fairness, admission deadlines for real workloads, or a production scheduler. The CI matrix retains `pressure.json` beside the three native contract samples and hashes it in `provenance.json`.
 
+The actual hosted study passed evidence gates on AMD64 and ARM64 in run `35279368950`: upstream counts were 1/1/0 for held/queued/rejected requests, and two streams overlapped with concurrency=1. Both reports set `active_stream_bound_disproved=true`. See `results.pressure-*-ci.json` and adjacent provenance.
+
 ## What is checked
 
 - JSON and streamed Responses, Azure path and deployment alias, and API-key forwarding.

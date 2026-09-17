@@ -41,8 +41,9 @@ Selected the retained service as the first unit, with durable ownership and veri
 
 - [x] Signed staging and independent gateway lifetime implementation prepared for review; installed runtime left intact.
 - [x] Persistent unfinished-turn ownership, authenticated control, and credential-generation readiness guards implemented.
-- [x] Current CI passed 258 Python tests, 71 Swift tests, app build, 10 packaged lifecycle tests, staging, and site checks.
+- [x] Current CI passed 272 Python tests, 71 Swift tests, app build, 10 packaged lifecycle tests, staging, and site checks.
 - [x] Exact pinned Bifrost native Azure passthrough passed three complete 24-case synthetic contract matrices on each of AMD64 and ARM64 (144 case executions), including strict cancellation, opaque history/events, error attempt counts, token fidelity, and three-worker correlation.
+- [x] Measure provider admission: both pinned architectures queue one follower and reject one excess request; two established streams still overlap with concurrency=1, so swarm pacing remains unproven.
 - [x] Preserve unchanged transport report and hash/run provenance; retain earlier converted-route failures and local startup failure as separate evidence.
 - [ ] Establish authoritative completion events for existing desktop tasks (SAY-3341).
 - [ ] Implement and verify promotion/draining/rollback against that lifecycle feed (SAY-3343); complete the dependent matrix (SAY-3342).

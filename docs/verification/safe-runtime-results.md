@@ -6,7 +6,7 @@ September 17, 2026. Scope: the staged source change for SAY-3339–SAY-3342. Thi
 
 | Check | Result | What it establishes |
 | --- | --- | --- |
-| Python suite, warnings treated as errors | 241 passed | Provider, history, pacing, ownership, startup, control authentication, and release-tool behavior |
+| Python suite, warnings treated as errors | 258 passed (52.685 seconds) | Provider, history, pacing, ownership, startup, control authentication, and release-tool behavior |
 | Swift suite | 71 passed | Swift behavior contracts and compilation |
 | Signed Xcode app build | Passed | Candidate compiles and uses the existing development signing identity |
 | Production-entrypoint suite using packaged resources | 10 passed | The actual bundled runtime survives controller exit and preserves ownership through synthetic tool continuations |
@@ -54,6 +54,6 @@ Gateway startup work runs off the UI actor. A detected new gateway boot restores
 
 SAY-3341 is not complete: no authoritative event subscription to the actual running desktop host was established. SAY-3342's promotion/rollback scenarios depend on SAY-3343 and are not implemented. SAY-3343 remains disabled under its original prerequisite. The retained service is a foundation for that work, not a substitute for it.
 
-The combined 241-test Python run includes 10 hermetic regressions for Bifrost pilot cleanup and aggregate gate reporting. Those regressions test the experiment driver with Docker mocked; they do not repair the observed Bifrost transport incompatibilities.
+The combined 258-test Python run includes 27 hermetic Bifrost pilot tests for cleanup, aggregate gate reporting, native/converted route selection, retry ownership, authentication, usage fidelity, opaque history, and complete streamed events. Docker is mocked in driver tests; protocol tests use synthetic local HTTP fixtures. These tests establish the harness behavior, not a passing native Bifrost transport. The native container attempt failed during startup with zero test requests. Existing Swift/build/packaged-artifact evidence above belongs to the unchanged runtime implementation; the follow-up edits affect only the experiment, its tests, and documentation.
 
 The Bifrost experiment and its narrower evidence are recorded separately in [Bifrost evaluation](../bifrost-evaluation.md). No live route was moved to it.

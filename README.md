@@ -97,6 +97,7 @@ See [agent teams](docs/agent-teams.md) for role installation, assignments, concu
 The app is SwiftUI. The local Responses bridge is Python with no Python package dependencies. The website is plain HTML, CSS, and JavaScript. No Model Harbor cloud service sits in the request path.
 
 - [Architecture](docs/architecture.md): request destinations, credential boundaries, and source files.
+- [Safe updates](docs/safe-updates.md): stage a verified build while preserving the running gateway; [audit and implementation plan](docs/update-safety-audit.md).
 - [Customization](docs/customization.md): model catalogs, providers, interface, and build configuration.
 - [Verification](FORK.md): automated coverage, live checks, and known limits.
 - [Contributing](CONTRIBUTING.md): local development and pull requests.

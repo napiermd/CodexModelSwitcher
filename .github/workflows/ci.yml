@@ -23,6 +23,8 @@ jobs:
         run: python3 -m unittest discover -s Tests -p 'test_*.py'
       - name: Build evaluation app
         run: ./scripts/build-app.sh --ad-hoc
+      - name: Stage and verify evaluation artifact without installing
+        run: python3 scripts/stage-update.py --app "build/Build/Products/Debug/Model Harbor.app" --name ci-evaluation
   website:
     runs-on: ubuntu-latest
     steps:

@@ -9,7 +9,7 @@ struct ContentView: View {
     @AppStorage("harbor.hiddenProviders") private var hiddenProviders = ""
     @AppStorage("harbor.appearance") private var appearance = "system"
     @State private var page = "connections"
-    @State private var settingsTab = "Menu bar"
+    @State private var settingsTab = "General"
     @State private var bodyHeight: CGFloat = 380
     @State private var editorSession: EditorSession?
     @State private var isShowingOpenAIAccountWarning = false
@@ -74,6 +74,10 @@ struct ContentView: View {
             if abs(bodyHeight - height) > 1 { bodyHeight = height }
         }
         .background(PanelWindowSizer(height: min(bodyHeight, maximumBodyHeight) + 102))
+        .onReceive(NotificationCenter.default.publisher(for: .harborShowSettings)) { _ in
+            page = "settings"
+            settingsTab = "General"
+        }
         .onAppear {
             if !visibleProviders.contains(where: { $0.id == focusedProvider }) { focusedProvider = visibleProviders.first!.id }
             Task { await store.refreshConnectionStatus() }
@@ -244,8 +248,10 @@ struct ContentView: View {
 
     private var settings: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Picker("Settings section", selection: $settingsTab) { ForEach(["Menu bar", "Providers", "Advanced"], id: \.self) { Text($0) } }.pickerStyle(.segmented).labelsHidden()
-            if settingsTab == "Menu bar" {
+            Picker("Settings section", selection: $settingsTab) { ForEach(["General", "Menu bar", "Providers", "Advanced"], id: \.self) { Text($0) } }.pickerStyle(.segmented).labelsHidden()
+            if settingsTab == "General" {
+                GeneralSettingsView()
+            } else if settingsTab == "Menu bar" {
                 Text("Make the menu bar useful").font(.headline)
                 Picker("Display", selection: $menuBarDisplay) { ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0.rawValue) } }
                 Toggle("Show Harbor icon", isOn: $showMenuBarIcon).disabled(menuBarDisplay == "icon")
@@ -258,8 +264,6 @@ struct ContentView: View {
                 }))
                 Button("Connect CodexBar history…") { store.connectCodexBarHistory() }
                 Text("Usage checks reuse existing sign-ins and unlocked keys. They never open 1Password. CodexBar history includes local token-value estimates and its selected Claude account.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Divider()
-                Picker("Appearance", selection: $appearance) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }
                 Text("Visible providers").font(.headline)
                 ForEach(ProviderDefinition.all) { entry in
                     Toggle(entry.name, isOn: Binding(get: { !hiddenProviders.split(separator: ",").contains(Substring(entry.id)) }, set: { visible in
@@ -285,6 +289,8 @@ struct ContentView: View {
                 ForEach(custom) { legacySection($0) }
                 Button("Add custom provider…") { editorSession = EditorSession(title: "Custom provider", originalID: nil, form: ServiceFormData()) }
             } else {
+                CodexRestartSettingsView()
+                Divider()
                 Text("Task routing").font(.headline)
                 Toggle("Repair inactive task routes automatically", isOn: Binding(get: { store.taskRepairsEnabled }, set: store.setTaskRepairsEnabled))
                     .disabled(store.savingTaskRepairs || store.proxyStatus != .active)
@@ -377,8 +383,13 @@ struct ContentView: View {
             Circle().fill(store.proxyStatus == .active ? Color.green : Color.secondary).frame(width: 6, height: 6)
             Text(store.proxyStatus == .active ? "Bridge online" : "Bridge offline")
             Spacer()
-            if page == "connections" { Text("\(ProviderDefinition.all.filter { store.providerConnected($0.id) }.count) connections") }
-            else { Text("Model Harbor") }
+            if page == "connections" {
+                Text("\(ProviderDefinition.all.filter { store.providerConnected($0.id) }.count) connections")
+            } else {
+                Button("Open Model Harbor") { NotificationCenter.default.post(name: .harborOpenWindow, object: nil) }
+                    .buttonStyle(.link)
+                    .controlSize(.small)
+            }
         }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 18).frame(height: 42)
     }
     private func beginOpenRouter() {
@@ -961,7 +972,9 @@ private struct FooterOptionsButton: NSViewRepresentable {
     }
 }
 
+#if !DISABLE_PREVIEWS
 #Preview {
     ContentView()
         .environmentObject(AppStore())
 }
+#endif

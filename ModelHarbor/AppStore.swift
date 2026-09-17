@@ -56,6 +56,14 @@ final class AppStore: ObservableObject {
                             proxyStatus = .active
                             await refreshGrokAccount()
                             await syncOpenRouter()
+                            WarmUpController.shared.start(
+                                isBusy: { [weak self] in
+                                    guard let self else { return true }
+                                    return self.providerActivity.values.contains { $0.active > 0 }
+                                },
+                                isReady: { [weak self] in
+                                    self?.proxyStatus == .active && self?.codexConfigured == true
+                                })
                             usagePolling = Task { [weak self] in
                                 while !Task.isCancelled {
                                     if UserDefaults.standard.object(forKey: "harbor.usageAutoRefresh") as? Bool ?? true {
@@ -83,7 +91,12 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func stopAdapter() { connectionPolling?.cancel(); usagePolling?.cancel(); grokAdapter.stop() }
+    func stopAdapter() {
+        WarmUpController.shared.stop()
+        connectionPolling?.cancel()
+        usagePolling?.cancel()
+        grokAdapter.stop()
+    }
 
     func usageSnapshot(for provider: String) -> UsageSnapshot? {
         let id = UserDefaults.standard.string(forKey: "harbor.usageAccount.\(provider)")

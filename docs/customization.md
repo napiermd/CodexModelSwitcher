@@ -6,7 +6,13 @@ Model Harbor is MIT licensed. Fork it, inspect the routes, change the interface,
 
 ## Customize the menu bar
 
-Use **Settings → Menu bar** for display mode, icon visibility, System/Light/Dark appearance, and provider visibility. At least one provider remains visible. Provider connection follows the selected Harbor tab. Activity and last requested model refer to real bridge traffic across all tasks, not the foreground Codex task.
+Use **Settings → Menu bar** for display mode, icon visibility, provider visibility, usage refresh, and optional CodexBar history. Display modes include remaining quota, today's spend, and the next reset alongside connection, activity, model, count, name, and icon choices. At least one provider remains visible. Provider connection follows the selected Harbor tab. Activity and last requested model refer to real bridge traffic across all tasks, not the foreground Codex task.
+
+## Customize startup and window behavior
+
+Use **Settings → General** for System/Light/Dark appearance, Dock and menu-bar presence, the close dialog, and whether manual launches open a window. Enable **Launch at login** to register Harbor with macOS. The status beside it reflects the OS registration and approval state.
+
+Warm-up is optional and off by default. Its editable prompt goes to the current Codex account as a real request that consumes quota. After-startup and daily modes have a once-per-day automatic limit. See [lifecycle and startup](lifecycle.md) for scheduling, closure, and explicit Codex restart behavior.
 
 ## Choose available models
 

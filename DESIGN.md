@@ -163,7 +163,7 @@ The native panel has a fixed width from `native-panel` and a measured content he
 
 The app measures its body and limits that height to the larger of 220 points or the current screen's visible height minus 156 points. It requests a window height of the fitted body plus 102 points. Scroll indicators appear when content exceeds that limit. Long help and error text can wrap. Native window chrome remains controlled by macOS.
 
-Provider tabs share the available width. Each tab places a symbol above its name and state dot. The selected provider's title and connection label sit on one line of the layout. Activity follows, then a divider, the full saved model list, task-selection guidance, and connection actions. Settings has separate Menu bar, Providers, and Advanced segments.
+Provider tabs share the available width. Each tab places a symbol above its name and state dot. The selected provider's title and connection label sit on one line of the layout. Activity follows, then a divider, the full saved model list, task-selection guidance, and connection actions. Settings has General, Menu bar, Providers, and Advanced segments. General groups window behavior, login startup, appearance, and optional warm-up. Advanced contains the explicit Codex close/reopen action.
 
 The website's main container is at most 1200 pixels wide with 56-pixel side margins. It tightens at 1000 pixels, and changes to a single-column layout with 20-pixel side margins at 720 pixels. A wider layout adjustment starts at 1450 pixels. Native panel sizing does not use these website breakpoints.
 
@@ -201,7 +201,7 @@ Connection actions use native bordered or bordered-prominent buttons. Existing B
 
 ### Menu bar
 
-The menu-bar label can show connection, activity, last requested model, connected-provider count, Harbor name, or icon only. Connection follows the selected provider; activity follows the most recent request's provider. The symbol changes from `h.square` to `waveform` during activity. This uses native SF Symbols, not a reduced raster copy of the app icon. Label text is limited to one line and truncates in the middle.
+The menu-bar label can show connection, activity, remaining quota, today's spend, next reset, last requested model, connected-provider count, Harbor name, or icon only. Unknown or stale usage stays labeled unavailable. Connection follows the selected provider; activity follows the most recent request's provider. The symbol changes from `h.square` to `waveform` during activity. This uses native SF Symbols, not a reduced raster copy of the app icon. Label text is limited to one line and truncates in the middle.
 
 ### Public website demonstration
 

@@ -38,9 +38,8 @@ class StageUpdateTests(unittest.TestCase):
                      'CFBundleExecutable': 'Model Harbor',
                      'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '4'}
         self.write_info()
-        self.signer = patch.object(staging, 'verify_signature', return_value=SIGNATURE).start()
-        self.addCleanup(patch.stopall)
-        patch.object(staging, 'source_context', return_value=CONTEXT).start()
+        self.signer = self.enterContext(patch.object(staging, 'verify_signature', return_value=SIGNATURE))
+        self.enterContext(patch.object(staging, 'source_context', return_value=CONTEXT))
 
     def write_info(self):
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(self.info))
@@ -208,12 +207,19 @@ server = HTTPServer(("127.0.0.1", 0), Handler)
 print(server.server_port, flush=True)
 server.serve_forever()
 '''
-        process = subprocess.Popen([sys.executable, '-u', '-c', code], stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, text=True)
+        stderr = self.enterContext(tempfile.TemporaryFile(mode='w+'))
+        process = subprocess.Popen([sys.executable, '-I', '-u', '-c', code], stdout=subprocess.PIPE,
+                                   stderr=stderr, text=True)
         try:
-            ready, _, _ = select.select([process.stdout], [], [], 5)
-            self.assertTrue(ready, 'Mock gateway did not start within five seconds')
-            port = int(process.stdout.readline())
+            ready, _, _ = select.select([process.stdout], [], [], 30)
+            if not ready:
+                stderr.seek(0)
+                self.fail(f'Mock gateway startup timed out (exit={process.poll()}): {stderr.read()}')
+            line = process.stdout.readline()
+            if not line.strip().isdigit():
+                stderr.seek(0)
+                self.fail(f'Mock gateway failed before readiness: {stderr.read()}')
+            port = int(line)
             with urllib.request.urlopen(f'http://127.0.0.1:{port}', timeout=5) as response:
                 self.assertEqual(response.read(), b'still serving')
             self.run_stage()

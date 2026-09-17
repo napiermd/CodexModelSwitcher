@@ -1,0 +1,15 @@
+{
+  "transport_version": "v2.2.0",
+  "source_tag": "transports/v2.2.0",
+  "image_tag": "maximhq/bifrost:v2.2.0",
+  "images": {
+    "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+    "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+  },
+  "edition": "OSS container; no enterprise license",
+  "resolved_at": "2026-09-17",
+  "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+  "live_azure_benchmark": false,
+  "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+  "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+}

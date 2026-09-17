@@ -97,7 +97,7 @@ Tests must use isolated `HOME`, config, token, state, and ports. No automated te
 
 ## Implementation evidence, September 17, 2026
 
-The independent runtime, authenticated control connection, configuration-bound readiness, and durable unfinished-turn ownership are implemented in the staged candidate. The local suite passes 231 Python tests and 71 Swift tests. All 10 production-entrypoint lifecycle tests also pass against the signed app resources, and the candidate passes signature/inventory staging. See [verification results](verification/safe-runtime-results.md).
+The independent runtime, authenticated control connection, configuration-bound readiness, and durable unfinished-turn ownership are implemented in the staged candidate. The local suite passes 241 Python tests and 71 Swift tests. All 10 production-entrypoint lifecycle tests also pass against the signed app resources, and the candidate passes signature/inventory staging. See [verification results](verification/safe-runtime-results.md).
 
 The original completion gates above remain unchanged. Actual desktop completion observation is still unproven, so promotion, retirement, rollback, and shutdown refuse. The production-entrypoint matrix covers these refusals, not successful rolling handoff. The [Bifrost pilot](bifrost-evaluation.md) produced a no-go decision after reasoning-history and retry-policy failures. Its live Azure, concurrency, queue, and cost comparison requirements remain open. No installed app, live routing, or user task history was changed.
 

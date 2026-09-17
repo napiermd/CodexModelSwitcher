@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic Azure contract only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+  "live_azure_tested": false,
+  "retry_owner": "bifrost",
+  "max_retries": 1,
+  "client_total_deadline_seconds": 12,
+  "cases": [
+    {
+      "case": "basic",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 125.32,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null
+    },
+    {
+      "case": "stream",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 86.26,
+      "first_output_ms": 86.22,
+      "response_event_types": [
+        "response.completed",
+        "response.content_part.added",
+        "response.created",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.output_text.delta"
+      ],
+      "error_type": null
+    },
+    {
+      "case": "image",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "image_unchanged": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 2856.86,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null
+    },
+    {
+      "case": "custom_tool",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "custom_definition_preserved": true,
+        "custom_output_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 71.02,
+      "first_output_ms": 70.57,
+      "response_event_types": [
+        "response.completed",
+        "response.created",
+        "response.custom_tool_call_input.delta",
+        "response.output_item.added",
+        "response.output_item.done"
+      ],
+      "error_type": null
+    },
+    {
+      "case": "custom_history",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "custom_definition_preserved": true,
+        "custom_output_preserved": true,
+        "history_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 113.39,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null
+    }
+  ],
+  "harness_error": "Command '['docker', 'exec', 'harbor-bifrost-pilot-71be04b9ec-azure', 'python3', '/tmp/probe.py', '--snapshot']' returned non-zero exit status 137.",
+  "command_error_output": "",
+  "container_logs": {
+    "harbor-bifrost-pilot-71be04b9ec-azure": "",
+    "harbor-bifrost-pilot-71be04b9ec": "initialized successfully\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"bifrost client initialized\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"listing all models and adding to model catalog\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"models added to catalog\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"batch accounting sweeper not wired: logging plugin not found (err=plugin logging not found)\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"prometheus plugin not found, skipping telemetry middleware\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"temp-token sweep worker started (interval=5m0s)\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"================================================================\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"No admin account is configured for this Bifrost instance yet, and\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"no setup token is configured. Set setup_token in config.json (or\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"the BIFROST_SETUP_TOKEN environment variable) before creating the\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"first admin account \u2014 requests to create it will be rejected until\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"a setup token is configured.\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"================================================================\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"git binary not found \u2014 Claude Code / Codex marketplace routes disabled\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"Token refresh worker started\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"background live model refresh is disabled\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"Time spent in Bifrost server bootstrap 1341 ms\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: prompts - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: governance - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: routing - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: compat - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: model-catalog-resolver - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"skills orphan cleanup completed during startup: deleted_db_blobs=0 deleted_storage_objects=0\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"successfully started bifrost, serving UI on http://0.0.0.0:8080\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":110,\"http.remote_addr\":\"172.28.0.2:42054\",\"http.user_agent\":\"\",\"trace_id\":\"866e2dc21bb64de2af22872fdc0ba606\",\"request_id\":\"cfae8f87-6a3f-40a7-843b-7ab03b2e1489\",\"time\":\"2026-09-17T20:13:50Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":77,\"http.remote_addr\":\"172.28.0.2:41966\",\"http.user_agent\":\"\",\"trace_id\":\"6d601e2ed27341e983237d183d679fd3\",\"request_id\":\"2e514148-bc1d-422d-9f77-da26f9b0a781\",\"time\":\"2026-09-17T20:14:42Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":2539,\"http.remote_addr\":\"172.28.0.2:41978\",\"http.user_agent\":\"\",\"trace_id\":\"1aa29d46dc1a46a7b396fdb7b9bf3418\",\"request_id\":\"5b2d9a4b-c2c0-4e88-9e44-2e418975b850\",\"time\":\"2026-09-17T20:14:45Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":53,\"http.remote_addr\":\"172.28.0.2:57260\",\"http.user_agent\":\"\",\"trace_id\":\"c8de2d517ebd449ca4816cb32b4e1667\",\"request_id\":\"b22920a9-815b-40c6-af8f-37223a965aac\",\"time\":\"2026-09-17T20:15:40Z\",\"message\":\"request completed\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:16:39Z\",\"message\":\"reset cycle took 13.042905491s, longer than the 10s worker interval (0 rate limits, 0 budgets reset): reset cadence has slipped and persisted last_reset will lag the window boundary\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":103,\"http.remote_addr\":\"172.28.0.2:49658\",\"http.user_agent\":\"\",\"trace_id\":\"ee53b7d6ea5d43fc9ba27f956b99f1e1\",\"request_id\":\"8972ebd2-0260-4088-b889-8688b3c9d649\",\"time\":\"2026-09-17T20:16:39Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":28,\"http.remote_addr\":\"172.28.0.2:49666\",\"http.user_agent\":\"\",\"trace_id\":\"3272ca6fa9ce4a7b94e690e6cb0886b5\",\"request_id\":\"edeb826f-7442-4cc4-869f-516587551f1f\",\"time\":\"2026-09-17T20:16:40Z\",\"message\":\"request completed\"}"
+  },
+  "startup_logs": "initialized successfully\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"bifrost client initialized\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"listing all models and adding to model catalog\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"models added to catalog\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"batch accounting sweeper not wired: logging plugin not found (err=plugin logging not found)\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"prometheus plugin not found, skipping telemetry middleware\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"temp-token sweep worker started (interval=5m0s)\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"================================================================\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"No admin account is configured for this Bifrost instance yet, and\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"no setup token is configured. Set setup_token in config.json (or\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"the BIFROST_SETUP_TOKEN environment variable) before creating the\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"first admin account \u2014 requests to create it will be rejected until\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"a setup token is configured.\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"================================================================\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"git binary not found \u2014 Claude Code / Codex marketplace routes disabled\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"Token refresh worker started\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"background live model refresh is disabled\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"Time spent in Bifrost server bootstrap 1341 ms\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: prompts - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: governance - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: routing - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: compat - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"plugin status: model-catalog-resolver - active\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"skills orphan cleanup completed during startup: deleted_db_blobs=0 deleted_storage_objects=0\"}\n{\"level\":\"info\",\"time\":\"2026-09-17T20:13:22Z\",\"message\":\"successfully started bifrost, serving UI on http://0.0.0.0:8080\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":110,\"http.remote_addr\":\"172.28.0.2:42054\",\"http.user_agent\":\"\",\"trace_id\":\"866e2dc21bb64de2af22872fdc0ba606\",\"request_id\":\"cfae8f87-6a3f-40a7-843b-7ab03b2e1489\",\"time\":\"2026-09-17T20:13:50Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":77,\"http.remote_addr\":\"172.28.0.2:41966\",\"http.user_agent\":\"\",\"trace_id\":\"6d601e2ed27341e983237d183d679fd3\",\"request_id\":\"2e514148-bc1d-422d-9f77-da26f9b0a781\",\"time\":\"2026-09-17T20:14:42Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":2539,\"http.remote_addr\":\"172.28.0.2:41978\",\"http.user_agent\":\"\",\"trace_id\":\"1aa29d46dc1a46a7b396fdb7b9bf3418\",\"request_id\":\"5b2d9a4b-c2c0-4e88-9e44-2e418975b850\",\"time\":\"2026-09-17T20:14:45Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":53,\"http.remote_addr\":\"172.28.0.2:57260\",\"http.user_agent\":\"\",\"trace_id\":\"c8de2d517ebd449ca4816cb32b4e1667\",\"request_id\":\"b22920a9-815b-40c6-af8f-37223a965aac\",\"time\":\"2026-09-17T20:15:40Z\",\"message\":\"request completed\"}\n{\"level\":\"warn\",\"time\":\"2026-09-17T20:16:39Z\",\"message\":\"reset cycle took 13.042905491s, longer than the 10s worker interval (0 rate limits, 0 budgets reset): reset cadence has slipped and persisted last_reset will lag the window boundary\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":103,\"http.remote_addr\":\"172.28.0.2:49658\",\"http.user_agent\":\"\",\"trace_id\":\"ee53b7d6ea5d43fc9ba27f956b99f1e1\",\"request_id\":\"8972ebd2-0260-4088-b889-8688b3c9d649\",\"time\":\"2026-09-17T20:16:39Z\",\"message\":\"request completed\"}\n{\"level\":\"info\",\"http.method\":\"POST\",\"http.target\":\"/openai/v1/responses\",\"http.status_code\":200,\"http.request_duration_ms\":28,\"http.remote_addr\":\"172.28.0.2:49666\",\"http.user_agent\":\"\",\"trace_id\":\"3272ca6fa9ce4a7b94e690e6cb0886b5\",\"request_id\":\"edeb826f-7442-4cc4-869f-516587551f1f\",\"time\":\"2026-09-17T20:16:40Z\",\"message\":\"request completed\"}",
+  "interruption_reason": "Agent intentionally stopped only the mock container created by this pilot invocation to replace slow per-case Docker exec with a single suite process. Exit 137 is infrastructure run control, not Bifrost/provider or OOM evidence. The original container state was removed by the pilot finally block before OOMKilled was queried.",
+  "matrix_complete": false
+}

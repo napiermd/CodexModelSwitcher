@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic Azure contract only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "live_azure_tested": false,
+  "retry_owner": "bifrost",
+  "max_retries": 1,
+  "client_total_deadline_seconds": 12,
+  "evidence_capture": "Recovered selected fields verbatim from the completed --suite stdout after cleanup timed out before the original driver saved its report. No request bodies reconstructed.",
+  "matrix_complete": true,
+  "passed": 14,
+  "failed": 3,
+  "cases": [
+    {
+      "case": "basic",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 330.36,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "stream",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 23.09,
+      "first_output_ms": 23.04,
+      "failed_checks": []
+    },
+    {
+      "case": "image",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 7.48,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "custom_tool",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 21.65,
+      "first_output_ms": 21.54,
+      "failed_checks": []
+    },
+    {
+      "case": "custom_history",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 15.09,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "function_history",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 64.96,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "reasoning_history",
+      "passed": false,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 295.97,
+      "first_output_ms": null,
+      "failed_checks": [
+        "history_preserved"
+      ]
+    },
+    {
+      "case": "previous_response",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 158.01,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "error429",
+      "passed": false,
+      "upstream_attempts": 2,
+      "http_status": 504,
+      "elapsed_ms": 7482.41,
+      "first_output_ms": null,
+      "failed_checks": [
+        "recovered"
+      ]
+    },
+    {
+      "case": "error500",
+      "passed": true,
+      "upstream_attempts": 2,
+      "http_status": 200,
+      "elapsed_ms": 200.68,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "error502",
+      "passed": true,
+      "upstream_attempts": 2,
+      "http_status": 200,
+      "elapsed_ms": 186.71,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "error503",
+      "passed": true,
+      "upstream_attempts": 2,
+      "http_status": 200,
+      "elapsed_ms": 235.46,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "error529",
+      "passed": true,
+      "upstream_attempts": 2,
+      "http_status": 200,
+      "elapsed_ms": 281.54,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "pre_output_failure",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 400,
+      "elapsed_ms": 85.4,
+      "first_output_ms": null,
+      "failed_checks": []
+    },
+    {
+      "case": "partial_failure",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 29.86,
+      "first_output_ms": 26.27,
+      "failed_checks": []
+    },
+    {
+      "case": "cancel",
+      "passed": true,
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 21.09,
+      "first_output_ms": 21.08,
+      "failed_checks": [],
+      "limitation": "The original mock used a shared disconnect flag. The final harness attributes disconnects only to the cancel case; that stricter assertion has not been rerun through Bifrost. Treat this original pass as provisional."
+    },
+    {
+      "case": "stall",
+      "passed": false,
+      "upstream_attempts": 1,
+      "http_status": 504,
+      "elapsed_ms": 14301.28,
+      "first_output_ms": null,
+      "failed_checks": [
+        "bounded_deadline"
+      ]
+    }
+  ],
+  "all_synthetic_gates_passed": false,
+  "content_audit_complete": false,
+  "container_state": "OOMKilled/exit state unavailable after removal; no memory-pressure conclusion can be drawn.",
+  "cleanup_error": "docker rm -f -v harbor-bifrost-pilot-7a430183a4-azure timed out after 60 seconds. Subsequent docker ps -a --filter name=harbor-bifrost-pilot returned no containers; exact inspect of the mock returned no such object.",
+  "previous_interruption": "Prior run exited 137 because this agent intentionally stopped only that run\u2019s mock container to replace per-case docker exec with a batch. Not a measured provider or OOM failure.",
+  "production_decision": "no-go: compatibility/deadline checks unresolved and live Azure parity/latency unverified",
+  "final_harness_full_suite_rerun": false,
+  "focused_diagnostic_report": "experiments/bifrost/results.focused.json"
+}

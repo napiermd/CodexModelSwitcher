@@ -25,6 +25,21 @@ final class AzureProviderTests: XCTestCase {
         try AzureDeployment(name: "coding-prod_1.2").validate()
     }
 
+    func testDiscoveryUsesResourceDeploymentEndpointAndKeepsKeyOutOfURL() throws {
+        let request = try AzureAPI.discoveryRequest(endpoint: "https://fixture.openai.azure.com/openai/v1/", key: "synthetic-key")
+        XCTAssertEqual(request.url?.absoluteString, "https://fixture.openai.azure.com/openai/deployments?api-version=2023-03-15-preview")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "api-key"), "synthetic-key")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.timeoutInterval, 20)
+    }
+
+    func testDiscoveryListsOnlyReadyDeploymentNamesNotBaseModels() throws {
+        let response = Data(#"{"data":[{"id":"coding-prod","model":"base-model","status":"succeeded"},{"id":"building","status":"creating"},{"id":"failed","status":"failed"},{"id":"../unsafe","status":"succeeded"},{"id":"base-only","object":"model"},{"id":"coding-prod","status":"succeeded"},{"id":"fast"}]}"#.utf8)
+        XCTAssertEqual(try AzureAPI.deploymentNames(response), ["coding-prod", "fast"])
+        XCTAssertEqual(try AzureAPI.deploymentNames(Data(#"{"data":[]}"#.utf8)), [])
+        XCTAssertThrowsError(try AzureAPI.deploymentNames(Data(#"{"unexpected":[]}"#.utf8)))
+    }
+
     func testCheckUsesExactDeploymentAndSelectedCapabilities() throws {
         let model = AzureDeployment(name: "my-deployment", effort: "medium", context: 128000, vision: true)
         let body = AzureAPI.verificationBody(model)

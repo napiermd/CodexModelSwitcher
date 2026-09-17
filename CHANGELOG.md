@@ -4,6 +4,8 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
+
 ### Azure OpenAI
 
 - Added direct Azure Responses routing with resource endpoint and exact deployment names, macOS Keychain storage, and a billable tool-call connection check.

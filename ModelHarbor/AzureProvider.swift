@@ -49,6 +49,53 @@ enum AzureAPI {
         return key
     }
 
+    static func discoveryRequest(endpoint: String, key: String) throws -> URLRequest {
+        let base = try self.endpoint(endpoint)
+        var parts = URLComponents(url: base, resolvingAgainstBaseURL: false)!
+        parts.path = "/openai/deployments"
+        parts.queryItems = [URLQueryItem(name: "api-version", value: "2023-03-15-preview")]
+        var request = URLRequest(url: parts.url!, timeoutInterval: 20)
+        request.setValue(try validateKey(key), forHTTPHeaderField: "api-key")
+        return request
+    }
+
+    static func deploymentNames(_ bytes: Data) throws -> [String] {
+        guard let result = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let rows = result["data"] as? [[String: Any]] else {
+            throw ProviderError.message("Azure did not return deployment names. Enter the exact name from Azure manually.")
+        }
+        let names = rows.compactMap { row -> String? in
+            guard let name = row["id"] as? String,
+                  row["object"] as? String != "model",
+                  (row["status"] as? String).map({ $0.lowercased() == "succeeded" }) ?? true,
+                  (try? AzureDeployment(name: name).validate()) != nil else { return nil }
+            return name
+        }
+        return Array(Set(names)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    static func discoverDeployments(endpoint: String, key: String) async throws -> [String] {
+        let request = try discoveryRequest(endpoint: endpoint, key: key)
+        let session = session(timeout: 20)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw ProviderError.message("Azure did not return an HTTP response.") }
+        switch http.statusCode {
+        case 200: return try deploymentNames(bytes)
+        case 401, 403: throw ProviderError.message("Azure rejected this key or resource access. Check that the key belongs to this endpoint.")
+        case 429: throw ProviderError.message("Azure is limiting deployment discovery. Wait briefly or enter a deployment name manually.")
+        default: throw ProviderError.message("This Azure resource does not expose deployment discovery (HTTP \(http.statusCode)). Enter the exact deployment name from Azure manually.")
+        }
+    }
+
+    private static func session(timeout: TimeInterval) -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        return URLSession(configuration: configuration, delegate: AzureNoRedirect(), delegateQueue: nil)
+    }
+
     static func verificationBody(_ deployment: AzureDeployment) -> [String: Any] {
         var body: [String: Any] = [
             "model": deployment.name, "store": false, "stream": false, "max_output_tokens": 4096,
@@ -74,7 +121,7 @@ enum AzureAPI {
         request.setValue(credential, forHTTPHeaderField: "api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: verificationBody(deployment))
-        let session = URLSession(configuration: .ephemeral, delegate: AzureNoRedirect(), delegateQueue: nil)
+        let session = session(timeout: 60)
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ProviderError.message("Azure did not return an HTTP response.") }
@@ -90,6 +137,7 @@ enum AzureAPI {
             }
             throw ProviderError.message("Azure returned HTTP \(http.statusCode). \(guidance)")
         }
+        try Task.checkCancellation()
         try validateResponse(bytes)
     }
 

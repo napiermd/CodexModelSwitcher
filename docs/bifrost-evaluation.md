@@ -10,7 +10,7 @@ Bifrost remains a candidate for an Azure transport behind Harbor. Harbor would s
 
 ## Reproduce the candidate
 
-`experiments/bifrost/pin.json` records image tag v2.2.0, immutable ARM64/AMD64 digests, source tag `transports/v2.2.0`, and source commit `ed79592fc4771f12f2717dd7c9ab668e663a08f3`. Both platform digests were pulled and executed in separate experiments: ARM64 for the original converted-route study, AMD64 for the native passthrough CI run. Each successful report verified the v2.2.0 startup banner. The Python helper image is also pinned. Native passthrough on ARM64 remains unverified because its local attempt failed during startup. See `experiments/bifrost/README.md` for commands.
+`experiments/bifrost/pin.json` records image tag v2.2.0, immutable ARM64/AMD64 digests, source tag `transports/v2.2.0`, and source commit `ed79592fc4771f12f2717dd7c9ab668e663a08f3`. Both platform digests were pulled and executed in separate experiments: ARM64 for the original converted-route study, AMD64 for the native passthrough CI run. Each successful report verified the v2.2.0 startup banner. The Python helper image is also pinned. Native passthrough subsequently passed three complete ARM64 matrices on a hosted Linux runner; the local Colima startup failure remains unresolved and separate. See `experiments/bifrost/README.md` for commands.
 
 This is the OSS image without an enterprise license. The source license is Apache 2.0. The release README describes clustering and other advanced deployment features as enterprise capabilities. This experiment does not depend on, test, or establish licensing for those features.
 
@@ -94,15 +94,36 @@ All **24 cases passed**, including the complete-matrix, expected-version, conten
 
 The dedicated workflow fails if the full matrix, content/version gates, or cleanup fail. It publishes no host ports, uses only synthetic credentials and internal Docker networking, and retains the report on failure. These checks do not enable production adoption automatically.
 
+### Repeated native ARM64 and AMD64 results
+
+Actions run `35277669718`, at PR head `30b5ef067a1a5ec25b1926350b91540ec9fbf7eb`, ran the full native matrix three times on each architecture. All six 24-case matrices passed, for 144 case executions. Each sample used a fresh candidate, exact architecture image pin, content/version checks, and verified cleanup. Runner architecture was asserted before pulling; the result image was checked against that architecture's pin. Both jobs checked out GitHub merge commit `eccf50640b32aa01fd809af6811ada00514f1b90`.
+
+`results.passthrough-arm64-ci.json` is the unchanged first ARM64 report. `results.passthrough-matrix-ci.json` records all six report hashes, original selected observations, run/checkout provenance, and artifact names. Complete report artifacts remain in the Actions run under its 14-day retention policy.
+
+| Architecture | Samples | Stalled-request 504 | Upstream cancellation observed |
+| --- | --- | --- | --- |
+| AMD64 | 3 | 3,005.41–3,005.98 ms | 500.73–501.04 ms |
+| ARM64 | 3 | 3,002.32–3,003.09 ms | 500.58–500.98 ms |
+
+These ranges describe six synthetic observations on hosted Linux runners. They are not a tail-latency bound, a real Azure benchmark, or proof that the constrained local Colima host can run the pilot reliably. The read-only local VM check before this run showed only 91 MiB available and no swap; no local container was started.
+
 ### Local native-surface startup failure
 
 `experiments/bifrost/results.passthrough-startup-failed.json` records the September 17 attempt. Docker's start command exceeded 60 seconds even though later inspection showed the candidate running and still starting its health check. No test request was sent and zero matrix rows were produced. Subsequent host Docker inspections and cleanup commands timed out. A Docker query through the running Colima VM later confirmed both invocation-owned containers absent. The report retains original cleanup errors and records the follow-up separately.
 
 The VM diagnostic at 14:06 PDT reported 7,922 MiB total memory, 308 MiB available, and no swap. This is a host constraint observed after the failure, not proof of its cause. No other containers, VM settings, installed apps, or live routes were changed. The subsequent AMD64 CI run passed in isolation, as recorded above. The local ARM64 startup failure is retained and does not become a transport pass.
 
+## Retry ownership at the Harbor boundary
+
+`Tests/test_azure_provider.py` now exercises the real Harbor HTTP handler for 429 and 503 with numeric, HTTP-date, missing, and malformed `Retry-After` headers. Across eight combinations and sixteen explicit client requests, each request makes exactly one upstream attempt, preserves the raw status/header/body, closes the error body, and retains the Azure credential. This verifies transparent forwarding. It does not implement or prove a parsed backoff schedule.
+
+The isolated native Bifrost probe also has zero client retries and `max_retries=0` at Bifrost. That is a bounded attempt policy for this experiment. It is not the effective policy of an existing desktop task. `harbor_team.py` writes both Codex retry settings as zero for its managed worker configuration, whereas `CodexConfigWriter.swift` does not set them in the desktop provider stanza. OpenAI's configuration sample documents defaults of four request retries and five stream retries. The installed desktop host's effective values and recovery behavior still require an isolated, version-matched caller test; do not multiply these settings into a claimed exact upstream-attempt limit.
+
+The Azure branch in `grok_adapter.py` currently opens one upstream request with a 180-second socket timeout and has no Azure admission semaphore, bounded queue, or total queue-to-completion deadline. Baseten's existing pacing code is a separate branch. A socket timeout and a turn-ownership journal are not a swarm scheduling policy. Candidate integration must specify admission capacity, queue capacity, cancellation, one retry owner, and a total deadline before changing live routing.
+
 ## Remaining gates
 
-1. The native AMD64 surface now bypasses the observed encrypted-history and retry failures and passes the complete synthetic matrix with durable diagnostics/content checks. Still verify the intended deployment platform and repeated deadline measurements; the local ARM64 startup failure remains unresolved.
+1. The native ARM64 and AMD64 surfaces pass three complete synthetic matrices each, bypassing the observed converted-route history/retry failures with durable diagnostics and content checks. Real deployment environment behavior remains unverified; the local Colima startup failure is unresolved. The measured synthetic samples do not establish real-provider latency bounds.
 2. Synthetic invalid authentication, three concurrent workers, opaque event forms, and token-count fidelity now pass. Complete coverage against actual Codex request/event fixtures, bounded queue/pacing behavior, and monetary cost provenance. Verify immutable pin provenance in the eventual deployment process.
 3. Compare an isolated Azure deployment against the existing Harbor route using synthetic content and secure credential handoff. Measure matched repeated first-output/total-latency distributions, errors, cancellation, and retry timing; record sample sizes. No such benchmark is claimed here.
 4. Establish response-ID/connection affinity and one retry owner across the client, Harbor, Bifrost, and upstream. Never automatically retry after partial tool/text output.
@@ -114,6 +135,8 @@ The VM diagnostic at 14:06 PDT reported 7,922 MiB total memory, 308 MiB availabl
 - [SAY-3346](https://linear.app/sayvant/issue/SAY-3346): honor Retry-After and prove bounded retry/cancellation behavior.
 
 ## Primary sources
+
+- [OpenAI configuration sample](https://learn.chatgpt.com/docs/config-file/config-sample), read September 17, 2026: documented provider retry defaults; not evidence of the running desktop host's effective configuration.
 
 - `https://github.com/maximhq/bifrost/tree/transports/v2.2.0`
 - `https://raw.githubusercontent.com/maximhq/bifrost/transports/v2.2.0/LICENSE`

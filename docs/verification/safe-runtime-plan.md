@@ -42,11 +42,11 @@ Selected the retained service as the first unit, with durable ownership and veri
 - [x] Signed staging and independent gateway lifetime implementation prepared for review; installed runtime left intact.
 - [x] Persistent unfinished-turn ownership, authenticated control, and credential-generation readiness guards implemented.
 - [x] Current CI passed 258 Python tests, 71 Swift tests, app build, 10 packaged lifecycle tests, staging, and site checks.
-- [x] Exact pinned Bifrost native Azure passthrough passed the complete 24-case synthetic contract matrix on AMD64, including strict cancellation, opaque history/events, error attempt counts, token fidelity, and three-worker correlation.
+- [x] Exact pinned Bifrost native Azure passthrough passed three complete 24-case synthetic contract matrices on each of AMD64 and ARM64 (144 case executions), including strict cancellation, opaque history/events, error attempt counts, token fidelity, and three-worker correlation.
 - [x] Preserve unchanged transport report and hash/run provenance; retain earlier converted-route failures and local startup failure as separate evidence.
 - [ ] Establish authoritative completion events for existing desktop tasks (SAY-3341).
 - [ ] Implement and verify promotion/draining/rollback against that lifecycle feed (SAY-3343); complete the dependent matrix (SAY-3342).
-- [ ] Complete real Azure continuation and matched performance checks, intended-platform verification, bounded queue/pacing, cost provenance, and layered retry/affinity evaluation (SAY-3344–SAY-3346).
+- [ ] Complete real Azure continuation and matched performance checks, local deployment-environment verification, bounded queue/pacing, cost provenance, and layered retry/affinity evaluation (SAY-3344–SAY-3346).
 - [ ] Coordinate the first installed migration after affected tasks are paused or finished.
 
 This checkpoint records completed work without marking the original completion predicate achieved.

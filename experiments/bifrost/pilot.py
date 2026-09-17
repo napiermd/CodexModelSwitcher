@@ -273,7 +273,8 @@ def decode_frame(lines):
         return None
 
 
-def perform(port, body, cancel=False, host="127.0.0.1", surface="converted"):
+def perform(port, body, cancel=False, host="127.0.0.1", surface="converted",
+            on_sent=None, on_event=None):
     start = time.monotonic()
     conn = http.client.HTTPConnection(host, port, timeout=DEADLINE)
     transport_socket = [None]
@@ -292,6 +293,8 @@ def perform(port, body, cancel=False, host="127.0.0.1", surface="converted"):
         conn.connect()
         transport_socket[0] = conn.sock
         conn.request('POST', SURFACES[surface]['path'], json.dumps(body), {'Content-Type': 'application/json'})
+        if on_sent is not None:
+            on_sent()
         response = conn.getresponse()
         status = response.status
         headers = dict(response.getheaders())
@@ -307,6 +310,8 @@ def perform(port, body, cancel=False, host="127.0.0.1", surface="converted"):
                 if event is None:
                     continue
                 events.append(event)
+                if on_event is not None:
+                    on_event(event)
                 event_type = event.get('type')
                 if event_type in ('response.output_text.delta', 'response.custom_tool_call_input.delta') and event.get('delta'):
                     if first_token is None:
@@ -439,12 +444,16 @@ def evaluate(case, body, result, seen, surface="converted"):
             'retry_gap_ms': round((attempts[1]['at'] - attempts[0]['at']) * 1000, 2) if len(attempts) > 1 else None}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(study=None):
+    case_names = study.CASES if study is not None else CASES
+    parser = argparse.ArgumentParser(description=study.SCOPE if study is not None else __doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', choices=CASES)
-    parser.add_argument('--surface', choices=SURFACES, default='converted')
+    parser.add_argument('--cases', nargs='+', choices=case_names)
+    parser.add_argument('--surface', choices=SURFACES,
+                        default='azure-passthrough' if study is not None else 'converted')
     args = parser.parse_args()
+    if study is not None and args.surface != 'azure-passthrough':
+        parser.error('This study requires native Azure passthrough')
     pin = json.loads((HERE / 'pin.json').read_text())
     arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64'}.get(platform.machine())
     if arch not in pin['images']:
@@ -452,7 +461,7 @@ def main():
     image = pin['images'][arch]
     name = 'harbor-bifrost-pilot-' + uuid.uuid4().hex[:10]
     mock_name, network = name + '-azure', name + '-network'
-    result = {'schema_version': 2, 'scope': 'synthetic Azure contract only', 'pin': pin,
+    result = {'schema_version': 2, 'scope': study.SCOPE if study is not None else 'synthetic Azure contract only', 'pin': pin,
               'image': image, 'live_azure_tested': False, 'surface': args.surface,
               'route': SURFACES[args.surface]['path'], 'retry_owner': SURFACES[args.surface]['retry_owner'],
               'max_retries': SURFACES[args.surface]['max_retries'],
@@ -474,19 +483,24 @@ def main():
         root.chmod(0o755)
         (root/'empty.json').write_text('{}')
         (root/'empty-list.json').write_text('[]')
-        (root/'config.json').write_text(json.dumps(config('http://' + mock_name + ':8081', args.surface)))
+        provider_config = config('http://' + mock_name + ':8081', args.surface)
+        if study is not None:
+            provider_config = study.configure(provider_config)
+        (root/'config.json').write_text(json.dumps(provider_config))
         try:
             docker('network', 'create', '--internal', network)
             network_created = True
             docker('create', '--name', mock_name, '--network', network, '--cap-drop', 'ALL',
                    '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m',
                    '-e', 'HOME=/tmp', pin['mock_image'],
-                   'python3', '/tmp/mock_server.py')
+                   'python3', *(['/tmp/' + study.SCRIPT, '--mock'] if study is not None else ['/tmp/mock_server.py']))
             created.append(mock_name)
             docker('cp', str(HERE) + '/.', mock_name + ':/tmp/')
             docker('start', mock_name)
             def probe(*arguments):
-                return json.loads(docker('exec', mock_name, 'python3', '/tmp/probe.py', *arguments, timeout=180))
+                return json.loads(docker('exec', mock_name, 'python3',
+                                        '/tmp/' + study.SCRIPT if study is not None else '/tmp/probe.py',
+                                        *arguments, timeout=180))
             def mock_snapshot():
                 return probe('--snapshot')
             docker('create', '--name', name, '--network', network, '--init',
@@ -503,8 +517,8 @@ def main():
                 time.sleep(.2)
             else:
                 raise RuntimeError('Pinned Bifrost failed health readiness')
-            cases = args.cases or list(CASES)
-            result['expected_case_names'] = list(CASES)
+            cases = args.cases or list(case_names)
+            result['expected_case_names'] = list(case_names)
             result.update(probe('--suite', name, args.surface, json.dumps(cases)))
             result['requested_cases_complete'] = [row.get('case') for row in result['cases']] == cases
             result['matrix_complete'] = not args.cases and result['requested_cases_complete']

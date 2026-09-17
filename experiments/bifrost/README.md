@@ -33,6 +33,18 @@ The driver creates uniquely named containers and an internal Docker network. It 
 
 The image and synthetic request fixtures are the only inputs. The configuration uses local empty pricing/model/MCP catalogs, a synthetic Azure key, disabled request/response body logging (metadata access logs may remain), disabled content override headers, disabled semantic cache and telemetry plugins, two model-scoped synthetic Azure keys (one deliberately invalid), and no fallbacks. The selected surface defines the retry policy described above. The Python client never retries and schedules a 12-second total request deadline; the report separately checks observed elapsed time, which can exceed that target under scheduling or transport delays. The test additionally checks observed upstream attempt counts.
 
+## Provider pressure study
+
+Run the separate two-case admission experiment against the same pinned native transport:
+
+```sh
+python3 -B experiments/bifrost/pressure_pilot.py --surface azure-passthrough --output /tmp/harbor-bifrost-pressure.json
+```
+
+This sets provider concurrency to one, buffer size to one, and `drop_excess_requests=true`. The first case holds a request before headers while two followers compete for the single buffer slot. It requires one queued completion, one queue-full 503 with no upstream attempt, and exact response correlation. The second case holds a stream open after a delivered text delta and observes whether another stream delivers before the first is released.
+
+A passing pressure report means the observation is complete. `pacing_verified` remains false. If both upstream and client observe overlapping streams, `active_stream_bound_disproved` is true: the worker setting did not limit established streams to one. An observation of no overlap within two seconds alone does not prove a lifetime bound. This experiment does not claim fairness, admission deadlines for real workloads, or a production scheduler. The CI matrix retains `pressure.json` beside the three native contract samples and hashes it in `provenance.json`.
+
 ## What is checked
 
 - JSON and streamed Responses, Azure path and deployment alias, and API-key forwarding.
@@ -59,8 +71,8 @@ The JSON report records failed checks and missing gates directly. `all_requested
 
 Twenty-seven hermetic tests cover the driver and protocol assertions. The first September 17 native-surface attempt on local ARM64 failed during `docker start`, before any test request; `results.passthrough-startup-failed.json` records that failure and the verified cleanup follow-up.
 
-The subsequent isolated GitHub Actions run `35275679952` passed all 24 native-surface cases on the pinned AMD64 image, including content/version and cleanup gates. `results.passthrough-ci.json` is the unchanged report artifact, and its adjacent provenance JSON records its hash and run identity. The workflow is `.github/workflows/bifrost-pilot.yml`; it runs when the pilot changes in a pull request and is also manually dispatchable after the workflow is on the default branch. These are synthetic transport measurements, not real Azure model latency or billed-cost measurements. Native passthrough on local ARM64 remains unverified.
+The subsequent isolated GitHub Actions run `35275679952` passed all 24 native-surface cases on the pinned AMD64 image, including content/version and cleanup gates. `results.passthrough-ci.json` is the unchanged report artifact, and its adjacent provenance JSON records its hash and run identity. The workflow is `.github/workflows/bifrost-pilot.yml`; it runs when the pilot changes in a pull request and is also manually dispatchable after the workflow is on the default branch. These are synthetic transport measurements, not real Azure model latency or billed-cost measurements. A later hosted Linux ARM64 run passed three complete matrices; the local Colima startup failure remains unresolved.
 
-The current CI workflow assigns separate native AMD64 and ARM64 runners. Each runs three complete matrices sequentially with a fresh candidate per sample. Artifacts are named `bifrost-native-contract-amd64` and `bifrost-native-contract-arm64`; each includes the unchanged sample reports and a generated provenance file with the actual checkout SHA and report hashes. The gate requires the assigned architecture, matching immutable image, all three complete passes, and verified cleanup. Repeated synthetic measurements do not establish real Azure latency distributions.
+The current CI workflow assigns separate native AMD64 and ARM64 runners. Each runs three complete matrices sequentially with a fresh candidate per sample. Artifacts are named `bifrost-native-contract-amd64` and `bifrost-native-contract-arm64`; each includes the unchanged sample reports and a generated provenance file with the actual checkout SHA and report hashes. The gate requires the assigned architecture, matching immutable image, all three complete passes, and verified cleanup. Run `35277669718` passed all three samples on each architecture, or 144 case executions. `results.passthrough-matrix-ci.json` retains run/checkout provenance, six report hashes, and selected original timing observations; `results.passthrough-arm64-ci.json` is the unchanged first ARM64 report. Repeated synthetic measurements do not establish real Azure latency distributions.
 
 Read `docs/bifrost-evaluation.md` for the decision and limitations. Keep production routing unchanged until the required live Azure comparison and runtime/lifecycle work are complete.

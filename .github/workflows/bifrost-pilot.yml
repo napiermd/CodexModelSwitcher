@@ -4,6 +4,7 @@ on:
     paths:
       - 'experiments/bifrost/**'
       - 'Tests/test_bifrost_pilot.py'
+      - 'Tests/test_bifrost_pressure.py'
       - '.github/workflows/bifrost-pilot.yml'
   workflow_dispatch:
 permissions:
@@ -51,7 +52,10 @@ jobs:
           for sample in 1 2 3; do
             python3 -B experiments/bifrost/pilot.py --surface azure-passthrough --output "$REPORT_DIR/sample-$sample.json"
           done
-      - name: Require complete conformance evidence
+      - name: Measure bounded buffer and established stream behavior
+        run: |
+          python3 -B experiments/bifrost/pressure_pilot.py --surface azure-passthrough --output "$REPORT_DIR/pressure.json"
+      - name: Require complete conformance and pressure evidence
         if: always()
         run: |
           python3 - <<'PY'
@@ -77,10 +81,24 @@ jobs:
               assert report['surface'] == 'azure-passthrough' and report['max_retries'] == 0
               assert report['all_synthetic_gates_passed'], 'Native transport conformance failed; see report'
               assert not report['cleanup_errors'], 'Pilot cleanup was not verified'
+          pressure_path = directory / 'pressure.json'
+          pressure = json.loads(pressure_path.read_text())
+          assert pressure['image'] == expected_image
+          assert pressure['surface'] == 'azure-passthrough' and pressure['max_retries'] == 0
+          assert pressure['study'] == 'provider-pressure'
+          assert pressure['provider_limits'] == {'concurrency': 1, 'buffer_size': 1, 'drop_excess_requests': True}
+          assert [row['case'] for row in pressure['cases']] == ['queue_capacity', 'stream_lifetime']
+          assert pressure['all_synthetic_gates_passed'], 'Pressure observation incomplete; see report'
+          assert not pressure['cleanup_errors'], 'Pressure cleanup was not verified'
+          assert pressure['pacing_verified'] is False, 'A complete observation is not a pacing guarantee'
+          pressure_summary = {'report_sha256': hashlib.sha256(pressure_path.read_bytes()).hexdigest(),
+                              'all_synthetic_gates_passed': pressure['all_synthetic_gates_passed'],
+                              'pacing_verified': pressure['pacing_verified'], 'cases': pressure['cases']}
+          print(json.dumps(pressure_summary, indent=2))
           provenance = {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                         'repository': os.environ['GITHUB_REPOSITORY'], 'architecture': os.environ['EXPECTED_ARCH'],
                         'checkout_sha': subprocess.check_output(['git', 'rev-parse', '--verify', 'HEAD'], text=True).strip(),
-                        'live_azure_tested': False, 'samples': summaries}
+                        'live_azure_tested': False, 'samples': summaries, 'pressure': pressure_summary}
           (directory / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
           PY
       - name: Retain synthetic report

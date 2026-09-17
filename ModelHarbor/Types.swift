@@ -120,6 +120,7 @@ struct AppData: Codable {
     var openAIAccounts: [OpenAIAccount]
     var selectedOpenAIAccountID: String?
     var modelReasoningEffort: ReasoningEffort
+    var modelPicker: ModelPickerPreferences
 
     static let empty = AppData(services: [], selectedModel: nil)
 
@@ -129,7 +130,8 @@ struct AppData: Codable {
         openAIAccounts: [OpenAIAccount] = [],
         selectedOpenAIAccountID: String? = nil,
         modelReasoningEffort: ReasoningEffort = .medium,
-        legacyModel: SelectedModel? = nil
+        legacyModel: SelectedModel? = nil,
+        modelPicker: ModelPickerPreferences = ModelPickerPreferences()
     ) {
         self.services = services
         self.selectedModel = selectedModel
@@ -137,6 +139,7 @@ struct AppData: Codable {
         self.openAIAccounts = openAIAccounts
         self.selectedOpenAIAccountID = selectedOpenAIAccountID
         self.modelReasoningEffort = modelReasoningEffort
+        self.modelPicker = modelPicker
     }
 
     enum CodingKeys: String, CodingKey {
@@ -146,6 +149,7 @@ struct AppData: Codable {
         case openAIAccounts
         case selectedOpenAIAccountID
         case modelReasoningEffort
+        case modelPicker
     }
 
     init(from decoder: Decoder) throws {
@@ -156,6 +160,7 @@ struct AppData: Codable {
         openAIAccounts = try container.decodeIfPresent([OpenAIAccount].self, forKey: .openAIAccounts) ?? []
         selectedOpenAIAccountID = try container.decodeIfPresent(String.self, forKey: .selectedOpenAIAccountID)
         modelReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .modelReasoningEffort) ?? .medium
+        modelPicker = try container.decodeIfPresent(ModelPickerPreferences.self, forKey: .modelPicker) ?? ModelPickerPreferences()
     }
 }
 

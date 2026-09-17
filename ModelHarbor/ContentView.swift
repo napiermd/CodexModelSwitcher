@@ -166,14 +166,19 @@ struct ContentView: View {
             }.buttonStyle(.plain).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.accentColor)
             Divider()
             if let service, !service.models.isEmpty {
-                HStack { Text("Models").font(.system(size: 12, weight: .semibold)); Spacer(); Text("\(service.models.count) available").font(.caption).foregroundStyle(.secondary) }
+                HStack {
+                    Text(focusedProvider == "azure" ? "Deployments in Codex" : "Models").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Button("Manage models…") { store.clearError(); settingsTab = "Models"; page = "settings" }.font(.caption)
+                }
                 VStack(spacing: 0) {
                     ForEach(service.models) { model in
                         HStack(spacing: 9) {
                             Image(systemName: "cube").font(.system(size: 12)).foregroundStyle(.secondary)
                             Text(displayName(model)).font(.system(size: 13)).lineLimit(2)
                             Spacer(minLength: 8)
-                            Text(effortLabel(model)).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                            Text(store.data.modelPicker.isVisible(SelectedModel(serviceID: service.id, modelID: model.id)) ? effortLabel(model) : "Hidden in Codex")
+                                .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                         }.padding(.vertical, 7).accessibilityElement(children: .combine)
                     }
                 }
@@ -256,7 +261,7 @@ struct ContentView: View {
 
     private var settings: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Picker("Settings section", selection: $settingsTab) { ForEach(["General", "Menu bar", "Providers", "Advanced"], id: \.self) { Text($0) } }.pickerStyle(.segmented).labelsHidden()
+            Picker("Settings section", selection: $settingsTab) { ForEach(["General", "Menu bar", "Models", "Providers", "Advanced"], id: \.self) { Text($0) } }.pickerStyle(.segmented).labelsHidden()
             if settingsTab == "General" {
                 GeneralSettingsView()
             } else if settingsTab == "Menu bar" {
@@ -272,6 +277,12 @@ struct ContentView: View {
                 }))
                 Button("Connect CodexBar history…") { store.connectCodexBarHistory() }
                 Text("Usage checks reuse existing sign-ins and unlocked keys. They never open 1Password. CodexBar history includes local token-value estimates and its selected Claude account.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if settingsTab == "Models" {
+                ModelsSettingsView { providerID in
+                    if providerID == "azure" { store.clearError(); page = "azure" }
+                    else if providerID == "openrouter" { beginOpenRouter() }
+                    else { store.clearError(); page = "add" }
+                }
             } else if settingsTab == "Providers" {
                 Text("Visible providers").font(.headline)
                 ForEach(ProviderDefinition.all) { entry in
@@ -282,7 +293,7 @@ struct ContentView: View {
                         if hidden.contains(focusedProvider) { focusedProvider = ProviderDefinition.all.first { !hidden.contains($0.id) }!.id }
                     }))
                 }
-                Text("Hiding a provider removes its Harbor tab. Its credentials and existing task routes stay available.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("These switches control Harbor tabs. Use Settings → Models to hide models from Codex. Connections and existing task routes stay available.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Divider()
                 Text("Connections").font(.headline)
                 ForEach(ProviderDefinition.all) { entry in
@@ -308,13 +319,6 @@ struct ContentView: View {
                 Text(store.pendingTaskRepairs > 0 ? "\(store.pendingTaskRepairs) routes are waiting for their tasks to become inactive." : (store.taskRepairState == "error" ? "Repair needs attention. Toggle repair off and on to retry." : "Model choices stay with each task."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Divider()
-                Text("New task default").font(.headline)
-                Menu(store.selectedModel?.name ?? "Choose model") {
-                    ForEach(store.data.services.filter { LiveRouting.supports($0.id) }) { service in
-                        Section(LiveRouting.providerName(service.id)) { ForEach(service.models) { model in Button(model.name) { store.select(serviceID: service.id, modelID: model.id) } } }
-                    }
-                }
-                Text("Applies to new tasks. Existing tasks keep their selected model.").font(.caption).foregroundStyle(.secondary)
                 Button("Open Codex configuration") { NSWorkspace.shared.open(AppPaths.codexConfig) }
                 Divider()
                 Text("Model Harbor").font(.headline)

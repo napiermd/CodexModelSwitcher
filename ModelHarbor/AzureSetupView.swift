@@ -79,6 +79,8 @@ struct AzureSetupView: View {
             }
             Divider()
             Text("Add a deployment").font(.headline)
+            Text("Azure hosts the models. Only deployments verified here are added to your Codex picker.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if !deployments.isEmpty {
                 Picker("Deployment", selection: $deploymentName) {
                     Text("Choose a deployment…").tag("")
@@ -90,6 +92,10 @@ struct AzureSetupView: View {
                 .accessibilityLabel("Azure deployment name")
             Text("The deployment name can differ from the model name. Discovery only lists deployments already created in this resource.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Link("Browse Azure's full model catalog ↗", destination: URL(string: "https://ai.azure.com/explore/models")!)
+                .font(.caption)
+            Text("The full catalog includes models you have not deployed. Availability depends on your resource, region and Azure access.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("Deployment options", isExpanded: $advanced) {
                 VStack(alignment: .leading, spacing: 10) {
                     Picker("Reasoning", selection: $effort) {
@@ -107,8 +113,8 @@ struct AzureSetupView: View {
             }
             Divider()
             Toggle("Use for new tasks", isOn: $makeDefault)
-            Toggle("Hide Baseten in Harbor", isOn: $hideBaseten)
-            Text("Existing tasks keep their model. Hidden providers remain configured; show them again in Settings → Providers.")
+            Toggle("Hide Baseten from Harbor and Codex", isOn: $hideBaseten)
+            Text("Existing tasks keep their model. Restore the tab in Settings → Providers and picker entries in Settings → Models.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("Verification sends one small, billable request to test tool calling and the selected options.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -155,10 +161,12 @@ struct AzureSetupView: View {
             defer { startedAt = nil }
             let model = AzureDeployment(name: deploymentName.trimmingCharacters(in: .whitespacesAndNewlines),
                                         effort: effort, context: Int(context) ?? 0, vision: vision)
-            if await store.connectAzure(endpoint: endpoint, key: key, deployment: model, makeDefault: makeDefault) {
+            if await store.connectAzure(endpoint: endpoint, key: key, deployment: model, makeDefault: makeDefault, hideBasetenModels: hideBaseten) {
                 var hidden = Set((UserDefaults.standard.string(forKey: "harbor.hiddenProviders") ?? "").split(separator: ",").map(String.init))
                 hidden.remove("azure")
-                if hideBaseten { hidden.insert("baseten") }
+                if hideBaseten {
+                    hidden.insert("baseten")
+                }
                 UserDefaults.standard.set(hidden.sorted().joined(separator: ","), forKey: "harbor.hiddenProviders")
                 UserDefaults.standard.removeObject(forKey: "harbor.azureEndpointDraft")
                 key = ""

@@ -2,6 +2,12 @@
 
 Model Harbor can route named Azure deployments through the same local bridge as your other providers. Each Codex task keeps its own model choice.
 
+## Model catalog versus your deployments
+
+Azure is the hosting and billing connection. Model authors supply the models; a deployment is a named instance made available through your Azure resource. Harbor sends that deployment name in API requests.
+
+**Find deployments** lists ready deployments from your resource. The **Browse Azure’s full model catalog** link opens Microsoft Foundry’s broader catalog, which includes models from several authors. A catalog listing does not mean your endpoint can call that model: region, resource type, access and a suitable deployment still matter. Harbor adds only the deployments you choose and successfully verify. It does not automatically create Azure deployments or add the full catalog to Codex.
+
 ## Connect
 
 1. Open **Add provider → Azure → Connect** in Harbor.
@@ -9,7 +15,7 @@ Model Harbor can route named Azure deployments through the same local bridge as 
 3. Enter the resource API key in the secure field. It is saved in macOS Keychain and held in memory by the local bridge while Harbor is running.
 4. Click **Find deployments** to check the key and load ready deployments from your resource. Choose one from the picker, or enter its exact name manually if the resource does not expose discovery. This can differ from the underlying model name. Harbor lists deployments, not the separate catalog of base models. Discovery does not create deployments or run inference.
 5. In **Deployment options**, select a reasoning setting, enable image input if supported, and set a context token limit from the deployed model's specifications. The conservative default is 128,000 tokens; it is not a discovered capacity. Deployment default omits reasoning controls from requests.
-6. Choose whether to use this deployment for new tasks and hide Baseten in Harbor.
+6. Choose whether to use this deployment for new tasks and hide Baseten from both Harbor and the Codex picker.
 7. Click **Verify & add deployment**. This sends one small, billable Responses request and requires a completed function call. When image input is enabled, the check also includes a tiny test image. A failed check does not save the new connection. The form shows elapsed time and a Cancel action; discovery stops after 20 seconds and verification after 60 seconds.
 8. Reopen Codex once to load newly added catalog entries. Select the named Azure deployment in an existing Harbor task to move that task to Azure. Existing choices are never migrated automatically.
 
@@ -19,7 +25,11 @@ Only the reasoning setting selected during setup is advertised for that deployme
 
 ## Visibility and defaults
 
-**Settings → Providers → Visible providers** controls the connection tabs and usage picker. Hiding Baseten preserves its key and existing task routes. Choosing Azure as the new-task default affects future tasks; it does not change tasks already using Baseten.
+Open **Settings → Models** or **Manage models…** on a connection page. Turn a provider off to hide all its models from Codex, including models added by future Harbor updates. Individual model checkboxes let you keep a smaller shortlist. Turning a provider back on restores your individual choices. The new-task default must remain visible; choose another default before hiding it.
+
+**Settings → Providers → Visible providers** separately controls Harbor tabs and the usage picker. Hiding models or tabs preserves credentials and existing task routes. Choosing Azure as the new-task default affects future tasks; it does not change tasks already using Baseten.
+
+Codex loads the custom catalog at startup. Reopen Codex when active tasks are finished to refresh the picker after adding or hiding entries. Switching between entries already loaded does not need a restart. Harbor cannot insert an “Add more” action into Codex’s native model menu; model management lives in Harbor.
 
 ## Connection and performance
 

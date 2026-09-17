@@ -52,7 +52,7 @@ Follow the [setup guide](docs/getting-started.md) to connect providers, choose a
 
 Provider access, available models, and charges depend on your accounts. Grok OAuth does not guarantee that every subscription includes CLI access. Harbor supplies no provider credits. OpenRouter is optional and has its own billing.
 
-Use **Add provider → Azure** to add your resource endpoint, key, and deployment name; see [Azure setup](docs/azure.md). Use **Settings → Providers** to hide connections such as Baseten without removing credentials or changing existing tasks. Azure billing and quota are currently viewed in the Azure dashboard.
+Use **Add provider → Azure** to add your resource endpoint, key, and deployment name; see [Azure setup](docs/azure.md). Use **Settings → Models** to choose exactly which models appear in Codex, or hide all Baseten models while retaining the connection. **Settings → Providers** separately controls Harbor tabs. Azure billing and quota are currently viewed in the Azure dashboard.
 
 Use **Add provider → OpenRouter** for the verified-key setup. The **Custom provider** editor supports compatible direct Responses endpoints. Adding another provider to live Harbor routing requires implementation and compatibility checks. See [customization](docs/customization.md).
 
@@ -71,9 +71,10 @@ The provider panel shows connection readiness, active requests, and completed re
 | Settings section | Controls |
 | --- | --- |
 | **General** | Dock/menu-bar presence, close behavior, manual-launch window, launch at login, System/Light/Dark appearance, and optional warm-up. |
-| **Menu bar** | Display mode, icon and provider visibility, usage refresh, and optional CodexBar history. |
-| **Providers** | Connect and manage providers, plus saved Codex accounts. |
-| **Advanced** | New-task default, inactive-task route repair, and confirmed Codex close/reopen actions. |
+| **Menu bar** | Display mode, icon visibility, usage refresh, and optional CodexBar history. |
+| **Models** | Codex picker shortlist, provider and individual model visibility, Azure deployment discovery, and new-task default. |
+| **Providers** | Harbor tab visibility, connections, and saved Codex accounts. |
+| **Advanced** | Inactive-task route repair and confirmed Codex close/reopen actions. |
 
 Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** stops the bridge. Launch at login uses macOS login-item registration and opens quietly.
 

@@ -23,6 +23,21 @@ class TranslationTests(unittest.TestCase):
                     translated = module.Translation({'model': model, 'input': [], 'reasoning': {'effort': effort}})
                     self.assertEqual(translated.request['reasoning']['effort'], effort)
 
+    def test_tool_free_request_drops_stale_tool_choice(self):
+        for supplied_tools in (False, True):
+            source = {
+                'model': 'grok-4.6',
+                'input': [{'role': 'user', 'content': 'Summarize this task'}],
+                'tool_choice': {'type': 'function', 'name': 'exec'},
+            }
+            if supplied_tools:
+                source['tools'] = []
+            for native_tools in (False, True):
+                with self.subTest(supplied_tools=supplied_tools, native_tools=native_tools):
+                    translated = module.Translation(source, native_tools=native_tools)
+                    self.assertFalse(translated.request.get('tools'))
+                    self.assertNotIn('tool_choice', translated.request)
+
     def test_large_group_keeps_every_tool_under_provider_limit(self):
         t=self.translation(446)
         self.assertEqual(len(t.request['tools']),1)

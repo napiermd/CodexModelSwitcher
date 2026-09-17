@@ -5,6 +5,7 @@ This tracks changes to the source preview. It does not announce a notarized inst
 ## Unreleased
 
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
+- Tool-free Codex compaction requests now discard stale tool choices before provider routing, preventing long-running tasks from entering an unrecoverable retry loop at the context limit.
 
 ### Azure OpenAI
 

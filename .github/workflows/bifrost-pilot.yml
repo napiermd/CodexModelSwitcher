@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      REPORT_PATH: ${{ runner.temp }}/bifrost-native-contract.json
+      REPORT_PATH: /tmp/harbor-bifrost-native-contract.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

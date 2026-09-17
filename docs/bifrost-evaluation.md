@@ -164,3 +164,10 @@ The Azure branch in `grok_adapter.py` currently opens one upstream request with 
 - `https://docs.getbifrost.ai/features/retries-and-fallbacks`
 
 The immutable image, source commit, and observed results identify what was exercised. Live documentation is supporting context.
+
+
+### Harbor admission follow-through
+
+The staged Harbor candidate now holds a process-local Azure admission slot until upstream close. Its per endpoint/deployment defaults are two active requests, sixteen FIFO waiters, and a 30-second queue deadline. Gateway verification shares that queue. Twenty scheduler tests and six actual-handler tests cover stream-close barriers, no-dispatch cancellation/timeouts, and preserved readiness. The full local suite passes 298 Python tests.
+
+This is a direct Harbor implementation prompted by the pinned Bifrost pressure finding. It has not been measured as a composed Harbor→Bifrost→Azure route and is not installed. Azure still makes one attempt per explicit gateway request. Caller retry ownership, an overall response deadline, multiple-runtime coordination, and real Azure parity remain open; the production no-go decision is unchanged.

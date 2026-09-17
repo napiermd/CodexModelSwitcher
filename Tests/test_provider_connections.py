@@ -141,9 +141,16 @@ class ProviderConnectionsTests(unittest.TestCase):
     def test_router_auth_rejection_clears_cached_key(self):
         bridge.OPENROUTER_KEY = 'synthetic-router-key'
         error = bridge.urllib.error.HTTPError('https://openrouter.ai/api/v1/responses', 401, 'Unauthorized', {}, io.BytesIO(b'{"error":"Unauthorized"}'))
-        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+        finished = threading.Event()
+        original_finish = bridge.provider_activity_finish
+        def record_finished(*args):
+            original_finish(*args)
+            finished.set()
+        with patch.object(bridge.urllib.request, 'build_opener') as opener, \
+             patch.object(bridge, 'provider_activity_finish', side_effect=record_finished):
             opener.return_value.open.side_effect = error
             status, _ = self.request(path='/harbor/v1/responses', body={'model': 'harbor/openrouter/fixture/coder', 'input': []}, headers={'Authorization': 'Bearer synthetic-owner-token'})
+            self.assertTrue(finished.wait(2), 'Provider activity did not finish after the HTTP error')
         self.assertEqual(status, 401)
         self.assertFalse(bridge.provider_status()['openrouter_ready'])
         self.assertEqual(bridge.provider_status()['activity']['openrouter']['http_status'], 401)

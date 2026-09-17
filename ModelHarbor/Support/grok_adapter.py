@@ -52,6 +52,10 @@ READINESS = _runtime_module.RouteReadiness()
 _control_spec = importlib.util.spec_from_file_location('harbor_gateway_control', pathlib.Path(__file__).with_name('gateway_control.py'))
 _control_module = importlib.util.module_from_spec(_control_spec)
 _control_spec.loader.exec_module(_control_module)
+_admission_spec = importlib.util.spec_from_file_location('harbor_azure_admission', pathlib.Path(__file__).with_name('azure_admission.py'))
+_admission_module = importlib.util.module_from_spec(_admission_spec)
+_admission_spec.loader.exec_module(_admission_module)
+AZURE_ADMISSION = _admission_module.AdmissionQueue()
 
 
 def configuration_revision():
@@ -1021,6 +1025,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
+                               'azure_traffic': AZURE_ADMISSION.snapshot(),
                                'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None,
                                'runtime': RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id},
                                'configuration_revision': configuration_revision()}).encode()
@@ -1061,8 +1066,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return False
 
     def client_disconnected(self):
-        readable, _, _ = select.select([self.connection], [], [], 0)
-        return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+        except (ConnectionResetError, ConnectionAbortedError):
+            return True
 
     def server_proof(self):
         if self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
@@ -1102,13 +1110,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.error(400, 'Explicit probes currently support Azure and OpenRouter. Other routes require a completed request.')
         revision = None
         result = 'unavailable'
+        azure_permit = None
+        local_busy = False
         try:
             translation, headers, base, route, revision = prepared_routed_request({'model': payload['model'],
                 'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers)
             headers.update({'Content-Type': 'application/json'})
             request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(), headers=headers)
             deadline = time.monotonic() + 10
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=2) as response:
+            if route['provider'] == 'azure':
+                azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
+                    cancelled=self.client_disconnected, timeout=10)
+                if self.client_disconnected():
+                    raise _admission_module.AdmissionCancelled('Azure verification cancelled before dispatch')
+                if time.monotonic() >= deadline:
+                    raise _admission_module.AdmissionTimeout('Azure verification queue deadline exceeded')
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=min(2, deadline - time.monotonic())) as response:
                 body = bytearray()
                 while time.monotonic() < deadline and len(body) <= 1024 * 1024:
                     part = response.read1(4096)
@@ -1119,15 +1136,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise TimeoutError('Verification deadline or response limit exceeded')
                 value = json.loads(body)
                 result = 'verified' if response.status == 200 and value.get('status') == 'completed' else 'invalid_response'
+        except _admission_module.AdmissionCancelled:
+            self.close_connection = True
+            return
+        except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout):
+            result = 'busy'
+            local_busy = True
         except urllib.error.HTTPError as error:
             result = 'auth_failed' if error.code in (401, 403) else 'unavailable'
             error.close()
         except (ValueError, OSError, urllib.error.URLError, TimeoutError):
             result = 'unavailable'
-        current = record_readiness(route, revision, result)
+        finally:
+            if azure_permit is not None:
+                azure_permit.release()
+        if local_busy:
+            with ROUTE_LOCK:
+                current = revision is not None and configuration_revision() == revision
+        else:
+            current = record_readiness(route, revision, result)
         body = json.dumps({'result': result if current else 'configuration_changed', 'verified': result == 'verified' and current,
                            'boot_id': READINESS.boot_id, 'configuration_revision': revision}).encode()
         self.send_response(200 if result == 'verified' and current else 503)
+        if local_busy:
+            self.send_header('Retry-After', '1')
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
@@ -1144,6 +1176,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pacer = None
         acquired = False
         request_lease = None
+        azure_permit = None
+        azure_not_dispatched = False
         revision = None
         last_heartbeat = float("-inf")
         try:
@@ -1276,6 +1310,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 acquired = True
                 upstream_response = open_baseten(opener, request, pacer, estimated_tokens(translation.request),
                                                  deadline, self.client_disconnected, waiting)
+            elif route and route['provider'] == 'azure':
+                azure_not_dispatched = True
+                azure_permit = AZURE_ADMISSION.acquire((base, route['model']), cancelled=self.client_disconnected)
+                if self.client_disconnected():
+                    raise _admission_module.AdmissionCancelled('Azure request cancelled before dispatch')
+                azure_not_dispatched = False
+                upstream_response = opener.open(request, timeout=180)
             else:
                 upstream_response = opener.open(request, timeout=180)
             with upstream_response as upstream:
@@ -1361,6 +1402,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.stream_failure(error.code, message)
             else:
                 self.error(error.code, None, headers=response_headers, provider_body=body)
+        except _admission_module.AdmissionCancelled:
+            activity_status = 'cancelled'
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='cancelled')
+            self.close_connection = True
+        except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout) as error:
+            activity_http_status = 503
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=1)
+            self.error(503, str(error), headers={'Retry-After': '1'})
         except PacingTimeout as error:
             activity_http_status = 503
             if pacer:
@@ -1387,9 +1440,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if azure_permit is not None:
+                azure_permit.release()
             if request_lease is not None:
                 # A completed response can still request tools. Keep the turn owner.
-                RUNTIME.finish(request_lease, activity_status == 'completed' or activity_http_status is not None and not started)
+                RUNTIME.finish(request_lease, azure_not_dispatched or activity_status == 'completed' or activity_http_status is not None and not started)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:

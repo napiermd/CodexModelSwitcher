@@ -51,3 +51,12 @@ Selected the retained service as the first unit, with durable ownership and veri
 - [ ] Coordinate the first installed migration after affected tasks are paused or finished.
 
 This checkpoint records completed work without marking the original completion predicate achieved.
+
+
+## Azure admission follow-through
+
+- [x] Implement process-local Azure admission that holds permits through upstream close.
+- [x] Verify two active streams, FIFO bounded waiting, cancellation, timeout, no-dispatch runtime bookkeeping, and readiness probes sharing admission.
+- [x] Pass 298 Python tests, 71 Swift tests, a signed app build, and ten packaged lifecycle checks; stage the new candidate separately.
+- [ ] Verify total request deadlines and effective retry ownership across the actual desktop, Harbor, and a proposed Bifrost route.
+- [ ] Complete the unchanged desktop lifecycle and first-install gates above.

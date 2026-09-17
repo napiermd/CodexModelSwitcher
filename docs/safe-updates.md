@@ -1,6 +1,6 @@
 # Protect tasks during Harbor updates
 
-Status: stage-only release tooling is available; independent runtime and seamless handoff are not implemented.
+Status: stage-only release tooling and a verified independent-runtime candidate are available. The candidate is not installed. Automatic promotion, retirement, and rollback remain disabled until actual desktop lifecycle integration is verified.
 
 See the [audit, file map, Linear issues, and execution checklist](update-safety-audit.md).
 

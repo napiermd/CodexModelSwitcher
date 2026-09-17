@@ -63,3 +63,16 @@ The pressure-study follow-up passed all **272 Python tests in 50.772 seconds** w
 Actions Checks run `35279368948` also passed at implementation head `6920a037ad81939bcebb294396f1b27d7b94440d`: Swift and Python suites, evaluation app build, packaged gateway tests, staging, and website/JavaScript checks. The following report commit changes evidence and documentation only.
 
 The Bifrost experiment and its narrower evidence are recorded separately in [Bifrost evaluation](../bifrost-evaluation.md). No live route was moved to it.
+
+
+## Azure stream admission candidate, September 17, 2026
+
+The Bifrost pressure finding led to a process-local Harbor admission guard in `Support/azure_admission.py`, used by Azure inference and gateway verification. The staged defaults are two active requests and sixteen waiting requests per endpoint/deployment, with a 30-second monotonic queue deadline. Admission remains held through upstream close. FIFO waiters poll cancellation at configured intervals of at most 100 ms. Empty buckets are removed and permits release idempotently. No Azure retry loop was added.
+
+Twenty new admission tests and six real HTTP-handler tests establish capacity, FIFO behavior, bounded waiting, cancellation before dispatch, independent deployments, and close-before-release. A TCP reset during queued verification preserves an existing readiness proof and makes zero upstream attempts. Queue failures preserve task ownership without marking an undispatched request uncertain. Existing exact-status/Retry-After forwarding tests still pass. Independent review found no P1/P2 issues and passed 50 focused tests.
+
+The first full run exposed an existing test race: the OpenRouter auth-error assertion could read activity before the handler's `finally` bookkeeping ran. That test now waits for the actual activity completion event. No production behavior was changed for that test fix.
+
+Final local checks passed 298 Python tests with ResourceWarning treated as an error, 71 Swift tests, the signed Xcode build, and ten tests against the packaged gateway. The signed bundle contains `azure_admission.py`. Staging succeeded at `build/staged-updates/independent-gateway-admission-review-20260917/`; its manifest reports installed=false, provider_verified=false, and live_handoff_verified=false. Exact source-to-build binding remains unverified.
+
+Open requirements remain explicit: total request deadlines, effective desktop retry ownership, coordination across runtimes, real Azure parity, and authoritative desktop turn completion. Local stream admission does not satisfy those requirements or authorize a production Bifrost route.

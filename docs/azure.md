@@ -56,3 +56,12 @@ Azure inference keys do not provide a Harbor billing integration. Usage shows th
 ## Continuing a task from another provider
 
 Harbor replays the conversation text, tool calls, and tool results when you switch to Azure. It removes provider-owned item IDs from inline history while preserving each `call_id` that links a tool result to its call. This also applies when Codex custom tool results are converted to standard function results; a `ctco_` ID must not be forwarded on the converted item. No saved task history is rewritten.
+
+
+## Staged stream admission candidate
+
+The September 17 safe-runtime candidate limits each Azure endpoint/deployment to two active gateway requests and sixteen waiting requests. A FIFO waiter can remain queued for at most 30 seconds. These are local policy defaults, not discovered Azure quotas. A slot remains occupied through the complete response or terminal stream event and upstream connection close. Gateway readiness probes use the same queue and a shorter ten-second wait budget. Queue cancellation checks use intervals no longer than 100 ms; this is not an active-stream cancellation guarantee.
+
+A full or expired queue returns local HTTP 503 with Retry-After: 1. Cancelled queued requests never call Azure and do not mark their task delivery uncertain. A local busy/cancelled readiness probe preserves the existing provider proof. The authenticated status response exposes only aggregate Azure admission counters.
+
+This policy is process-local. It does not coordinate multiple gateway runtimes, discover account limits, add Azure retries, or establish a total queue-to-response deadline. Upstream statuses and Retry-After headers retain their original values and each explicit request makes one upstream attempt. Effective retry settings in the already-running Codex desktop remain unverified. The candidate is staged separately; it has not replaced the installed gateway.

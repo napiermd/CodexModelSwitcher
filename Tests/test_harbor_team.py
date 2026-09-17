@@ -167,6 +167,8 @@ assert 'UNRELATED_API_KEY' not in os.environ
 assert 'model-harbor' == config['model_provider']
 assert config['model_reasoning_effort'] == 'xhigh'
 assert config['model_providers']['model-harbor']['env_key'] == 'MODEL_HARBOR_WORKER_AUTH'
+assert config['model_providers']['model-harbor']['request_max_retries'] == 0
+assert config['model_providers']['model-harbor']['stream_max_retries'] == 0
 catalog=json.loads((root/'catalog.json').read_text())
 assert len(catalog['models']) == 1
 assert 'unexpected_secret' not in catalog['models'][0]

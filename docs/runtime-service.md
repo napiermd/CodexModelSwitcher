@@ -64,3 +64,7 @@ After a gateway crash, requests from the previous process are recorded as uncert
 Azure/OpenRouter credential availability and route verification are separate. Proofs cover the process boot, configuration fingerprint, provider/deployment, result, and verification time. A probe or completed request can only update proof for the credentials it actually used and the still-current configuration. Old authentication failures cannot clear a replacement key. Proofs expire after five minutes; status polling performs no inference. Other provider readiness is not established by these probes.
 
 All `/harbor/runtime/{promote,retire,rollback,shutdown}` controls currently refuse with the desktop-lifecycle reason. These are explicit refusal boundaries, not implemented rolling-update operations. See [verification and remaining gates](verification/safe-runtime-results.md).
+
+## Azure request lifetime
+
+The candidate shares a single monotonic deadline across Azure admission, transport, and response delivery. It preserves uncertainty after possible dispatch and disables additional retries in generated Codex configuration. See [Azure request deadlines and retry ownership](azure-request-policy.md) for bounds, evidence, and remaining desktop gates.

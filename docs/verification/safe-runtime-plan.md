@@ -58,5 +58,7 @@ This checkpoint records completed work without marking the original completion p
 - [x] Implement process-local Azure admission that holds permits through upstream close.
 - [x] Verify two active streams, FIFO bounded waiting, cancellation, timeout, no-dispatch runtime bookkeeping, and readiness probes sharing admission.
 - [x] Pass 298 Python tests, 71 Swift tests, a signed app build, and ten packaged lifecycle checks; stage the new candidate separately.
-- [ ] Verify total request deadlines and effective retry ownership across the actual desktop, Harbor, and a proposed Bifrost route.
+- [x] Implement one total Azure request deadline, bounded cancellation, and conservative partial-delivery ownership; verify real loopback HTTP failure paths.
+- [x] Generate zero caller retries and verify one attempt in fresh isolated CLI 0.150.1 runs for 429, 503, and interrupted output.
+- [ ] Verify effective retry settings/reload in the actual desktop and the composed Harbor/Bifrost route.
 - [ ] Complete the unchanged desktop lifecycle and first-install gates above.

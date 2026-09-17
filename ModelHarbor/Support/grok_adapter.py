@@ -30,6 +30,8 @@ ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 MAX_BODY = 32 * 1024 * 1024
 BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
+AZURE_REQUEST_SECONDS = 180
+AZURE_VERIFY_SECONDS = 10
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
 CODEX_BASE = 'https://chatgpt.com/backend-api/codex'
 TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
@@ -56,6 +58,9 @@ _admission_spec = importlib.util.spec_from_file_location('harbor_azure_admission
 _admission_module = importlib.util.module_from_spec(_admission_spec)
 _admission_spec.loader.exec_module(_admission_module)
 AZURE_ADMISSION = _admission_module.AdmissionQueue()
+_transport_spec = importlib.util.spec_from_file_location('harbor_azure_transport', pathlib.Path(__file__).with_name('azure_transport.py'))
+_transport_module = importlib.util.module_from_spec(_transport_spec)
+_transport_spec.loader.exec_module(_transport_module)
 
 
 def configuration_revision():
@@ -968,7 +973,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def error(self, code, message, headers=None, provider_body=None):
+    def error(self, code, message, headers=None, provider_body=None, budget=None):
         body = json.dumps({'error': message}).encode() if provider_body is None else provider_body
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
@@ -976,9 +981,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for name, value in provider_response_headers(headers or {}).items():
             self.send_header(name, value)
         self.send_header('Connection', 'close')
-        self.end_headers()
-        self.wfile.write(body)
         self.close_connection = True
+        self.finish_headers(budget)
+        self.write_output(body, budget)
 
     def begin_event_stream(self, route):
         self.send_response(200)
@@ -991,16 +996,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-    def stream_failure(self, status, message):
+    def stream_failure(self, status, message, budget=None):
         code = 'rate_limit_exceeded' if status == 429 else ('invalid_request_error' if status == 400 else 'server_error')
         event = {'type': 'response.failed', 'response': {'id': 'resp_harbor_' + secrets.token_hex(12),
                  'object': 'response', 'status': 'failed', 'output': [],
                  'error': {'code': code, 'message': message}}}
         try:
-            self.wfile.write(('event: response.failed\ndata: ' + json.dumps(event) + '\n\n').encode())
-            self.wfile.flush()
+            self.write_output(('event: response.failed\ndata: ' + json.dumps(event) + '\n\n').encode(), budget)
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
             self.close_connection = True
+
+    def finish_headers(self, budget=None):
+        if budget is None:
+            return self.end_headers()
+        self.connection.settimeout(budget.remaining())
+        budget.io(self.end_headers)
+
+    def write_output(self, value, budget=None):
+        if budget is None:
+            self.wfile.write(value)
+            self.wfile.flush()
+            return
+        self.connection.settimeout(budget.remaining())
+        budget.io(self.wfile.write, value)
+        self.connection.settimeout(budget.remaining())
+        budget.io(self.wfile.flush)
+
+    @staticmethod
+    def response_lines(upstream, budget=None):
+        iterator = iter(upstream)
+        while True:
+            try:
+                yield next(iterator) if budget is None else budget.io(next, iterator)
+            except StopIteration:
+                return
 
     def do_GET(self):
         global USAGE_COLLECTOR
@@ -1108,6 +1137,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = requested_route(payload['model'])
         if route['provider'] not in ('azure', 'openrouter'):
             return self.error(400, 'Explicit probes currently support Azure and OpenRouter. Other routes require a completed request.')
+        budget = _transport_module.RequestBudget(AZURE_VERIFY_SECONDS, cancelled=self.client_disconnected) if route['provider'] == 'azure' else None
+        try:
+            return self.verify_prepared_route(payload, route, budget)
+        finally:
+            if budget is not None:
+                budget.finish()
+
+    def verify_prepared_route(self, payload, route, budget):
         revision = None
         result = 'unavailable'
         azure_permit = None
@@ -1117,28 +1154,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers)
             headers.update({'Content-Type': 'application/json'})
             request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(), headers=headers)
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + AZURE_VERIFY_SECONDS
             if route['provider'] == 'azure':
                 azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
-                    cancelled=self.client_disconnected, timeout=10)
-                if self.client_disconnected():
-                    raise _admission_module.AdmissionCancelled('Azure verification cancelled before dispatch')
-                if time.monotonic() >= deadline:
-                    raise _admission_module.AdmissionTimeout('Azure verification queue deadline exceeded')
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=min(2, deadline - time.monotonic())) as response:
+                    cancelled=budget.cancelled, timeout=budget.remaining())
+                budget.check()
+            opener = urllib.request.build_opener(NoRedirect, *(budget.http_handlers() if budget else ()))
+            with opener.open(request, timeout=budget.remaining() if budget else min(2, deadline - time.monotonic())) as response:
+                if budget:
+                    budget.check()
                 body = bytearray()
                 while time.monotonic() < deadline and len(body) <= 1024 * 1024:
-                    part = response.read1(4096)
+                    part = response.read1(4096) if budget is None else budget.io(response.read1, 4096)
                     if not part:
                         break
                     body.extend(part)
                 else:
                     raise TimeoutError('Verification deadline or response limit exceeded')
+                if budget:
+                    budget.check()
                 value = json.loads(body)
                 result = 'verified' if response.status == 200 and value.get('status') == 'completed' else 'invalid_response'
-        except _admission_module.AdmissionCancelled:
-            self.close_connection = True
-            return
+            if budget:
+                budget.check()
+        except (_admission_module.AdmissionCancelled, _transport_module.RequestCancelled):
+            if budget and budget.stop_reason == 'deadline':
+                result = 'busy'
+                local_busy = True
+            else:
+                self.close_connection = True
+                return
+        except _transport_module.RequestDeadline:
+            local_busy = not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
         except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout):
             result = 'busy'
             local_busy = True
@@ -1146,10 +1194,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result = 'auth_failed' if error.code in (401, 403) else 'unavailable'
             error.close()
         except (ValueError, OSError, urllib.error.URLError, TimeoutError):
-            result = 'unavailable'
+            if budget:
+                budget.cancelled()
+                if budget.stop_reason == 'cancelled':
+                    self.close_connection = True
+                    return
+                local_busy = budget.stop_reason == 'deadline' and not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
         finally:
             if azure_permit is not None:
                 azure_permit.release()
+        if budget and budget.cancelled():
+            if budget.stop_reason == 'cancelled':
+                self.close_connection = True
+                return
+            local_busy = not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
         if local_busy:
             with ROUTE_LOCK:
                 current = revision is not None and configuration_revision() == revision
@@ -1163,12 +1223,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
-        self.end_headers()
-        self.wfile.write(body)
+        reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected) if budget and budget.stop_reason == 'deadline' else budget
+        try:
+            self.finish_headers(reporting)
+            self.write_output(body, reporting)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+            self.close_connection = True
+        finally:
+            if reporting is not None and reporting is not budget:
+                reporting.finish()
 
     def do_POST(self):
         global LAST_ROUTE, OPENROUTER_KEY, AZURE_CONNECTION
         started = False
+        streaming_response = False
+        headers_complete = False
         activity_started = False
         activity_status = 'failed'
         activity_http_status = None
@@ -1177,9 +1246,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         acquired = False
         request_lease = None
         azure_permit = None
-        azure_not_dispatched = False
+        azure_budget = None
+        azure_outcome_known = False
         revision = None
         last_heartbeat = float("-inf")
+
+        def azure_stopped():
+            nonlocal activity_status, activity_http_status
+            global LAST_ROUTE
+            if azure_budget is None:
+                return False
+            try:
+                azure_budget.check()
+                return False
+            except (_transport_module.RequestCancelled, _transport_module.RequestDeadline) as error:
+                cancelled = isinstance(error, _transport_module.RequestCancelled)
+                activity_status = 'cancelled' if cancelled else 'failed'
+                activity_http_status = None if cancelled else 504
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='cancelled' if cancelled else 'timeout')
+                self.close_connection = True
+                if not cancelled:
+                    # Reporting has a separate short bound; it cannot restart provider work.
+                    reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected)
+                    try:
+                        message = 'Azure request exceeded its total deadline; no automatic replay was attempted.'
+                        if started and headers_complete and streaming_response:
+                            self.stream_failure(504, message, budget=reporting)
+                        elif not started:
+                            self.error(504, message, budget=reporting)
+                    except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+                        pass
+                    finally:
+                        reporting.finish()
+                return True
+
+        def report_error(code, message, response_headers=None):
+            nonlocal started
+            try:
+                if started:
+                    if headers_complete and streaming_response:
+                        self.stream_failure(code, message, budget=azure_budget)
+                    else:
+                        self.close_connection = True
+                else:
+                    started = True
+                    self.error(code, message, headers=response_headers, budget=azure_budget)
+            except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+                azure_stopped()
+            except OSError:
+                self.close_connection = True
+
         try:
             if self.path == '/harbor/handshake':
                 return self.server_proof()
@@ -1277,6 +1394,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 translation = Translation(source)
                 headers = oauth_headers() if oauth else {'Authorization': authorization}
                 base = OAUTH_BASE if oauth else 'https://api.x.ai/v1'
+            if route and route['provider'] == 'azure':
+                azure_budget = _transport_module.RequestBudget(AZURE_REQUEST_SECONDS, cancelled=self.client_disconnected)
             if route:
                 if RUNTIME is not None:
                     request_lease = RUNTIME.begin(_runtime_module.turn_key(source, self.headers),
@@ -1290,16 +1409,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             request = urllib.request.Request(base + '/responses',
                 data=json.dumps(translation.request, separators=(',', ':')).encode(),
                 headers=headers)
-            opener = urllib.request.build_opener(NoRedirect)
+            opener = urllib.request.build_opener(NoRedirect, *(azure_budget.http_handlers() if azure_budget else ()))
             def waiting(seconds):
                 global LAST_ROUTE
-                nonlocal started, last_heartbeat
+                nonlocal started, streaming_response, headers_complete, last_heartbeat
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=math.ceil(seconds))
                 if translation.request.get('stream') and time.monotonic() - last_heartbeat >= 10:
                     if not started:
                         self.begin_event_stream(route)
                         started = True
+                        streaming_response = True
+                        headers_complete = True
                     self.wfile.write(b': Model Harbor is waiting for provider capacity\n\n')
                     self.wfile.flush()
                     last_heartbeat = time.monotonic()
@@ -1311,19 +1432,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 upstream_response = open_baseten(opener, request, pacer, estimated_tokens(translation.request),
                                                  deadline, self.client_disconnected, waiting)
             elif route and route['provider'] == 'azure':
-                azure_not_dispatched = True
-                azure_permit = AZURE_ADMISSION.acquire((base, route['model']), cancelled=self.client_disconnected)
-                if self.client_disconnected():
-                    raise _admission_module.AdmissionCancelled('Azure request cancelled before dispatch')
-                azure_not_dispatched = False
-                upstream_response = opener.open(request, timeout=180)
+                azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
+                    cancelled=azure_budget.cancelled, timeout=azure_budget.remaining())
+                azure_budget.check()
+                upstream_response = opener.open(request, timeout=azure_budget.remaining())
             else:
                 upstream_response = opener.open(request, timeout=180)
             with upstream_response as upstream:
+                if azure_budget:
+                    azure_budget.check()
                 if route:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='streaming')
                 content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
+                streaming_response = 'text/event-stream' in content_type
+                response = azure_budget.io(json.load, upstream) if azure_budget and not streaming_response else None
                 if not started:
                     self.send_response(upstream.status)
                     self.send_header('Content-Type', content_type)
@@ -1334,12 +1457,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         self.send_header('X-Model-Harbor-Provider', route['provider'])
                         self.send_header('X-Model-Harbor-Model', route['model'])
                     self.send_header('Connection', 'close')
-                    self.end_headers()
-                    self.close_connection = True
                     started = True
+                    self.close_connection = True
+                    self.finish_headers(azure_budget)
+                    headers_complete = True
                 if 'text/event-stream' in content_type:
                     block = []
-                    for line in upstream:
+                    for line in self.response_lines(upstream, azure_budget):
                         if line.strip():
                             block.append(line.rstrip(b'\r\n'))
                         elif block:
@@ -1347,8 +1471,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             if route and translation.response_status:
                                 with ROUTE_LOCK:
                                     LAST_ROUTE = dict(route, state=translation.response_status)
-                            self.wfile.write(event)
-                            self.wfile.flush()
+                            self.write_output(event, azure_budget)
                             block = []
                             if translation.response_status:
                                 break
@@ -1357,63 +1480,88 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if route and translation.response_status:
                             with ROUTE_LOCK:
                                 LAST_ROUTE = dict(route, state=translation.response_status)
-                        self.wfile.write(event)
+                        self.write_output(event, azure_budget)
                 else:
-                    response = json.load(upstream)
+                    if response is None:
+                        response = json.load(upstream)
                     translation.response_status = response.get('status')
                     translation.usage = response.get('usage')
                     if route:
                         with ROUTE_LOCK:
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
-                    self.wfile.write(json.dumps(translation.output(response)).encode())
+                    self.write_output(json.dumps(translation.output(response)).encode(), azure_budget)
                 activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
                 if route and revision and route['provider'] in ('azure', 'openrouter'):
                     record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
                 if route and not translation.response_status:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
+            if azure_budget:
+                azure_budget.check()
+                azure_outcome_known = activity_status == 'completed'
         except urllib.error.HTTPError as error:
-            activity_http_status = error.code
-            if route and revision and route['provider'] in ('azure', 'openrouter'):
-                record_readiness(route, revision, 'auth_failed' if error.code in (401, 403) else 'unavailable')
-            if route and error.code in (401, 403):
-                reject_provider_credentials(route, headers)
-            if route:
-                with ROUTE_LOCK:
-                    LAST_ROUTE = dict(route, state='failed', http_status=error.code)
-            if route and route['provider'] == 'baseten' and error.code in (401, 403):
-                BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
-            # Provider errors contain schema diagnostics, never request headers.
             try:
-                body = error.read(65536)
+                activity_http_status = error.code
+                if route and revision and route['provider'] in ('azure', 'openrouter'):
+                    record_readiness(route, revision, 'auth_failed' if error.code in (401, 403) else 'unavailable')
+                if route and error.code in (401, 403):
+                    reject_provider_credentials(route, headers)
+                if route:
+                    with ROUTE_LOCK:
+                        LAST_ROUTE = dict(route, state='failed', http_status=error.code)
+                if route and route['provider'] == 'baseten' and error.code in (401, 403):
+                    BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
+                # Provider errors contain schema diagnostics, never request headers.
+                try:
+                    body = error.read(65536) if azure_budget is None else azure_budget.io(error.read, 65537)
+                    if azure_budget and (len(body) > 65536 or getattr(error.fp, 'length', 0)):
+                        report_error(502, 'Azure returned an incomplete or oversized error response; delivery is uncertain.')
+                        return
+                finally:
+                    error.close()
+                response_headers = provider_response_headers(error.headers)
+                if pacer and error.code in (429, 529):
+                    response_headers['retry-after'] = str(max(1, math.ceil(pacer.cooldown - pacer.clock())))
+                try:
+                    provider_error = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    provider_error = {'error': body.decode('utf-8', errors='replace')}
+                    body = json.dumps(provider_error).encode()
+                if started:
+                    detail = provider_error.get('error', provider_error) if isinstance(provider_error, dict) else provider_error
+                    message = detail.get('message', str(detail)) if isinstance(detail, dict) else str(detail)
+                    self.stream_failure(error.code, message)
+                else:
+                    if azure_budget:
+                        started = True
+                    self.error(error.code, None, headers=response_headers, provider_body=body, budget=azure_budget)
+                if azure_budget:
+                    azure_outcome_known = True
+            except Exception:
+                if azure_budget is None:
+                    raise
+                if not azure_stopped():
+                    self.close_connection = True
             finally:
                 error.close()
-            response_headers = provider_response_headers(error.headers)
-            if pacer and error.code in (429, 529):
-                response_headers['retry-after'] = str(max(1, math.ceil(pacer.cooldown - pacer.clock())))
-            try:
-                provider_error = json.loads(body)
-            except (ValueError, UnicodeDecodeError):
-                provider_error = {'error': body.decode('utf-8', errors='replace')}
-                body = json.dumps(provider_error).encode()
-            if started:
-                detail = provider_error.get('error', provider_error) if isinstance(provider_error, dict) else provider_error
-                message = detail.get('message', str(detail)) if isinstance(detail, dict) else str(detail)
-                self.stream_failure(error.code, message)
-            else:
-                self.error(error.code, None, headers=response_headers, provider_body=body)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+            azure_stopped()
         except _admission_module.AdmissionCancelled:
+            if azure_stopped():
+                return
             activity_status = 'cancelled'
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='cancelled')
             self.close_connection = True
         except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout) as error:
+            if azure_stopped():
+                return
             activity_http_status = 503
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=1)
-            self.error(503, str(error), headers={'Retry-After': '1'})
+            report_error(503, str(error), {'Retry-After': '1'})
         except PacingTimeout as error:
             activity_http_status = 503
             if pacer:
@@ -1426,25 +1574,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self.error(503, str(error), headers={'Retry-After': str(error.retry_after)})
         except ValueError as error:
-            if started:
-                self.stream_failure(400, str(error))
-            else:
-                self.error(400, str(error))
+            if azure_stopped():
+                return
+            report_error(400, str(error))
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            if azure_stopped():
+                return
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='disconnected')
             self.close_connection = True
         except Exception as error:
+            if azure_stopped():
+                return
             if not started:
-                self.error(502, 'Adapter failed: ' + type(error).__name__)
+                report_error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if azure_budget is not None:
+                azure_budget.finish()
             if azure_permit is not None:
                 azure_permit.release()
             if request_lease is not None:
                 # A completed response can still request tools. Keep the turn owner.
-                RUNTIME.finish(request_lease, azure_not_dispatched or activity_status == 'completed' or activity_http_status is not None and not started)
+                known = (azure_outcome_known or not azure_budget.dispatch_possible) if azure_budget is not None else (activity_status == 'completed' or activity_http_status is not None and not started)
+                RUNTIME.finish(request_lease, known)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:

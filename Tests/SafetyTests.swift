@@ -125,6 +125,73 @@ extension SafetyTests {
         let again = try writer.rewriteConfig(output, selected: selection, data: data)
         XCTAssertEqual(again.components(separatedBy: "[model_providers.model-harbor]").count, 2)
     }
+    private func parsedConfig(_ text: String) throws -> [String: Any] {
+        let parsed = try PythonRuntime.run("import json,sys,tomllib; print(json.dumps(tomllib.loads(json.load(sys.stdin)['config'])))",
+                                           input: ["config": text])
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: parsed) as? [String: Any])
+    }
+
+    func testSharedHarborProviderDisablesTransportRetriesForEveryRoute() throws {
+        for providerID in ["azure", "baseten", "codex-subscription", "openrouter", "grok-oauth"] {
+            let selected = SelectedModel(serviceID: providerID, modelID: "test-model")
+            let data = AppData(services: [service(providerID)], selectedModel: selected)
+            let output = try writer.rewriteConfig("", selected: selected, data: data)
+            let parsed = try parsedConfig(output)
+            let providers = try XCTUnwrap(parsed["model_providers"] as? [String: [String: Any]])
+            let provider = try XCTUnwrap(providers["model-harbor"])
+            XCTAssertEqual(parsed["model"] as? String, "harbor/\(providerID)/test-model")
+            XCTAssertEqual(parsed["model_provider"] as? String, "model-harbor")
+            XCTAssertEqual(provider["request_max_retries"] as? Int, 0, providerID)
+            XCTAssertEqual(provider["stream_max_retries"] as? Int, 0, providerID)
+            XCTAssertEqual(provider["http_headers"] as? [String: String],
+                           ["X-Model-Harbor-Token": "test-local-bridge-token"], providerID)
+            XCTAssertNil(parsed["request_max_retries"])
+            XCTAssertNil(parsed["stream_max_retries"])
+            XCTAssertEqual(try writer.rewriteConfig(output, selected: selected, data: data), output, providerID)
+        }
+    }
+
+    func testManagedHarborRetrySettingsReplaceOldValuesAndPreserveUnrelatedProvider() throws {
+        let original = """
+        model_reasoning_effort = "high"
+
+        # Codex Model Switcher managed provider: model-harbor
+        [model_providers.model-harbor]
+        name = "Previous Harbor"
+        base_url = "http://127.0.0.1:48118/harbor/v1"
+        wire_api = "responses"
+        request_max_retries = 4
+        stream_max_retries = 5
+        [model_providers.model-harbor.http_headers]
+        X-Model-Harbor-Token = "previous-local-token"
+
+        [model_providers.unrelated]
+        name = "Keep this provider"
+        base_url = "https://example.invalid/v1"
+        request_max_retries = 7
+        stream_max_retries = 8
+        [model_providers.unrelated.http_headers]
+        X-Synthetic = "keep-this-header"
+        """
+        let selected = SelectedModel(serviceID: "azure", modelID: "test-model")
+        let data = AppData(services: [service("azure")], selectedModel: selected)
+        let output = try writer.rewriteConfig(original, selected: selected, data: data)
+        let parsed = try parsedConfig(output)
+        let providers = try XCTUnwrap(parsed["model_providers"] as? [String: [String: Any]])
+        let harbor = try XCTUnwrap(providers["model-harbor"])
+        XCTAssertEqual(harbor["request_max_retries"] as? Int, 0)
+        XCTAssertEqual(harbor["stream_max_retries"] as? Int, 0)
+        XCTAssertEqual(harbor["http_headers"] as? [String: String],
+                       ["X-Model-Harbor-Token": "test-local-bridge-token"])
+        XCTAssertEqual(parsed["model_reasoning_effort"] as? String, "high")
+        let before = try parsedConfig(original)
+        let beforeProviders = try XCTUnwrap(before["model_providers"] as? [String: [String: Any]])
+        let unrelated = try XCTUnwrap(providers["unrelated"])
+        let originalUnrelated = try XCTUnwrap(beforeProviders["unrelated"])
+        XCTAssertEqual(unrelated as NSDictionary, originalUnrelated as NSDictionary)
+        XCTAssertEqual(try writer.rewriteConfig(output, selected: selected, data: data), output)
+    }
+
     func testGrokCopiesAuthenticationWithoutChangingSourceProvider() throws {
         let original = "[model_providers.xai]\nname = \"xAI\"\nbase_url = \"https://api.x.ai/v1\"\n[model_providers.xai.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://example/item/key\"]\n"
         let selected = SelectedModel(serviceID: "xai", modelID: "test-model")

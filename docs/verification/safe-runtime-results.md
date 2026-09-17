@@ -79,3 +79,15 @@ Open requirements remain explicit: total request deadlines, effective desktop re
 
 
 The first hosted run for the admission change exposed a test-only scheduling assumption: a 20 ms timeout test resumed after 141 ms on a loaded runner. Deadline and override assertions now use an injected monotonic clock with exact condition-wait budgets. Real concurrent stream, FIFO, cancellation, and close-barrier tests remain. This does not promise operating-system scheduling within 100 ms or weaken the production queue deadline.
+
+## Absolute Azure deadline and caller retry checkpoint — September 17, 2026
+
+The candidate now gives accepted Azure inference one 180-second monotonic budget across admission, DNS, TCP/TLS, upstream headers/body/SSE, and downstream writes. Verification uses ten seconds. Socket trickles cannot renew this budget. Cancellation shuts down only owned upstream sockets; DNS uses four bounded workers and late resolutions cannot dispatch. Reporting an expired request has its own maximum 250-millisecond write budget.
+
+The gateway makes one attempt and keeps interrupted dispatched turns uncertain. Nonstream bodies are read before success headers. Premature EOF and errors over the 64 KiB forwarding limit cannot be treated as fully delivered errors. Admission is released after upstream closure. Separate header/body/flush writes each check the remaining budget.
+
+Generated shared Codex provider configuration sets both request and stream retries to zero. The repeatable `experiments/codex-retries/run.py` harness verified installed CLI 0.150.1 against local 429, 503, interrupted delta, and accepted-output-before-EOF fixtures: one actual POST each, no replay. These fresh CLI runs do not establish active desktop configuration or reload behavior. The harness blocks proxy-routed external requests; it is not an OS network sandbox.
+
+Local validation passed 326 Python tests in 65.064 seconds with warnings treated as errors and 73 Swift tests. The signed app build passed. All ten production-entrypoint tests passed against its packaged resources in 12.761 seconds with bytecode writes disabled. Focused transport/handler tests cover actual sockets, including a nonreading downstream client. Review found incomplete-error framing and per-write budget gaps; both were fixed with regressions before staging.
+
+No live provider calls, installed app changes, global configuration edits, or task-history rewrites were made. Actual desktop completion/handoff, cross-runtime pacing, composed Bifrost routing, and real Azure history/performance parity remain open. See [the policy](../azure-request-policy.md) for exact scope.

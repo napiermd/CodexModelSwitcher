@@ -4,12 +4,13 @@ import Charts
 struct UsageView: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage("harbor.usageProvider") private var providerID = "baseten"
+    @AppStorage("harbor.hiddenProviders") private var hiddenProviders = ""
     @State private var accountID = ""
     @State private var historyDays = 30
     private var entries: [UsageSnapshot] { store.usageSnapshots.filter { $0.providerID == providerID } }
     private var selected: UsageSnapshot? { entries.first { $0.id == accountID } ?? entries.first }
     private var providers: [(String, String)] {
-        var result = ProviderDefinition.all.map { ($0.id, $0.name == "OpenRouter" ? "Router" : $0.name) }
+        var result = ProviderDefinition.all.filter { !hiddenProviders.split(separator: ",").contains(Substring($0.id)) }.map { ($0.id, $0.name == "OpenRouter" ? "Router" : $0.name) }
         if store.usageSnapshots.contains(where: { $0.providerID == "claude" }) { result.append(("claude", "Claude")) }
         return result
     }
@@ -80,8 +81,8 @@ struct UsageView: View {
                 }.fixedSize(horizontal: false, vertical: true)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(store.usageRefreshing ? "Reading account usage…" : "Usage has not been loaded").font(.headline)
-                    Text("Refresh to read account limits and provider-reported spend.").font(.caption).foregroundStyle(.secondary)
+                    Text(providerID == "azure" ? "Azure billing is available in Azure" : (store.usageRefreshing ? "Reading account usage…" : "Usage has not been loaded")).font(.headline)
+                    Text(providerID == "azure" ? "Harbor does not yet import Azure spend or quota. Open the dashboard for your resource usage and Cost Management." : "Refresh to read account limits and provider-reported spend.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.vertical, 16)
             }
             Divider()
@@ -90,7 +91,7 @@ struct UsageView: View {
                     let cooldown = max(0, Int(ceil(60 - context.date.timeIntervalSince(store.usageLastAttempt))))
                     Button { Task { await store.refreshUsage() } } label: {
                         Label(store.usageRefreshing ? "Refreshing…" : cooldown > 0 ? "Refresh in \(cooldown)s" : "Refresh usage", systemImage: "arrow.clockwise")
-                    }.disabled(store.usageRefreshing || cooldown > 0).keyboardShortcut("r", modifiers: .command)
+                    }.disabled(providerID == "azure" || store.usageRefreshing || cooldown > 0).keyboardShortcut("r", modifiers: .command)
                 }
                 Spacer()
                 Button {
@@ -101,7 +102,7 @@ struct UsageView: View {
                 }.buttonStyle(.link)
             }
         }
-        .onAppear { selectSavedAccount(); Task { await store.refreshUsage() } }
+        .onAppear { if !providers.contains(where: { $0.0 == providerID }) { providerID = providers.first?.0 ?? "codex-subscription" }; selectSavedAccount(); Task { await store.refreshUsage() } }
         .onChange(of: providerID) { _ in selectSavedAccount() }
     }
     private func selectSavedAccount() { accountID = UserDefaults.standard.string(forKey: "harbor.usageAccount.\(providerID)") ?? "" }

@@ -24,6 +24,8 @@ final class AppStore: ObservableObject {
     @Published var providerActivity: [String: ProviderActivity] = [:]
     @Published var lastProviderID = ""
     @Published var lastRequestedModel = ""
+    @Published var azureReady = false
+    @Published var connectingAzure = false
     @Published var openRouterReady = false
     @Published var connectingOpenRouter = false
     @Published var openRouterModels: [OpenRouterModel] = []
@@ -56,6 +58,7 @@ final class AppStore: ObservableObject {
                             proxyStatus = .active
                             await refreshGrokAccount()
                             await syncOpenRouter()
+                            await syncAzure()
                             WarmUpController.shared.start(
                                 isBusy: { [weak self] in
                                     guard let self else { return true }
@@ -226,6 +229,7 @@ final class AppStore: ObservableObject {
         basetenState = (value["baseten_auth"] as? [String: Any])?["state"] as? String ?? "not_loaded"
         if let providers = value["providers"] as? [String: Any] {
             openRouterReady = providers["openrouter_ready"] as? Bool ?? false
+            azureReady = providers["azure_ready"] as? Bool ?? false
             providerActivity = (providers["activity"] as? [String: [String: Any]] ?? [:]).mapValues(ProviderActivity.init)
         }
         if let request = value["last_request"] as? [String: Any] {
@@ -528,9 +532,72 @@ final class AppStore: ObservableObject {
         case "baseten": return basetenState == "ready"
         case "grok-oauth": return grokIsSignedIn
         case "openrouter": return openRouterReady
+        case "azure": return azureReady
         case "codex-subscription": return providerActivity[id]?.verifiedConnection ?? false
         default: return false
         }
+    }
+
+    func syncAzure() async {
+        guard let service = data.services.first(where: { $0.id == "azure" }), !service.apiKey.isEmpty else { return }
+        do {
+            let endpoint = try AzureAPI.endpoint(service.baseURL).absoluteString
+            try await grokAdapter.configureAzure(endpoint: endpoint, key: service.apiKey)
+            await refreshConnectionStatus()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func disconnectAzure() async {
+        do {
+            try await grokAdapter.configureAzure(endpoint: "", key: "")
+            var candidate = data
+            if let index = candidate.services.firstIndex(where: { $0.id == "azure" }) { candidate.services[index].apiKey = "" }
+            try save(candidate)
+            await refreshConnectionStatus()
+            statusMessage = "Azure disconnected. Deployment names remain saved for reconnecting."
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func connectAzure(endpoint: String, key: String, deployment: AzureDeployment, makeDefault: Bool) async -> Bool {
+        guard storageReady, !connectingAzure else { return false }
+        connectingAzure = true
+        errorMessage = ""; statusMessage = ""
+        defer { connectingAzure = false }
+        do {
+            let endpoint = try AzureAPI.endpoint(endpoint).absoluteString
+            let key = try AzureAPI.validateKey(key)
+            let existing = data.services.first { $0.id == "azure" }
+            if let existing, try AzureAPI.endpoint(existing.baseURL).absoluteString != endpoint {
+                throw ProviderError.message("This connection belongs to a different Azure resource. Keep its endpoint. For an additional resource, add a separate custom provider in Settings → Providers.")
+            }
+            try await AzureAPI.verify(endpoint: endpoint, key: key, deployment: deployment)
+            let path = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/azure.json")
+            var entries: [[String: Any]] = []
+            if let bytes = try? Data(contentsOf: path),
+               let saved = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] {
+                entries = saved["models"] as? [[String: Any]] ?? []
+            }
+            entries.removeAll { $0["slug"] as? String == deployment.name }
+            entries.append(deployment.catalogEntry)
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: ["models": entries], options: [.sortedKeys]).write(to: path, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+            var models = existing?.models ?? []
+            models.removeAll { $0.id == deployment.name }
+            models.append(CodexModel(id: deployment.name, name: deployment.name))
+            var candidate = data
+            candidate.services.removeAll { $0.id == "azure" }
+            candidate.services.append(CodexService(id: "azure", name: "Azure OpenAI", baseURL: endpoint,
+                envKey: "AZURE_OPENAI_API_KEY", apiKey: key, models: models, catalogPath: path.path))
+            if makeDefault { candidate.selectedModel = SelectedModel(serviceID: "azure", modelID: deployment.name) }
+            try save(candidate)
+            try await grokAdapter.configureAzure(endpoint: endpoint, key: key)
+            if makeDefault, let selected = candidate.selectedModel { try writer.applySelection(selected, in: candidate) }
+            await refreshConnectionStatus()
+            statusMessage = "Azure verified and saved. Reopen Codex once to load a newly added deployment. Existing task choices stay unchanged."
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 
     func syncOpenRouter() async {

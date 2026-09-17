@@ -197,7 +197,7 @@ A small cube symbol precedes the model name. Names can use two lines; Baseten re
 
 ### Buttons and fields
 
-Connection actions use native bordered or bordered-prominent buttons. Existing Baseten and OpenRouter connections use a Manage connection menu. Settings uses native segmented pickers, toggles, and menus. OpenRouter starts with a secure key field and verification action. Successful verification reveals search, checkboxes, seven models per page, and a save action. Editing the key removes the verified state. Empty, loading, disconnected, and error states remain visible in text.
+Connection actions use native bordered or bordered-prominent buttons. Existing Baseten, Azure, and OpenRouter connections use a Manage connection menu. Settings uses native segmented pickers, toggles, and menus. OpenRouter starts with a secure key field and verification action. Successful verification reveals search, checkboxes, seven models per page, and a save action. Editing the key removes the verified state. Empty, loading, disconnected, and error states remain visible in text.
 
 ### Menu bar
 
@@ -228,3 +228,5 @@ The sidecar contains browser-renderable component previews. Native previews expl
 - Don't invent quota bars, account balances, or request totals.
 - Don't make Harbor's default or selected provider imply one active model across all Codex tasks.
 - Don't describe generated studies, browser previews, or stale review captures as approved production screenshots.
+
+Azure setup uses the same native form controls: endpoint, secure key, deployment name, and a disclosure for verified reasoning, image input, and context size. Visibility controls live in Settings → Providers. Hiding a provider removes its connections and usage tabs while preserving saved configuration.

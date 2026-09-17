@@ -66,7 +66,7 @@ Other clients can consume the same account allowance, and longer waits cannot cr
 
 ### Screenshots returned by tools
 
-Baseten's Responses converter accepts `input_image` in message content but rejects it inside `function_call_output`. Harbor keeps the original tool output and call ID, retains its text, and places the unchanged image content in a following message labeled as tool-result data. Consecutive tool outputs stay together before their images. The transformation applies only to Baseten and is idempotent, so existing histories containing screenshots can continue without a model substitution or lost image.
+Baseten's Responses converter accepts `input_image` in message content but rejects it inside `function_call_output`. Harbor keeps the original tool output and call ID, retains its text, and places the unchanged image content in a following message labeled as tool-result data. Consecutive tool outputs stay together before their images. The transformation applies to Baseten and Azure and is idempotent, so existing histories containing screenshots can continue without a model substitution or lost image.
 
 ## Tools and history
 
@@ -127,3 +127,7 @@ See [lifecycle behavior](lifecycle.md) and [usage sources](USAGE.md). Usage refr
 OpenRouter setup validates a key with `GET https://openrouter.ai/api/v1/key` and fetches `GET /models`. The app stores that key in Keychain and sends its working copy only to the owner-authenticated loopback configuration endpoint. The bridge routes explicit `harbor/openrouter/<model>` requests to `https://openrouter.ai/api/v1/responses`, using only the OpenRouter credential. It rejects unknown model IDs. Upstream authentication failures clear the in-memory credential. Disconnect removes the saved key and keeps catalog choices for reconnecting.
 
 The public model catalog declares tools, reasoning, input modalities, and context capacity. These declarations determine available choices; they do not substitute for model-specific live verification. OpenRouter's official Responses schema is maintained in [its TypeScript SDK](https://github.com/OpenRouterTeam/typescript-sdk/blob/main/src/models/responsesrequest.ts).
+
+## Azure OpenAI
+
+`AzureProvider.swift` validates direct resource endpoints and runs the deployment tool-call check. `AzureSetupView.swift` collects the key privately; `AppStore` stores it through the existing Keychain path. The local `/harbor/providers/azure` endpoint requires the owner token and rejects browser origins. The Python bridge pins the key to the saved resource endpoint and routes `harbor/azure/<deployment>` to that resource with an `api-key` header. Redirects are disabled at verification and inference boundaries. Subscription credentials and host-only Codex metadata are not sent upstream. Azure uses the tool translation path and does not enter the Baseten pacer. See [Azure behavior and limitations](azure.md).

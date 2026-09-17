@@ -8,6 +8,7 @@ struct ProviderDefinition: Identifiable {
     let dashboard: String
     static let all: [ProviderDefinition] = [
         .init(id: "codex-subscription", name: "Codex", symbol: "terminal", method: "ChatGPT subscription", dashboard: "https://chatgpt.com"),
+        .init(id: "azure", name: "Azure", symbol: "cloud", method: "Azure OpenAI API", dashboard: "https://ai.azure.com"),
         .init(id: "baseten", name: "Baseten", symbol: "square.stack.3d.up", method: "Direct API", dashboard: "https://app.baseten.co"),
         .init(id: "grok-oauth", name: "Grok", symbol: "sparkle", method: "Browser sign-in", dashboard: "https://grok.com"),
         .init(id: "openrouter", name: "OpenRouter", symbol: "arrow.triangle.branch", method: "API key", dashboard: "https://openrouter.ai/settings/keys")

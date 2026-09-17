@@ -3,6 +3,10 @@ import Foundation
 @MainActor
 final class GrokAdapter {
     private var process: Process?
+    private var baseURL: String {
+        let port = Int(ProcessInfo.processInfo.environment["MODEL_HARBOR_PORT"] ?? "48118") ?? 48118
+        return "http://127.0.0.1:\((1...65535).contains(port) ? port : 48118)"
+    }
 
     func start() throws {
         if process?.isRunning == true { return }
@@ -25,7 +29,7 @@ final class GrokAdapter {
     func isHealthy() async -> Bool {
         guard process?.isRunning == true else { return false }
         do {
-            let request = URLRequest(url: URL(string: "http://127.0.0.1:48118/health")!, timeoutInterval: 1)
+            let request = URLRequest(url: URL(string: "\(baseURL)/health")!, timeoutInterval: 1)
             let (bytes, _) = try await URLSession.shared.data(for: request)
             let json = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
             return json?["adapter"] as? String == "codex-model-switcher-grok"
@@ -39,7 +43,7 @@ final class GrokAdapter {
 
     func connectionStatus() async throws -> Data {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/status")!, timeoutInterval: 2)
+        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/status")!, timeoutInterval: 2)
         request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
         let (bytes, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ProviderError.message("Harbor status is unavailable.") }
@@ -49,7 +53,7 @@ final class GrokAdapter {
     func setTaskRepairsEnabled(_ enabled: Bool) async throws {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         let action = enabled ? "enable" : "disable"
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/repairs/\(action)")!, timeoutInterval: 5)
+        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/repairs/\(action)")!, timeoutInterval: 5)
         request.httpMethod = "POST"
         request.httpBody = Data()
         request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
@@ -61,7 +65,7 @@ final class GrokAdapter {
 
     func configureOpenRouter(key: String) async throws {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/providers/openrouter")!, timeoutInterval: 5)
+        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/providers/openrouter")!, timeoutInterval: 5)
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -72,9 +76,22 @@ final class GrokAdapter {
         }
     }
 
+    func configureAzure(endpoint: String, key: String) async throws {
+        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/providers/azure")!, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["endpoint": endpoint, "key": key])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ProviderError.message("Azure settings could not reach the Harbor bridge. Finish active tasks, reopen Model Harbor, and try again.")
+        }
+    }
+
     func accountStatus() async throws -> Data {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/oauth/status")!, timeoutInterval: 60)
+        var request = URLRequest(url: URL(string: "\(baseURL)/oauth/status")!, timeoutInterval: 60)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (bytes, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -85,7 +102,7 @@ final class GrokAdapter {
 
     func reconnectBaseten() async throws {
         let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/baseten/reconnect")!, timeoutInterval: 70)
+        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/baseten/reconnect")!, timeoutInterval: 70)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (bytes, response) = try await URLSession.shared.data(for: request)

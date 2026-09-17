@@ -4,6 +4,14 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+### Azure OpenAI
+
+- Added direct Azure Responses routing with resource endpoint and exact deployment names, macOS Keychain storage, and a billable tool-call connection check.
+- Deployment options explicitly select image input, context limits, and the reasoning setting tested during setup. Azure requests do not use Baseten's queue.
+- Setup can make Azure the new-task default and hide Baseten. Provider visibility now lives in Settings → Providers and applies to the usage picker too.
+- Restricted credential transmission to direct HTTPS Azure resource domains and blocked redirects. Azure authentication failures clear the bridge's working credential; quota errors preserve the connection.
+- Azure spend and quotas remain available through the Azure dashboard; Harbor does not report invented billing totals.
+
 ### Dock, startup, and warm-up
 
 - Keep Harbor in the Dock and menu bar, or use the menu bar alone.

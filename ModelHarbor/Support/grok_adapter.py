@@ -793,10 +793,12 @@ class Translation:
         # Conversation text, function calls, and tool results remain in the history.
         result = [copy.deepcopy(item) for item in source if item.get('type') != 'reasoning']
         for item in result:
+            # Inline history is portable; provider-owned item IDs are not. Keep call_id links.
+            if item.get('type', 'message') in ('message', 'function_call', 'custom_tool_call',
+                                               'function_call_output', 'custom_tool_call_output'):
+                item.pop('id', None)
             if item.get('type') in ('function_call', 'custom_tool_call'):
                 custom = item['type'] == 'custom_tool_call'
-                if custom:
-                    item.pop('id', None)
                 namespace = item.pop('namespace', None)
                 group = flat_name(namespace, 'dispatch') if namespace else None
                 if group in self.groups:

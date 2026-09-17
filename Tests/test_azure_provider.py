@@ -1,3 +1,4 @@
+import copy
 import io
 import json
 import unittest
@@ -72,6 +73,41 @@ class AzureConnectionsTests(unittest.TestCase):
         self.assertEqual(payload['input'], 'Hello')
         for key in ['reasoning', 'client_metadata', 'service_tier']: self.assertNotIn(key, payload)
         self.assertEqual(bridge.provider_status()['activity']['azure']['completed'], 1)
+
+    def test_replayed_codex_tool_results_reach_azure_without_foreign_item_ids(self):
+        self.configure()
+        source = {'model': 'harbor/azure/coding-prod', 'stream': False,
+                  'tools': [{'type': 'custom', 'name': 'apply_patch'}],
+                  'input': [
+                      {'type': 'message', 'id': 'msg_foreign', 'role': 'user', 'content': 'Keep this history'},
+                      {'type': 'custom_tool_call', 'id': 'ctc_foreign', 'call_id': 'call_patch',
+                       'name': 'apply_patch', 'input': '*** Begin Patch\n*** End Patch'},
+                      {'type': 'custom_tool_call_output', 'id': 'ctco_foreign', 'call_id': 'call_patch',
+                       'output': 'Applied patch', 'status': 'completed'},
+                      {'type': 'function_call', 'id': 'foreign_call', 'call_id': 'call_read',
+                       'name': 'read', 'arguments': '{"id":"document-7"}'},
+                      {'type': 'function_call_output', 'id': 'foreign_result', 'call_id': 'call_read',
+                       'output': '{"id":"document-7","text":"marker"}'}]}
+        original = copy.deepcopy(source)
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[]}')
+            status, _ = self.request(path='/harbor/v1/responses', body=source,
+                                     headers={'Authorization': 'Bearer synthetic-owner-token'})
+            payload = json.loads(opener.return_value.open.call_args.args[0].data)
+        self.assertEqual(status, 200)
+        self.assertFalse(any('id' in item for item in payload['input']))
+        self.assertEqual([item.get('call_id') for item in payload['input'][1:]],
+                         ['call_patch', 'call_patch', 'call_read', 'call_read'])
+        self.assertEqual(payload['input'][0], {'type': 'message', 'role': 'user', 'content': 'Keep this history'})
+        self.assertEqual(payload['input'][2], {'type': 'function_call_output', 'call_id': 'call_patch',
+                                             'output': 'Applied patch', 'status': 'completed'})
+        self.assertEqual(json.loads(payload['input'][1]['arguments']), {'input': '*** Begin Patch\n*** End Patch'})
+        self.assertEqual(payload['input'][3]['arguments'], '{"id":"document-7"}')
+        self.assertEqual(payload['input'][4]['output'], '{"id":"document-7","text":"marker"}')
+        self.assertEqual(source, original)
 
     def test_disconnected_or_changed_endpoint_fails_closed(self):
         with self.assertRaisesRegex(ValueError, 'Connect Azure'):

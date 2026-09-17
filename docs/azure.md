@@ -52,3 +52,7 @@ Azure inference keys do not provide a Harbor billing integration. Usage shows th
 
 - [Microsoft: Azure OpenAI v1 API](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle)
 - [OpenAI: Codex configuration reference](https://developers.openai.com/codex/config-reference/)
+
+## Continuing a task from another provider
+
+Harbor replays the conversation text, tool calls, and tool results when you switch to Azure. It removes provider-owned item IDs from inline history while preserving each `call_id` that links a tool result to its call. This also applies when Codex custom tool results are converted to standard function results; a `ctco_` ID must not be forwarded on the converted item. No saved task history is rewritten.

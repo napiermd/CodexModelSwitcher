@@ -39,7 +39,8 @@ class TranslationTests(unittest.TestCase):
                                'name':'read_0','arguments':'{"file":"a.txt"}'})
         result={'type':'function_call_output','call_id':'call-1','output':'marker-19'}
         sent=t.input_items([codex,result])
-        self.assertEqual(sent,[call,result])
+        self.assertEqual(sent,[{'type':'function_call','call_id':'call-1','name':alias,
+                                'arguments':json.dumps({'tool':'read_0','arguments':'{"file":"a.txt"}'})},result])
 
     def test_stream_preserves_text_and_emits_complete_namespaced_call(self):
         t=self.translation()
@@ -79,7 +80,10 @@ class TranslationTests(unittest.TestCase):
         self.assertFalse(any('id' in item for item in native.request['input']))
         translated=module.Translation({'tools':tools,'input':history})
         self.assertEqual(translated.request['input'][0]['type'],'function_call')
-        self.assertNotIn('id',translated.request['input'][0])
+        self.assertFalse(any('id' in item for item in translated.request['input']))
+        self.assertEqual(translated.request['input'][1],{'type':'function_call_output','call_id':'call1','output':'done'})
+        self.assertEqual(translated.request['input'][2]['call_id'],'call2')
+        self.assertEqual(history[1]['id'],'ctco_foreign')
         self.assertEqual(history[0]['id'],'ctc_foreign')
 
     def test_opaque_reasoning_does_not_corrupt_tool_history(self):

@@ -35,9 +35,22 @@ final class AzureProviderTests: XCTestCase {
 
     func testDiscoveryListsOnlyReadyDeploymentNamesNotBaseModels() throws {
         let response = Data(#"{"data":[{"id":"coding-prod","model":"base-model","status":"succeeded"},{"id":"building","status":"creating"},{"id":"failed","status":"failed"},{"id":"../unsafe","status":"succeeded"},{"id":"base-only","object":"model"},{"id":"coding-prod","status":"succeeded"},{"id":"fast"}]}"#.utf8)
-        XCTAssertEqual(try AzureAPI.deploymentNames(response), ["coding-prod", "fast"])
-        XCTAssertEqual(try AzureAPI.deploymentNames(Data(#"{"data":[]}"#.utf8)), [])
-        XCTAssertThrowsError(try AzureAPI.deploymentNames(Data(#"{"unexpected":[]}"#.utf8)))
+        XCTAssertEqual(try AzureAPI.deploymentOptions(response).map(\.id), ["coding-prod", "fast"])
+        XCTAssertEqual(try AzureAPI.deploymentOptions(Data(#"{"data":[]}"#.utf8)), [])
+        XCTAssertThrowsError(try AzureAPI.deploymentOptions(Data(#"{"unexpected":[]}"#.utf8)))
+    }
+
+    func testDiscoveryDistinguishesAnAliasFromItsUnderlyingModel() throws {
+        let response = Data(#"{"data":[{"id":"coding-prod","model":{"name":"base-model","version":"2026-01"}},{"id":"legacy","model":"other-model","model_version":"2"},{"id":"unknown"}]}"#.utf8)
+        let options = try AzureAPI.deploymentOptions(response)
+        XCTAssertEqual(options[0].id, "coding-prod")
+        XCTAssertEqual(options[0].modelName, "base-model")
+        XCTAssertEqual(options[0].version, "2026-01")
+        XCTAssertEqual(options[0].label, "coding-prod — base-model")
+        XCTAssertEqual(options[1].modelName, "other-model")
+        XCTAssertEqual(options[1].version, "2")
+        XCTAssertNil(options[2].modelName)
+        XCTAssertNil(options[2].version)
     }
 
     func testCheckUsesExactDeploymentAndSelectedCapabilities() throws {

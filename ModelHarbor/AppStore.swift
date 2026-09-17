@@ -572,6 +572,7 @@ final class AppStore: ObservableObject {
                 throw ProviderError.message("This connection belongs to a different Azure resource. Keep its endpoint. For an additional resource, add a separate custom provider in Settings → Providers.")
             }
             try await AzureAPI.verify(endpoint: endpoint, key: key, deployment: deployment)
+            try Task.checkCancellation()
             let path = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/azure.json")
             var entries: [[String: Any]] = []
             if let bytes = try? Data(contentsOf: path),
@@ -597,7 +598,12 @@ final class AppStore: ObservableObject {
             await refreshConnectionStatus()
             statusMessage = "Azure verified and saved. Reopen Codex once to load a newly added deployment. Existing task choices stay unchanged."
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch {
+            if Task.isCancelled { statusMessage = "Azure verification cancelled." }
+            else if (error as? URLError)?.code == .timedOut { errorMessage = "Azure did not finish verification within 60 seconds. Try a lower reasoning setting or check the deployment in Azure." }
+            else { errorMessage = error.localizedDescription }
+            return false
+        }
     }
 
     func syncOpenRouter() async {

@@ -7,10 +7,10 @@ Model Harbor can route named Azure deployments through the same local bridge as 
 1. Open **Add provider → Azure → Connect** in Harbor.
 2. Enter your resource endpoint, such as `https://your-resource.openai.azure.com/openai/v1/`. Direct `services.ai.azure.com` endpoints are also accepted. Redirects, URL credentials, custom ports, query strings, and non-Azure hosts are rejected.
 3. Enter the resource API key in the secure field. It is saved in macOS Keychain and held in memory by the local bridge while Harbor is running.
-4. Enter the **deployment name** from Azure. This can differ from the underlying model name. An API key alone does not identify a deployment.
+4. Click **Find deployments** to check the key and load ready deployments from your resource. Choose one from the picker, or enter its exact name manually if the resource does not expose discovery. This can differ from the underlying model name. Harbor lists deployments, not the separate catalog of base models. Discovery does not create deployments or run inference.
 5. In **Deployment options**, select a reasoning setting, enable image input if supported, and set a context token limit from the deployed model's specifications. The conservative default is 128,000 tokens; it is not a discovered capacity. Deployment default omits reasoning controls from requests.
 6. Choose whether to use this deployment for new tasks and hide Baseten in Harbor.
-7. Click **Verify & add deployment**. This sends one small, billable Responses request and requires a completed function call. When image input is enabled, the check also includes a tiny test image. A failed check does not save the new connection.
+7. Click **Verify & add deployment**. This sends one small, billable Responses request and requires a completed function call. When image input is enabled, the check also includes a tiny test image. A failed check does not save the new connection. The form shows elapsed time and a Cancel action; discovery stops after 20 seconds and verification after 60 seconds.
 8. Reopen Codex once to load newly added catalog entries. Select the named Azure deployment in an existing Harbor task to move that task to Azure. Existing choices are never migrated automatically.
 
 Add more deployments using **Manage connection → Add or update deployment**. Enter an existing deployment name to update its options. A connection is pinned to one Azure resource; additional resources can use the separate custom-provider workflow.

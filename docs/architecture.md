@@ -85,12 +85,32 @@ Harbor preserves several historical filenames so upgrades retain user data:
 
 Treat the entire Codex directory as private. Metadata can still contain account names or emails even when tokens are excluded. Other configuration managers do not share Harbor's lock.
 
+## Window lifecycle, startup, and warm-up
+
+`AppDelegate` owns a retained main window. `WindowLifecycleController` hides that window on close and changes macOS activation policy to keep Harbor in the Dock or only the menu bar. The SwiftUI menu-bar scene stays available. Explicit application termination stops the bridge.
+
+`LifecyclePreferences` persists presentation and close choices in user defaults. `LoginItemController` reads `SMAppService.mainApp` for OS registration status and registers only after an explicit user toggle. The open-application AppleEvent distinguishes login launches from manual launches so startup can stay quiet.
+
+`WarmUpController` is separate from task model routing. When enabled, it waits for a ready, idle bridge, reads only the current Codex `auth.json`, and sends one low-effort request directly to the Codex subscription Responses endpoint. It does not refresh tokens, scan saved accounts, or unlock credential helpers. A persisted daily attempt prevents automatic retry loops across relaunches. The transport denies redirects and requires a completed stream within its size and time limits.
+
+`CodexRestartController` acts only after a user action and native confirmation. It keeps graceful and force termination distinct, waits for actual exit, and rechecks for another instance before reopening. A graceful timeout never escalates.
+
+See [lifecycle behavior](lifecycle.md) and [usage sources](USAGE.md). Usage refresh and warm-up are separate: usage refresh reads limits or costs; warm-up performs inference and consumes quota.
+
 ## Source map
 
 | File | Responsibility |
 | --- | --- |
 | `ModelHarbor/ContentView.swift` | Native connections and settings UI |
 | `ModelHarbor/AppStore.swift` | Connection state, catalog discovery, saved settings |
+| `ModelHarbor/GeneralSettingsView.swift` | Window, startup, appearance, and warm-up controls |
+| `ModelHarbor/LifecyclePreferences.swift` | Persisted window preferences and login-event recognition |
+| `ModelHarbor/WindowLifecycleController.swift` | Close dialog and Dock/menu-bar activation policy |
+| `ModelHarbor/LoginItemController.swift` | macOS login-item status and registration |
+| `ModelHarbor/CodexRestartController.swift` | Confirmed Codex termination and optional reopening |
+| `ModelHarbor/WarmUpController.swift` | Optional scheduling and bounded Codex warm-up requests |
+| `ModelHarbor/Usage.swift` and `UsageView.swift` | Account usage, cached history, and source-labeled presentation |
+| `ModelHarbor/Support/provider_usage.py` | Baseten and OpenRouter billing readers |
 | `ModelHarbor/LiveRouting.swift` | Per-model route IDs and catalog generation |
 | `ModelHarbor/CodexConfigWriter.swift` | Validated config updates and backups |
 | `ModelHarbor/CredentialStore.swift` | Keychain boundary and metadata encoding |

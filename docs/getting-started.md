@@ -40,7 +40,18 @@ The script also reuses the signing identity of `/Applications/Model Harbor.app` 
 5. Reopen Codex **once** to load the new catalog. Start a task using Harbor and choose a named model in that task's picker.
 6. Choose another model in another task. Return to the first task; its choice stays with it. Changing the new-task default does not change existing tasks.
 
-A task created with a direct provider retains that provider. Selecting a Harbor model in an older OpenAI task changes the model name but does not migrate its provider. Repair that task using the next section, or start a Harbor task. You do not need a new task for every model change within Harbor. Separate saved Codex accounts are shared connection settings, not per-task identities; switching those accounts still requires restarting Codex.
+A task created with a direct provider retains that provider. Selecting a Harbor model in an older OpenAI task changes the model name but does not migrate its provider. Repair that task using [automatic route repair](#repair-an-older-openai-task), or start a Harbor task. You do not need a new task for every model change within Harbor. Separate saved Codex accounts are shared connection settings, not per-task identities; switching those accounts still requires restarting Codex.
+
+## Choose startup and close behavior
+
+Open **Settings → General**, or press **Command-comma** in the main window.
+
+1. Choose **Dock + menu bar** or **Menu bar only** under **Show in**.
+2. Choose an **On close** behavior. **Ask every time** offers Keep in Dock, Menu Bar Only, Cancel, and a remembered choice.
+3. Turn on **Launch at login** if Harbor should start after you sign in to this Mac. Follow the System Settings link if macOS requires approval.
+4. Choose System, Light, or Dark appearance. Leave warm-up off unless you want it to make a real Codex request on startup or a daily schedule.
+
+Closing the window keeps Harbor serving tasks. Quitting Harbor stops the bridge. Wait for active requests to finish before installing or restarting it. A session-only Baseten helper credential needs another unlock after Harbor restarts. See [lifecycle and startup](lifecycle.md).
 
 ## Connect OpenRouter
 
@@ -57,7 +68,7 @@ Use **Manage connection → Choose models** to update the list, or **Disconnect*
 
 Select a provider tab for its connection, model list, requests in progress, and last completed response. **Bridge online** means the local process is available. **Connected** means the provider credential or session is ready; a provider can still return capacity or billing errors. Codex starts at **Configured** and becomes **Connected** after a completed response through Harbor. Completed-request counts reset when Harbor restarts.
 
-The panel expands to fit content. It uses scrolling only when the available screen height is insufficient. Settings contains menu-bar text modes, appearance, visible providers, saved accounts, and advanced routing controls.
+The panel expands to fit content. It uses scrolling only when the available screen height is insufficient. General contains window, startup, appearance, and warm-up settings. Menu bar contains display modes and usage refresh. Providers contains connections and saved accounts; Advanced contains routing and confirmed Codex restart controls.
 
 ## Repair an older OpenAI task
 

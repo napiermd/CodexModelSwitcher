@@ -5,61 +5,28 @@
 <p align="center"><a href="https://napiermd.github.io/model-harbor/">Website & interactive demo</a> · <a href="docs/getting-started.md">Get started</a> · <a href="docs/architecture.md">How it works</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 <p align="center"><a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-075154"></a> <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-075154"> <a href="https://github.com/napiermd/model-harbor/actions/workflows/ci.yml"><img alt="Checks" src="https://github.com/napiermd/model-harbor/actions/workflows/ci.yml/badge.svg"></a></p>
 
+Model Harbor connects your Codex subscription, Grok sign-in, Baseten, and optional OpenRouter account to Codex. Choose a model in each task, track account usage and API spend, and keep the bridge available in the Dock or menu bar.
+
+> **Source preview.** Build locally with Xcode. A notarized public installer is not available yet. Load Harbor's catalog with one Codex restart, then switch among loaded models within existing Harbor tasks. See [setup and compatibility](docs/getting-started.md).
+
 ![An illustrated example of separate models staying with separate tasks](branding/overview.svg)
 
-## Dock, startup, and appearance
+## What you can do
 
-Use **Settings → General** for Dock/menu-bar behavior, window-close choices, launch at login, appearance, and optional Codex warm-up. **Settings → Advanced** contains explicit Codex close/reopen controls. See [Lifecycle, startup, and quit](docs/lifecycle.md).
+| Capability | How it works |
+| --- | --- |
+| Keep a different model in each task | Choose a named model in the Codex task picker. Other tasks keep their choices. |
+| See usage and spend | Read Codex and Grok quotas and resets, Baseten organization costs, and OpenRouter key spend. Sources and account scope stay visible. |
+| Use the Dock and menu bar | Keep both, or choose menu bar only. Closing the window keeps Harbor serving tasks. |
+| Customize the menu bar | Show connection, activity, remaining quota, today's spend, next reset, last requested model, or a compact icon. |
+| Control startup and warm-up | Launch at login, choose appearance, and optionally schedule a short Codex request. Warm-up is off by default and uses quota. |
+| Run a mixed-model coding team | Pin planning, coding, and review models with the bundled worktree launcher. |
 
-## Usage and spend
+See [what changed](CHANGELOG.md) and the [roadmap](ROADMAP.md).
 
-Track Codex account limits and resets, Grok subscription quota, Baseten
-organization API spend, and OpenRouter key usage from **Usage & spend**.
-Daily history and optional CodexBar token-value estimates keep their source
-and account scope visible. Usage checks reuse existing credentials without
-opening 1Password. See [Usage and spend](docs/USAGE.md) for coverage and setup.
+## Build and connect
 
-## One model choice per task
-
-Choose a model in **each Codex task's picker**. Model Harbor connects the current Codex subscription, Grok browser sign-in, Baseten, and OpenRouter through a local bridge. Task A can use Grok while task B keeps its Codex model. You can change a model inside an existing Harbor task and continue the conversation.
-
-Harbor manages connections and a **new task default**. Each task keeps its own model. An in-progress turn stays on the model it started with. Keep Harbor running.
-
-> **Source preview.** Build locally with Xcode. There is no notarized public installer yet. Reopen Codex once to load Harbor's model catalog. After that, model changes within Harbor tasks do not require a restart. Switching a saved Codex account through the separate direct connection still does.
-
-Older OpenAI tasks that select a Harbor model can use [automatic task route repair](docs/getting-started.md#repair-an-older-openai-task). Harbor waits for Codex to release the task, preserves its conversation, and reports any repair that needs attention.
-
-> **Older tasks:** A task created with the native OpenAI provider does not switch providers when you choose a Harbor model. If you see "model is not supported when using Codex with a ChatGPT account," use the [one-time task repair](docs/getting-started.md#repair-an-older-openai-task). It preserves the conversation and requires closing Codex once.
-
-## Bring your connections
-
-| Connection | Authentication | What Harbor does |
-| --- | --- | --- |
-| Current Codex subscription | ChatGPT sign-in managed by Codex | Uses the account already signed in to Codex and its available model catalog. |
-| Grok | Official Grok CLI browser OAuth | Loads the account's models and uses the official client's session and refresh flow. |
-| Baseten | Direct API credential or credential helper | Calls Baseten directly. A helper such as 1Password unlocks once per Harbor session. |
-| OpenRouter | API key in macOS Keychain | Verifies your key, discovers tool-capable models, and routes selected models through your OpenRouter account. |
-| Saved Codex accounts | Browser OAuth and macOS Keychain | Retains the separate account-switching workflow, which requires restarting Codex. |
-
-Provider eligibility and model availability depend on your accounts. Grok OAuth is not a guarantee that every Grok subscription includes this access. Harbor does not provide provider credits. OpenRouter is optional and uses its own account billing.
-
-## A useful menu bar
-
-The provider inspector shows connection state, requests in progress, and the last completed response. Its height fits the selected provider; it scrolls only when the content exceeds the available screen.
-
-Open **Settings → Menu bar** to choose provider connection, provider activity, last requested model, connected-provider count, Harbor name, or icon only. Customize visible providers there; appearance is in **Settings → General**. Activity covers Harbor requests across tasks; it does not identify the task currently in the foreground. Codex shows **Configured** until Harbor verifies a completed response.
-
-Use **Add provider → OpenRouter** to verify a key and choose models from the live tool-capable catalog. Other Responses-compatible endpoints remain available through **Custom provider**. New catalog entries require reopening Codex once; switching among already loaded Harbor models does not.
-
-## Mixed-model coding teams
-
-Use Kimi K3 for planning, with GLM 5.3, DeepSeek V4 Pro 0813, and Kimi K2.7 Code in separate coding worktrees. The bundled launcher pins each worker’s model and verified reasoning setting, then returns results to your coordinating task. Codex can stay open.
-
-See [agent teams](docs/agent-teams.md) for reusable roles, installation, concurrent workers, review, and the distinction between native subagents and worktree isolation.
-
-## Build and run
-
-Install Xcode 16+ and Homebrew Python 3.14. Sign in to Codex and run it once to populate its local configuration and model catalog.
+Install macOS 13+, Xcode 16+, and Homebrew Python 3.14. Open Codex and sign in once so its local configuration and model catalog exist.
 
 ```sh
 git clone https://github.com/napiermd/model-harbor.git
@@ -68,20 +35,68 @@ cd model-harbor
 open "build/Build/Products/Debug/Model Harbor.app"
 ```
 
-This builds a local evaluation app. For ongoing use with saved accounts, use a **stable signing certificate** instead of `--ad-hoc`. Changing a signature can trigger Keychain approval again. The build script can reuse the identity of an installed Model Harbor app, or you can set `MODEL_HARBOR_SIGNING_IDENTITY`. It does not install over your existing app or change your signing certificates.
+This creates a local evaluation app. For ongoing use with saved accounts, use a **stable signing certificate**. Ad-hoc rebuilds can prompt for Keychain approval again. The build script can reuse the identity of an installed Model Harbor app, or you can set `MODEL_HARBOR_SIGNING_IDENTITY`. It does not install over an existing app or change signing certificates.
 
-Follow [the setup guide](docs/getting-started.md) to connect providers, configure Baseten, load the Codex picker, and recover from a canceled unlock.
+Follow the [setup guide](docs/getting-started.md) to connect providers, choose a new-task default, and load the Codex picker. Keep one Harbor instance running while tasks use its bridge.
+
+## Bring your connections
+
+| Connection | Authentication | Behavior |
+| --- | --- | --- |
+| Current Codex subscription | ChatGPT sign-in managed by Codex | Uses the current account and its available model catalog. |
+| Grok | Official Grok CLI browser OAuth | Uses the official client's session, refresh flow, and account models. |
+| Baseten | Direct API credential or credential helper | Calls Baseten directly. A helper such as 1Password unlocks once per Harbor session. |
+| OpenRouter | API key in macOS Keychain | Verifies your key, discovers tool-capable models, and uses your OpenRouter account. |
+| Saved Codex accounts | Browser OAuth and macOS Keychain | Provides a separate direct-account switching workflow that requires restarting Codex. |
+
+Provider access, available models, and charges depend on your accounts. Grok OAuth does not guarantee that every subscription includes CLI access. Harbor supplies no provider credits. OpenRouter is optional and has its own billing.
+
+Use **Add provider → OpenRouter** for the verified-key setup. The **Custom provider** editor supports compatible direct Responses endpoints. Adding another provider to live Harbor routing requires implementation and compatibility checks. See [customization](docs/customization.md).
+
+## Change models in the same conversation
+
+Choose a model in **each Codex task's picker**. Task A can use Grok while task B keeps its Codex model. An in-progress turn finishes with the model it started with. Harbor's **new-task default** affects future tasks.
+
+New catalog entries require reopening Codex once. Switching among entries already loaded in a Harbor task does not. Provider account sign-ins are shared connections; Harbor does not isolate a different OAuth identity for every task.
+
+An older task created with the native OpenAI provider may report that a `harbor/...` model is unsupported. [Automatic route repair](docs/getting-started.md#repair-an-older-openai-task) can migrate the task after Codex releases its writer lock and preserve the conversation. Codex can stay open when archive and restore release that task; an offline repair is also available.
+
+## Dock, menu bar, and settings
+
+The provider panel shows connection readiness, active requests, and completed responses. Codex shows **Configured** until Harbor verifies a completed response. The panel grows to fit its content and scrolls when it reaches the available screen height.
+
+| Settings section | Controls |
+| --- | --- |
+| **General** | Dock/menu-bar presence, close behavior, manual-launch window, launch at login, System/Light/Dark appearance, and optional warm-up. |
+| **Menu bar** | Display mode, icon and provider visibility, usage refresh, and optional CodexBar history. |
+| **Providers** | Connect and manage providers, plus saved Codex accounts. |
+| **Advanced** | New-task default, inactive-task route repair, and confirmed Codex close/reopen actions. |
+
+Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** stops the bridge. Launch at login uses macOS login-item registration and opens quietly.
+
+Warm-up sends one short, low-effort request through the current Codex account. Choose manual, after-startup, or daily operation and edit the prompt. Automatic attempts run only while Harbor is ready and idle, at most once per local day. Warm-up consumes subscription quota, does not raise rate limits, and makes no performance guarantee. See [lifecycle and startup](docs/lifecycle.md).
+
+## Understand usage and spend
+
+Open **Usage & spend** to view account limits, reset times, and API costs. Baseten costs cover the entire organization across Model API keys. OpenRouter figures cover the current key. Reading a different account's usage does not switch a task's model or credentials.
+
+CodexBar is an optional source for cached Claude quota and local token-value history. Those API-price estimates are labeled separately from provider-reported charges and are not subscription bills. Usage checks reuse existing credentials without opening 1Password. See [coverage, sources, and setup](docs/USAGE.md).
+
+## Mixed-model coding teams
+
+The bundled launcher uses Kimi K3 for planning and review, with GLM 5.3, DeepSeek V4 Pro 0813, and Kimi K2.7 Code in separate coding worktrees. Roles pin their model and verified reasoning setting. The coordinating task reviews and integrates the results. Codex can stay open.
+
+See [agent teams](docs/agent-teams.md) for role installation, assignments, concurrent workers, and the difference between native subagents and isolated worktrees.
 
 ## Read, change, verify
 
-The app is SwiftUI. The local Responses bridge is Python, with no Python package dependencies. The public website is plain HTML, CSS, and JavaScript. There is no Model Harbor cloud service in the request path.
+The app is SwiftUI. The local Responses bridge is Python with no Python package dependencies. The website is plain HTML, CSS, and JavaScript. No Model Harbor cloud service sits in the request path.
 
-- [Architecture and data flow](docs/architecture.md): where a request goes, where credentials live, and how tasks retain their models.
-- [Customization](docs/customization.md): edit model catalogs, add a direct provider, change the UI, or extend the bridge.
-- [Verification and known limits](FORK.md): automated checks and the scope of live testing.
-- [Security policy](SECURITY.md): report privately and keep credentials out of issues.
-- [Contributing](CONTRIBUTING.md): build, test, and submit a focused change.
-- [Roadmap](ROADMAP.md): public packaging, onboarding, and compatibility work.
+- [Architecture](docs/architecture.md): request destinations, credential boundaries, and source files.
+- [Customization](docs/customization.md): model catalogs, providers, interface, and build configuration.
+- [Verification](FORK.md): automated coverage, live checks, and known limits.
+- [Contributing](CONTRIBUTING.md): local development and pull requests.
+- [Security](SECURITY.md): private reporting and credential handling.
 
 ```sh
 swift test
@@ -89,10 +104,10 @@ python3 -m unittest discover -s Tests -p 'test_*.py'
 python3 scripts/check-site.py
 ```
 
-Live verification is opt-in, uses your provider accounts, and may incur provider usage. It is not part of public CI.
+Live verification is opt-in, uses your provider accounts, and may consume quota or incur API charges. Public CI uses synthetic fixtures. Login after a real reboot and live warm-up still need separate verification.
 
 ## Ownership and license
 
-Model Harbor is **Andrew Napier's** community fork of [CodexModelSwitcher](https://github.com/hieunc229/CodexModelSwitcher), created by **Hieu Nguyen (Jack)**. The upstream app and Git history remain credited. Model Harbor adds its own routing, authentication protections, tests, visual identity, and documentation.
+Model Harbor is **Andrew Napier's** community fork of [CodexModelSwitcher](https://github.com/hieunc229/CodexModelSwitcher), created by **Hieu Nguyen (Jack)**. The upstream authorship and Git history remain credited. Harbor adds task routing, usage tracking, authentication protections, tests, its own visual identity, and documentation.
 
-[MIT licensed](LICENSE). You can use, modify, fork, and redistribute the software under that license. See [NOTICE.md](NOTICE.md) for upstream provenance, font licenses, and third-party names. Model Harbor is independent of OpenAI, xAI, Baseten, OpenRouter, and 1Password.
+[MIT licensed](LICENSE). Use, modify, fork, and redistribute it under that license. See [NOTICE.md](NOTICE.md) for provenance, font licenses, and third-party names. Model Harbor is independent of OpenAI, xAI, Baseten, OpenRouter, 1Password, and CodexBar.

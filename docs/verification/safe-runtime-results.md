@@ -76,3 +76,6 @@ The first full run exposed an existing test race: the OpenRouter auth-error asse
 Final local checks passed 298 Python tests with ResourceWarning treated as an error, 71 Swift tests, the signed Xcode build, and ten tests against the packaged gateway. The signed bundle contains `azure_admission.py`. Staging succeeded at `build/staged-updates/independent-gateway-admission-review-20260917/`; its manifest reports installed=false, provider_verified=false, and live_handoff_verified=false. Exact source-to-build binding remains unverified.
 
 Open requirements remain explicit: total request deadlines, effective desktop retry ownership, coordination across runtimes, real Azure parity, and authoritative desktop turn completion. Local stream admission does not satisfy those requirements or authorize a production Bifrost route.
+
+
+The first hosted run for the admission change exposed a test-only scheduling assumption: a 20 ms timeout test resumed after 141 ms on a loaded runner. Deadline and override assertions now use an injected monotonic clock with exact condition-wait budgets. Real concurrent stream, FIFO, cancellation, and close-barrier tests remain. This does not promise operating-system scheduling within 100 ms or weaken the production queue deadline.

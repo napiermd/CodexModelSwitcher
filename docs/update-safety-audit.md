@@ -17,6 +17,8 @@ The ad hoc installer was retired before this audit. Operational instructions are
 
 ## Source map
 
+This map records the pre-change baseline. Candidate implementation files and verification are listed below.
+
 | Concern | Files and observed behavior |
 | --- | --- |
 | UI owns gateway | `ModelHarbor/AppDelegate.swift`: `applicationWillTerminate` calls `stopAdapter`. `GrokAdapter.swift` owns and terminates the Python `Process`; its health check requires that child to be running. |
@@ -53,6 +55,8 @@ No decision to install Bifrost or route production traffic follows from the audi
 | [SAY-3342](https://linear.app/sayvant/issue/SAY-3342) | Hermetic production-entrypoint integration harness with controllable stream/tool/lifecycle barriers. | Extend with runtime work; pass before handoff is enabled. |
 | [SAY-3343](https://linear.app/sayvant/issue/SAY-3343) | Verified candidate promotion, turn-aware draining, and reversible new-turn admission. | Blocked by SAY-3338 through SAY-3342. |
 | [SAY-3344](https://linear.app/sayvant/issue/SAY-3344) | Isolated pinned Bifrost/Azure comparison and a documented adoption decision. | Independent experiment; no live route change. |
+| [SAY-3345](https://linear.app/sayvant/issue/SAY-3345) | Preserve opaque/encrypted history and streamed output across the pinned transport. | Native fixtures pass; real Azure continuation remains required. |
+| [SAY-3346](https://linear.app/sayvant/issue/SAY-3346) | Prove bounded admission, cancellation, Retry-After, and one total attempt/deadline policy. | Local stream admission passes; effective desktop retries and composed routing remain unverified. |
 
 ## Risks and controls
 
@@ -89,7 +93,7 @@ Tests must use isolated `HOME`, config, token, state, and ports. No automated te
 - [x] Read-only audit and baseline checks before implementation.
 - [x] Create focused Linear issues with dependencies and acceptance tests.
 - [x] Deliver and locally verify stage-only release tooling (SAY-3338; review pending).
-- [ ] Separate gateway ownership and implement verified readiness.
+- [x] Separate gateway ownership and implement verified readiness in the staged candidate.
 - [ ] Establish reliable desktop turn lifecycle and retained ownership.
 - [ ] Pass the production-entrypoint lifecycle test matrix.
 - [ ] Implement and verify promotion, draining, and rollback.
@@ -97,9 +101,17 @@ Tests must use isolated `HOME`, config, token, state, and ports. No automated te
 
 ## Implementation evidence, September 17, 2026
 
-The independent runtime, authenticated control connection, configuration-bound readiness, and durable unfinished-turn ownership are implemented in the staged candidate. The local suite passes 241 Python tests and 71 Swift tests. All 10 production-entrypoint lifecycle tests also pass against the signed app resources, and the candidate passes signature/inventory staging. See [verification results](verification/safe-runtime-results.md).
+The independent runtime, authenticated control connection, configuration-bound readiness, and durable unfinished-turn ownership are implemented in the staged candidate. The local suite passes 298 Python tests and 71 Swift tests. All 10 production-entrypoint lifecycle tests also pass against the signed app resources, and the candidate passes signature/inventory staging. See [verification results](verification/safe-runtime-results.md).
 
-The original completion gates above remain unchanged. Actual desktop completion observation is still unproven, so promotion, retirement, rollback, and shutdown refuse. The production-entrypoint matrix covers these refusals, not successful rolling handoff. The [Bifrost pilot](bifrost-evaluation.md) produced a no-go decision after reasoning-history and retry-policy failures. Its live Azure, concurrency, queue, and cost comparison requirements remain open. No installed app, live routing, or user task history was changed.
+The original completion gates above remain unchanged. Actual desktop completion observation is still unproven, so promotion, retirement, rollback, and shutdown refuse. The production-entrypoint matrix covers these refusals, not successful rolling handoff. The [Bifrost pilot](bifrost-evaluation.md) reproduced reasoning-history and retry-policy failures on the normalized route. Native Azure passthrough now passes repeated 24-case synthetic matrices on both ARM64 and AMD64, but pressure tests show its worker count does not cap established streams. The staged Harbor candidate adds bounded Azure stream admission in response. Real Azure parity, total deadlines/effective caller retries, cross-runtime coordination, and cost comparison remain open, so production adoption stays no-go. No installed app, live routing, or user task history was changed.
+
+## Candidate implementation map
+
+- `Support/gateway_service.py`, `gateway_runtime.py`, and `gateway_control.py` retain the runtime, unfinished-turn ownership, and authenticated controller connection.
+- `GrokAdapter.swift` and `Support/grok_adapter.py` attach the GUI and verify provider readiness against runtime/configuration identity.
+- `Support/azure_admission.py` and the handler bound Azure streams and FIFO queue time without adding retries or changing task routes.
+- `scripts/stage-update.py` publishes separately verified signed candidates. `Tests/test_gateway_lifecycle.py` exercises the packaged entrypoint with isolated state.
+- `experiments/bifrost/` retains exact image pins, synthetic fixtures, pressure measurements, and report provenance. `docs/verification/safe-runtime-results.md` records the evidence and remaining gates.
 
 ## Primary references
 

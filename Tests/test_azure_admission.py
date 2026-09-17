@@ -15,6 +15,25 @@ from azure_admission import AdmissionCancelled, AdmissionFull, AdmissionQueue, A
 
 KEY = ('https://fixture.openai.azure.com/openai/v1', 'Exact-Deployment')
 EMPTY = {'keys': 0, 'active': 0, 'waiting': 0}
+THREAD_TIMEOUT = 10
+
+
+class SimulatedMonotonic:
+    def __init__(self):
+        self.now = 0.0
+        self.waits = []
+
+    def __call__(self):
+        return self.now
+
+    def wait(self, timeout):
+        if timeout is None or not 0 < timeout <= .1:
+            raise AssertionError('Admission wait exceeded the 100 ms polling bound')
+        if len(self.waits) >= 32:
+            raise AssertionError('Admission did not honor the bounded synthetic deadline')
+        self.waits.append(timeout)
+        self.now += timeout
+        return False
 
 
 class AzureAdmissionTests(unittest.TestCase):
@@ -29,7 +48,7 @@ class AzureAdmissionTests(unittest.TestCase):
         return permit
 
     def wait_counts(self, queue, **expected):
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + THREAD_TIMEOUT
         while time.monotonic() < deadline:
             snapshot = queue.snapshot()
             if all(snapshot[name] == value for name, value in expected.items()):
@@ -42,29 +61,29 @@ class AzureAdmissionTests(unittest.TestCase):
             return True
 
     def test_default_two_active_and_one_waiting_until_explicit_release(self):
-        queue, pool = AdmissionQueue(wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(), self.pool()
         first, second = self.hold(queue), self.hold(queue)
         granted, response_finished = threading.Event(), threading.Event()
         self.addCleanup(response_finished.set)
         def consume_response():
             with queue.acquire(KEY):
                 granted.set()
-                if not response_finished.wait(1):
+                if not response_finished.wait(THREAD_TIMEOUT):
                     raise TimeoutError('Synthetic response never finished')
         future = pool.submit(consume_response)
         self.assertEqual(self.wait_counts(queue, waiting=1), {'keys': 1, 'active': 2, 'waiting': 1})
         self.assertFalse(granted.is_set())
         first.release()
-        self.assertTrue(granted.wait(.5))
+        self.assertTrue(granted.wait(THREAD_TIMEOUT))
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 2, 'waiting': 0})
         second.release()
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 0})
         response_finished.set()
-        future.result(timeout=1)
+        future.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_default_waiting_capacity_is_sixteen_and_overflow_never_grants(self):
-        queue, pool = AdmissionQueue(wait_seconds=2), self.pool()
+        queue, pool = AdmissionQueue(), self.pool()
         first, second = self.hold(queue), self.hold(queue)
         futures = [pool.submit(self.acquire_and_release, queue) for _ in range(16)]
         self.wait_counts(queue, waiting=16)
@@ -73,18 +92,18 @@ class AzureAdmissionTests(unittest.TestCase):
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 2, 'waiting': 16})
         first.release()
         second.release()
-        self.assertEqual([future.result(timeout=1) for future in futures], [True] * 16)
+        self.assertEqual([future.result(timeout=THREAD_TIMEOUT) for future in futures], [True] * 16)
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_fifo_waiters_cannot_be_overtaken_by_new_arrival_racing_release(self):
         pool = self.pool()
         for attempt in range(12):
             with self.subTest(attempt=attempt):
-                queue = AdmissionQueue(active_limit=1, wait_seconds=1)
+                queue = AdmissionQueue(active_limit=1)
                 held = self.hold(queue)
                 order = []
                 def run(label, gate=None):
-                    if gate is not None and not gate.wait(1):
+                    if gate is not None and not gate.wait(THREAD_TIMEOUT):
                         raise TimeoutError('Synthetic start gate timed out')
                     with queue.acquire(KEY):
                         order.append(label)
@@ -97,12 +116,12 @@ class AzureAdmissionTests(unittest.TestCase):
                 held.release()
                 start.set()
                 for future in (first, second, late):
-                    future.result(timeout=1)
+                    future.result(timeout=THREAD_TIMEOUT)
                 self.assertEqual(order, ['first', 'second', 'late'])
                 self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_cancelled_head_is_removed_without_dispatch_or_blocking_next_waiter(self):
-        queue, pool = AdmissionQueue(active_limit=1, wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(active_limit=1), self.pool()
         held = self.hold(queue)
         cancelled = threading.Event()
         head = pool.submit(self.acquire_and_release, queue, cancelled=cancelled.is_set)
@@ -111,10 +130,10 @@ class AzureAdmissionTests(unittest.TestCase):
         self.wait_counts(queue, waiting=2)
         cancelled.set()
         with self.assertRaises(AdmissionCancelled):
-            head.result(timeout=.3)
+            head.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 1})
         held.release()
-        self.assertTrue(next_waiter.result(timeout=1))
+        self.assertTrue(next_waiter.result(timeout=THREAD_TIMEOUT))
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_cancellation_is_rechecked_immediately_before_an_available_grant(self):
@@ -125,7 +144,7 @@ class AzureAdmissionTests(unittest.TestCase):
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_cancellation_observed_while_release_races_never_grants(self):
-        queue, pool = AdmissionQueue(active_limit=1, wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(active_limit=1), self.pool()
         held = self.hold(queue)
         cancel = threading.Event()
         future = pool.submit(self.acquire_and_release, queue, cancelled=cancel.is_set)
@@ -133,11 +152,11 @@ class AzureAdmissionTests(unittest.TestCase):
         cancel.set()
         held.release()
         with self.assertRaises(AdmissionCancelled):
-            future.result(timeout=1)
+            future.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_waiting_callback_exception_removes_waiter_and_preserves_active_permit(self):
-        queue, pool = AdmissionQueue(active_limit=1, wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(active_limit=1), self.pool()
         held = self.hold(queue)
         fail = threading.Event()
         def cancelled():
@@ -148,7 +167,7 @@ class AzureAdmissionTests(unittest.TestCase):
         self.wait_counts(queue, waiting=1)
         fail.set()
         with self.assertRaisesRegex(RuntimeError, 'Synthetic cancellation callback failure'):
-            future.result(timeout=.3)
+            future.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 0})
         held.release()
         self.assertEqual(queue.snapshot(), EMPTY)
@@ -167,17 +186,15 @@ class AzureAdmissionTests(unittest.TestCase):
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_cancel_poll_wait_never_exceeds_100ms_without_release_notification(self):
-        queue, pool = AdmissionQueue(active_limit=1, wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(active_limit=1), self.pool()
         held = self.hold(queue)
         cancel = threading.Event()
         with patch.object(queue._condition, 'wait', wraps=queue._condition.wait) as waits:
             future = pool.submit(self.acquire_and_release, queue, cancelled=cancel.is_set)
             self.wait_counts(queue, waiting=1)
-            started = time.monotonic()
             cancel.set()
             with self.assertRaises(AdmissionCancelled):
-                future.result(timeout=.25)
-            self.assertLess(time.monotonic() - started, .2)  # Allows OS scheduling delay.
+                future.result(timeout=THREAD_TIMEOUT)
             self.assertTrue(waits.call_args_list)
             self.assertTrue(all(0 < call.kwargs['timeout'] <= .1 for call in waits.call_args_list))
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 0})
@@ -185,33 +202,37 @@ class AzureAdmissionTests(unittest.TestCase):
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_own_queue_timeout_does_not_include_age_of_held_permit(self):
-        queue = AdmissionQueue(active_limit=1, wait_seconds=.04)
+        clock = SimulatedMonotonic()
+        queue = AdmissionQueue(active_limit=1, wait_seconds=.04, clock=clock)
         held = self.hold(queue)
-        threading.Event().wait(.05)
-        started = time.monotonic()
-        with self.assertRaises(AdmissionTimeout):
-            queue.acquire(KEY)
-        elapsed = time.monotonic() - started
-        self.assertGreaterEqual(elapsed, .035)
-        self.assertLess(elapsed, .2)
+        clock.now = 1000.0
+        with patch.object(queue._condition, 'wait', side_effect=clock.wait):
+            with self.assertRaises(AdmissionTimeout):
+                queue.acquire(KEY)
+        self.assertAlmostEqual(clock.now, 1000.04)
+        self.assertEqual(len(clock.waits), 1)
+        self.assertAlmostEqual(clock.waits[0], .04)
         self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 0})
         held.release()
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_timeout_override_shortens_but_cannot_extend_policy(self):
-        queue = AdmissionQueue(active_limit=1, wait_seconds=.06)
-        held = self.hold(queue)
-        for timeout, maximum in ((.02, .1), (10, .2)):
+        for timeout, expected_waits in ((.02, [.02]), (10, [.1, .1, .06]),
+                                        (None, [.1, .1, .06])):
             with self.subTest(timeout=timeout):
-                started = time.monotonic()
-                with self.assertRaises(AdmissionTimeout):
-                    queue.acquire(KEY, timeout=timeout)
-                elapsed = time.monotonic() - started
-                self.assertGreaterEqual(elapsed, min(timeout, .06) * .9)
-                self.assertLess(elapsed, maximum)
-                self.assertEqual(queue.snapshot()['waiting'], 0)
-        held.release()
-        self.assertEqual(queue.snapshot(), EMPTY)
+                clock = SimulatedMonotonic()
+                queue = AdmissionQueue(active_limit=1, wait_seconds=.26, clock=clock)
+                held = self.hold(queue)
+                with patch.object(queue._condition, 'wait', side_effect=clock.wait):
+                    with self.assertRaises(AdmissionTimeout):
+                        queue.acquire(KEY, timeout=timeout)
+                self.assertEqual(len(clock.waits), len(expected_waits))
+                for actual, expected in zip(clock.waits, expected_waits):
+                    self.assertAlmostEqual(actual, expected)
+                self.assertAlmostEqual(clock.now, sum(expected_waits))
+                self.assertEqual(queue.snapshot(), {'keys': 1, 'active': 1, 'waiting': 0})
+                held.release()
+                self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_expired_waiter_cannot_grant_when_capacity_becomes_available(self):
         now = [0.0]
@@ -222,11 +243,11 @@ class AzureAdmissionTests(unittest.TestCase):
         now[0] = 31
         held.release()
         with self.assertRaises(AdmissionTimeout):
-            future.result(timeout=1)
+            future.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_deployment_case_and_endpoint_have_independent_capacity(self):
-        queue, pool = AdmissionQueue(active_limit=1, wait_seconds=1), self.pool()
+        queue, pool = AdmissionQueue(active_limit=1), self.pool()
         held = self.hold(queue)
         waiting = pool.submit(self.acquire_and_release, queue)
         self.wait_counts(queue, waiting=1)
@@ -236,7 +257,7 @@ class AzureAdmissionTests(unittest.TestCase):
         other_deployment.release()
         other_endpoint.release()
         held.release()
-        self.assertTrue(waiting.result(timeout=1))
+        self.assertTrue(waiting.result(timeout=THREAD_TIMEOUT))
         self.assertEqual(queue.snapshot(), EMPTY)
 
     def test_equivalent_endpoint_spellings_share_capacity(self):
@@ -261,12 +282,12 @@ class AzureAdmissionTests(unittest.TestCase):
     def test_idempotent_release_is_safe_when_multiple_threads_race(self):
         queue, pool = AdmissionQueue(active_limit=1, max_waiting=0), self.pool()
         held = self.hold(queue)
-        barrier = threading.Barrier(8, timeout=1)
+        barrier = threading.Barrier(8, timeout=THREAD_TIMEOUT)
         def release():
             barrier.wait()
             held.release()
         for future in [pool.submit(release) for _ in range(8)]:
-            future.result(timeout=1)
+            future.result(timeout=THREAD_TIMEOUT)
         self.assertEqual(queue.snapshot(), EMPTY)
         with queue.acquire(KEY):
             held.release()

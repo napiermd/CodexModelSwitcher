@@ -198,13 +198,21 @@ class StageUpdateTests(unittest.TestCase):
         for name in ('installed-app', 'config.toml', 'task-history.jsonl'):
             (protected / name).write_bytes(b'preserve this existing content\n')
         before = {path.name: path.read_bytes() for path in protected.iterdir()}
-        code = '''from http.server import HTTPServer, BaseHTTPRequestHandler
+        code = '''import faulthandler
+faulthandler.dump_traceback_later(10)
+from http.server import BaseHTTPRequestHandler
+from socketserver import TCPServer
+import socket
+def reject_dns(*args, **kwargs):
+ raise AssertionError("Loopback fixture must not resolve hostnames")
+socket.getfqdn = reject_dns
 class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   self.send_response(200); self.end_headers(); self.wfile.write(b"still serving")
  def log_message(self, *args): pass
-server = HTTPServer(("127.0.0.1", 0), Handler)
-print(server.server_port, flush=True)
+server = TCPServer(("127.0.0.1", 0), Handler)
+faulthandler.cancel_dump_traceback_later()
+print(server.server_address[1], flush=True)
 server.serve_forever()
 '''
         stderr = self.enterContext(tempfile.TemporaryFile(mode='w+'))

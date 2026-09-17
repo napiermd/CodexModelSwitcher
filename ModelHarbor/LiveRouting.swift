@@ -33,6 +33,18 @@ enum LiveRouting {
         }
     }
 
+    static func normalizeReasoningLevels(in model: [String: Any]) -> [String: Any] {
+        guard let levels = model["supported_reasoning_levels"] as? [[String: Any]] else { return model }
+        let order = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        var result = model
+        result["supported_reasoning_levels"] = levels.enumerated().sorted {
+            let left = order.firstIndex(of: $0.element["effort"] as? String ?? "") ?? order.count
+            let right = order.firstIndex(of: $1.element["effort"] as? String ?? "") ?? order.count
+            return (left, $0.offset) < (right, $1.offset)
+        }.map(\.element)
+        return result
+    }
+
     static func catalog(in data: AppData) throws -> Data {
         var entries: [[String: Any]] = []
         for service in data.services where supports(service.id) {
@@ -60,7 +72,7 @@ enum LiveRouting {
                 entry["supported_in_api"] = true
                 entry["priority"] = entries.count
                 entry["supports_parallel_tool_calls"] = false
-                entries.append(entry)
+                entries.append(normalizeReasoningLevels(in: entry))
             }
         }
         if let legacy = data.legacyModel,

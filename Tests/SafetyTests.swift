@@ -36,6 +36,33 @@ final class SafetyTests: XCTestCase {
         XCTAssertEqual((kimi["supported_reasoning_levels"] as? [[String: String]])?.map { $0["effort"]! }, ["high"])
     }
 
+    func testImportedEffortOptionsIncreaseWithoutChangingMeaningOrDefault() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogURL = directory.appendingPathComponent("provider.json")
+        let supplied = ["xhigh", "high", "medium", "low"].map {
+            ["effort": $0, "description": "Provider description for \($0)"]
+        }
+        try JSONSerialization.data(withJSONObject: ["models": [["slug": "test-model",
+            "default_reasoning_level": "high", "supported_reasoning_levels": supplied]]]).write(to: catalogURL)
+        for provider in ["grok-oauth", "baseten", "codex-subscription", "openrouter"] {
+            var source = service(provider)
+            source.catalogPath = catalogURL.path
+            let data = AppData(services: [source], selectedModel: nil,
+                               legacyModel: SelectedModel(serviceID: provider, modelID: "test-model"))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+            let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
+            for slug in ["harbor/\(provider)/test-model", "harbor-selected"] {
+                let entry = try XCTUnwrap(entries.first { $0["slug"] as? String == slug })
+                let levels = try XCTUnwrap(entry["supported_reasoning_levels"] as? [[String: String]])
+                XCTAssertEqual(levels.map { $0["effort"]! }, ["low", "medium", "high", "xhigh"], slug)
+                XCTAssertEqual(levels.map { $0["description"]! }, ["low", "medium", "high", "xhigh"].map { "Provider description for \($0)" })
+                XCTAssertEqual(entry["default_reasoning_level"] as? String, "high")
+            }
+        }
+    }
+
     func testMetadataNeverEncodesSecrets() throws {
         let account = OpenAIAccount(id: "account", name: "Account", authJSON: "private-oauth-token", accountID: "id", email: nil, createdAt: Date())
         let data = AppData(services: [service("example")], selectedModel: nil, openAIAccounts: [account])

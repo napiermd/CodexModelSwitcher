@@ -5,12 +5,26 @@ import SwiftUI
 struct ModelHarborApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = AppStore.shared
+
     var body: some Scene {
         MenuBarExtra {
             ContentView().environmentObject(store)
         } label: {
             HarborMenuBarLabel().environmentObject(store)
-        }.menuBarExtraStyle(.window)
+        }
+        .menuBarExtraStyle(.window)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Open Model Harbor…") {
+                    NotificationCenter.default.post(name: .harborOpenWindow, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+                Button("Settings…") {
+                    NotificationCenter.default.post(name: .harborOpenWindow, object: nil, userInfo: ["settings": true])
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
+        }
     }
 }
 
@@ -29,7 +43,8 @@ private struct HarborMenuBarLabel: View {
                   let percent = snapshot.windows.compactMap(\.remainingPercent).min() else { return "\(provider.name) · Quota unavailable" }
             return "\(provider.name) · \(Int(percent.rounded()))% left"
         case .spend:
-            guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale, let amount = snapshot.costToday else { return "\(provider.name) · Spend unavailable" }
+            guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale,
+                  let amount = snapshot.costToday else { return "\(provider.name) · Spend unavailable" }
             return "\(provider.name) · \(amount.formatted(.currency(code: "USD")))\(snapshot.isEstimate ? " est." : "")"
         case .reset:
             guard let snapshot = store.usageSnapshot(for: providerID), !snapshot.isStale,

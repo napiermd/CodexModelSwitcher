@@ -20,6 +20,14 @@ Codex shows Configured when its local account is present. It counts as Connected
 
 The menu bar can show the selected provider's connection, recent request activity, remaining quota, today's spend, next reset, the last requested model, a connection count, the Harbor name, or an icon. Settings also controls appearance, visible providers, task repair, saved accounts, and the default for new tasks.
 
+## Lifecycle and startup
+
+Settings opens with General, which contains window and Dock behavior, startup, appearance, and optional Codex warm-up. Advanced contains the explicit Codex close or restart action. The native panel retains its 410-point width, adaptive macOS colors, and system controls.
+
+Closing the window keeps the bridge running. Users can keep Harbor in the Dock or use the menu bar alone, with an optional remembered close choice. Login-item status comes from macOS and exposes approval requirements and errors. Login launches open quietly; normal launches follow the window preference.
+
+Warm-up is off by default. It sends a real request through the current Codex account, uses subscription quota, and makes no performance guarantee. Automatic attempts are limited to once per local day. Requests are not retried and do not refresh credentials or switch accounts. Codex closing or restarting requires an explicit action and confirmation.
+
 ## Usage and spend
 
 A separate Usage view reports current and already unlocked saved Codex accounts, Grok subscription quota, Baseten organization-wide Model API costs, and OpenRouter current-key spend. Each view states its source, account or organization scope, and update time. Unknown amounts remain unavailable; stale successful readings are labeled. Usage selection never changes task routing.

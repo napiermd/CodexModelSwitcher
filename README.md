@@ -7,6 +7,10 @@
 
 ![An illustrated example of separate models staying with separate tasks](branding/overview.svg)
 
+## Dock, startup, and appearance
+
+Use **Settings → General** for Dock/menu-bar behavior, window-close choices, launch at login, appearance, and optional Codex warm-up. **Settings → Advanced** contains explicit Codex close/reopen controls. See [Lifecycle, startup, and quit](docs/lifecycle.md).
+
 ## Usage and spend
 
 Track Codex account limits and resets, Grok subscription quota, Baseten
@@ -43,7 +47,7 @@ Provider eligibility and model availability depend on your accounts. Grok OAuth 
 
 The provider inspector shows connection state, requests in progress, and the last completed response. Its height fits the selected provider; it scrolls only when the content exceeds the available screen.
 
-Open **Settings → Menu bar** to choose provider connection, provider activity, last requested model, connected-provider count, Harbor name, or icon only. Customize appearance and visible providers there. Activity covers Harbor requests across tasks; it does not identify the task currently in the foreground. Codex shows **Configured** until Harbor verifies a completed response.
+Open **Settings → Menu bar** to choose provider connection, provider activity, last requested model, connected-provider count, Harbor name, or icon only. Customize visible providers there; appearance is in **Settings → General**. Activity covers Harbor requests across tasks; it does not identify the task currently in the foreground. Codex shows **Configured** until Harbor verifies a completed response.
 
 Use **Add provider → OpenRouter** to verify a key and choose models from the live tool-capable catalog. Other Responses-compatible endpoints remain available through **Custom provider**. New catalog entries require reopening Codex once; switching among already loaded Harbor models does not.
 

@@ -2,114 +2,147 @@ import Foundation
 
 @MainActor
 final class GrokAdapter {
-    private var process: Process?
-    private var baseURL: String {
+    private var servicePrepared = false
+    private(set) var requiresMaintenanceForRuntimeUpdate = false
+    private static var bridgePort: Int {
         let port = Int(ProcessInfo.processInfo.environment["MODEL_HARBOR_PORT"] ?? "48118") ?? 48118
-        return "http://127.0.0.1:\((1...65535).contains(port) ? port : 48118)"
+        return (1...65535).contains(port) ? port : 48118
     }
 
-    func start() throws {
-        if process?.isRunning == true { return }
-        guard let script = Bundle.main.url(forResource: "grok_adapter", withExtension: "py") else {
-            throw NSError(domain: "Switcher", code: 1, userInfo: [NSLocalizedDescriptionKey: "The Grok adapter is missing from the app bundle."])
-        }
-        let child = Process()
-        child.executableURL = try PythonRuntime.executable()
-        child.arguments = ["-B", "-u", script.path]
+    private static var bridgeEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["MODEL_HARBOR_TOKEN_PATH"] = AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token").path
         environment["MODEL_HARBOR_CONFIG_DIR"] = AppPaths.codexDirectory.path
-        child.environment = environment
-        child.standardOutput = FileHandle.nullDevice
-        child.standardError = FileHandle.nullDevice
-        try child.run()
-        process = child
+        environment["MODEL_HARBOR_PORT"] = String(bridgePort)
+        return environment
+    }
+
+    func start() async throws {
+        if servicePrepared { return }
+        guard let script = Bundle.main.url(forResource: "gateway_service", withExtension: "py") else {
+            throw ProviderError.message("The independent gateway helper is missing from the app bundle.")
+        }
+        let executable = try PythonRuntime.executable()
+        let environment = Self.bridgeEnvironment
+        let maintenanceRequired = try await Task.detached {
+            let helper = Process()
+            helper.executableURL = executable
+            helper.arguments = ["-B", "-u", script.path, "--source", script.deletingLastPathComponent().path]
+            helper.environment = environment
+            let output = Pipe()
+            helper.standardInput = FileHandle.nullDevice
+            helper.standardOutput = output
+            helper.standardError = FileHandle.nullDevice
+            try helper.run()
+            let bytes = output.fileHandleForReading.readDataToEndOfFile()
+            helper.waitUntilExit()
+            let status = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+            guard helper.terminationStatus == 0,
+                  let state = status?["state"] as? String,
+                  ["attached", "registered"].contains(state) else {
+                throw ProviderError.message(status?["error"] as? String ?? "The independent gateway could not start. Existing services were preserved.")
+            }
+            return status?["maintenance_required"] as? Bool ?? true
+        }.value
+        requiresMaintenanceForRuntimeUpdate = maintenanceRequired
+        servicePrepared = true
     }
 
     func isHealthy() async -> Bool {
-        guard process?.isRunning == true else { return false }
-        do {
-            let request = URLRequest(url: URL(string: "\(baseURL)/health")!, timeoutInterval: 1)
-            let (bytes, _) = try await URLSession.shared.data(for: request)
-            let json = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-            return json?["adapter"] as? String == "codex-model-switcher-grok"
-        } catch { return false }
+        guard let bytes = try? await connectionStatus(),
+              let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              value["routing"] as? String == "per-task",
+              value["providers"] is [String: Any] else { return false }
+        if let runtime = value["runtime"] as? [String: Any] {
+            guard runtime["protocol_version"] as? Int == 1 else { return false }
+            if runtime["mode"] as? String == "legacy" {
+                requiresMaintenanceForRuntimeUpdate = true
+                return true
+            }
+            guard runtime["mode"] as? String == "independent",
+                  let identity = runtime["runtime_id"] as? String,
+                  identity.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                  let bootID = runtime["boot_id"] as? String,
+                  UUID(uuidString: bootID) != nil else { return false }
+            requiresMaintenanceForRuntimeUpdate = false
+        } else {
+            requiresMaintenanceForRuntimeUpdate = true
+        }
+        return true
     }
 
-    func stop() {
-        process?.terminate()
-        process = nil
+    func detach() {
+        servicePrepared = false
+    }
+
+    static func ownerControl(_ method: String, path: String, body: Data = Data()) async throws -> Data {
+        guard let script = Bundle.main.url(forResource: "gateway_control", withExtension: "py") else {
+            throw ProviderError.message("The authenticated gateway control helper is missing from the app bundle.")
+        }
+        let executable = try PythonRuntime.executable()
+        let environment = bridgeEnvironment
+        let input = try JSONSerialization.data(withJSONObject: [
+            "method": method, "path": path, "body_base64": body.base64EncodedString()
+        ])
+        return try await Task.detached {
+            let helper = Process()
+            helper.executableURL = executable
+            helper.arguments = ["-B", "-u", script.path]
+            helper.environment = environment
+            let stdin = Pipe(), stdout = Pipe()
+            helper.standardInput = stdin
+            helper.standardOutput = stdout
+            helper.standardError = FileHandle.nullDevice
+            try helper.run()
+            stdin.fileHandleForWriting.write(input)
+            try stdin.fileHandleForWriting.close()
+            let bytes = stdout.fileHandleForReading.readDataToEndOfFile()
+            helper.waitUntilExit()
+            let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+            guard helper.terminationStatus == 0,
+                  result?["ok"] as? Bool == true,
+                  let encoded = result?["body_base64"] as? String,
+                  let response = Data(base64Encoded: encoded) else {
+                throw ProviderError.message(result?["error"] as? String ?? "Harbor server authentication failed. The listener was left untouched.")
+            }
+            return response
+        }.value
     }
 
     func connectionStatus() async throws -> Data {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/status")!, timeoutInterval: 2)
-        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        let (bytes, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ProviderError.message("Harbor status is unavailable.") }
-        return bytes
+        try await Self.ownerControl("GET", path: "/harbor/status")
+    }
+
+    func verifyRoute(model: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["model": model])
+        let bytes = try await Self.ownerControl("POST", path: "/harbor/verify", body: body)
+        let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        guard result?["verified"] as? Bool == true else {
+            throw ProviderError.message("Harbor could not verify this route with its current settings. The existing gateway was preserved.")
+        }
     }
 
     func setTaskRepairsEnabled(_ enabled: Bool) async throws {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         let action = enabled ? "enable" : "disable"
-        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/repairs/\(action)")!, timeoutInterval: 5)
-        request.httpMethod = "POST"
-        request.httpBody = Data()
-        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw NSError(domain: "ModelHarbor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Task repair settings could not be saved. Try again."])
-        }
+        _ = try await Self.ownerControl("POST", path: "/harbor/repairs/\(action)")
     }
 
     func configureOpenRouter(key: String) async throws {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/providers/openrouter")!, timeoutInterval: 5)
-        request.httpMethod = "POST"
-        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["key": key])
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw ProviderError.message("OpenRouter settings could not reach the Harbor bridge. Reopen Model Harbor and try again.")
-        }
+        let body = try JSONSerialization.data(withJSONObject: ["key": key])
+        _ = try await Self.ownerControl("POST", path: "/harbor/providers/openrouter", body: body)
     }
 
     func configureAzure(endpoint: String, key: String) async throws {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/providers/azure")!, timeoutInterval: 5)
-        request.httpMethod = "POST"
-        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["endpoint": endpoint, "key": key])
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw ProviderError.message("Azure settings could not reach the Harbor bridge. Finish active tasks, reopen Model Harbor, and try again.")
-        }
+        let body = try JSONSerialization.data(withJSONObject: ["endpoint": endpoint, "key": key])
+        _ = try await Self.ownerControl("POST", path: "/harbor/providers/azure", body: body)
     }
 
     func accountStatus() async throws -> Data {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "\(baseURL)/oauth/status")!, timeoutInterval: 60)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (bytes, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw NSError(domain: "ModelHarbor", code: 401, userInfo: [NSLocalizedDescriptionKey: "Sign in to Grok to load your account’s models."])
-        }
-        return bytes
+        try await Self.ownerControl("GET", path: "/oauth/status")
     }
 
     func reconnectBaseten() async throws {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "\(baseURL)/harbor/baseten/reconnect")!, timeoutInterval: 70)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (bytes, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-            throw NSError(domain: "ModelHarbor", code: 401, userInfo: [NSLocalizedDescriptionKey: result?["error"] as? String ?? "Baseten could not reconnect. Try again when 1Password is ready."])
-        }
+        _ = try await Self.ownerControl("POST", path: "/harbor/baseten/reconnect")
     }
 
     static func login() async throws {

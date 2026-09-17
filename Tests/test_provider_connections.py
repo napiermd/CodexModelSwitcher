@@ -22,7 +22,7 @@ class ProviderConnectionsTests(unittest.TestCase):
         token = self.root / 'token'
         token.write_text('synthetic-owner-token')
         (self.root / 'model-switcher.json').write_text(json.dumps({'services': [{'id': 'openrouter', 'models': [{'id': 'fixture/coder'}]}]}))
-        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {})]:
+        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {}), ('READINESS', bridge._runtime_module.RouteReadiness())]:
             patcher = patch.object(bridge, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -55,7 +55,8 @@ class ProviderConnectionsTests(unittest.TestCase):
         self.assertEqual(self.request(body={'key': key}), (200, {'configured': True}))
         status, body = self.request('GET', '/harbor/status')
         self.assertEqual(status, 200)
-        self.assertTrue(body['providers']['openrouter_ready'])
+        self.assertFalse(body['providers']['openrouter_ready'])
+        self.assertTrue(body['providers']['credentials_available']['openrouter'])
         self.assertNotIn(key, json.dumps(body))
         self.assertEqual(self.request(body={'key': ''})[0], 200)
         self.assertFalse(bridge.provider_status()['openrouter_ready'])
@@ -146,6 +147,187 @@ class ProviderConnectionsTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertFalse(bridge.provider_status()['openrouter_ready'])
         self.assertEqual(bridge.provider_status()['activity']['openrouter']['http_status'], 401)
+
+    class CompletedResponse(io.BytesIO):
+        status = 200
+        headers = {'Content-Type': 'application/json'}
+
+        def __init__(self):
+            super().__init__(b'{"status":"completed","output":[]}')
+
+    def inference(self):
+        return self.request(path='/harbor/v1/responses',
+                            body={'model': 'harbor/openrouter/fixture/coder', 'input': [], 'stream': False},
+                            headers={'Authorization': 'Bearer synthetic-owner-token'})
+
+    def probe(self):
+        return self.request(path='/harbor/verify', body={'model': 'harbor/openrouter/fixture/coder'})
+
+    def configure(self, key):
+        self.assertEqual(self.request(body={'key': key}), (200, {'configured': True}))
+
+    def test_stale_auth_failure_preserves_replacement_credential(self):
+        self.configure('synthetic-old-key')
+
+        def old_request_fails(request, **_):
+            self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+            self.configure('synthetic-new-key')
+            raise bridge.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {},
+                                                io.BytesIO(b'{"error":"old credential rejected"}'))
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = old_request_fails
+            status, _ = self.inference()
+        self.assertEqual(status, 401)
+        self.assertEqual(bridge.OPENROUTER_KEY, 'synthetic-new-key')
+        self.assertTrue(bridge.provider_status()['credentials_available']['openrouter'])
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
+
+    def test_completed_request_cannot_verify_key_changed_after_header_capture(self):
+        self.configure('synthetic-old-key')
+        original_headers = bridge.openrouter_headers
+
+        def rotate_after_capture():
+            selected = original_headers()
+            self.configure('synthetic-unproven-key')
+            return selected
+
+        with patch.object(bridge, 'openrouter_headers', side_effect=rotate_after_capture), \
+                patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = self.CompletedResponse()
+            status, body = self.inference()
+        sent = opener.return_value.open.call_args.args[0]
+        self.assertEqual(sent.get_header('Authorization'), 'Bearer synthetic-old-key')
+        self.assertEqual((status, body['status']), (200, 'completed'))
+        self.assertEqual(bridge.OPENROUTER_KEY, 'synthetic-unproven-key')
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
+        self.assertFalse(any(proof['verified'] for proof in bridge.provider_status()['route_verification']))
+
+    def test_probe_cannot_verify_key_changed_after_header_capture(self):
+        self.configure('synthetic-old-key')
+        original_headers = bridge.openrouter_headers
+
+        def rotate_after_capture():
+            selected = original_headers()
+            self.configure('synthetic-unproven-key')
+            return selected
+
+        with patch.object(bridge, 'openrouter_headers', side_effect=rotate_after_capture), \
+                patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = self.CompletedResponse()
+            status, body = self.probe()
+        sent = opener.return_value.open.call_args.args[0]
+        self.assertEqual(sent.get_header('Authorization'), 'Bearer synthetic-old-key')
+        self.assertEqual((status, body['verified']), (503, False))
+        self.assertEqual(body['result'], 'configuration_changed')
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
+
+    def test_completed_request_does_not_verify_configuration_changed_during_upstream(self):
+        self.configure('synthetic-old-key')
+
+        def response_after_rotation(request, **_):
+            self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+            self.configure('synthetic-unproven-key')
+            return self.CompletedResponse()
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = response_after_rotation
+            status, body = self.inference()
+        self.assertEqual((status, body['status']), (200, 'completed'))
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
+
+    def test_probe_rejects_configuration_changed_during_upstream(self):
+        self.configure('synthetic-old-key')
+
+        def response_after_rotation(request, **_):
+            self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+            self.configure('synthetic-unproven-key')
+            return self.CompletedResponse()
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = response_after_rotation
+            status, body = self.probe()
+        self.assertEqual((status, body['verified']), (503, False))
+        self.assertEqual(body['result'], 'configuration_changed')
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
+
+    def test_late_completed_request_cannot_replace_fresh_current_proof(self):
+        self.configure('synthetic-old-key')
+        fresh = {}
+
+        def reordered_responses(request, **_):
+            if request.get_header('Authorization') == 'Bearer synthetic-new-key':
+                return self.CompletedResponse()
+            self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+            self.configure('synthetic-new-key')
+            status, body = self.probe()
+            self.assertEqual((status, body['verified']), (200, True))
+            fresh.update(body)
+            return self.CompletedResponse()
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = reordered_responses
+            status, body = self.inference()
+        self.assertEqual((status, body['status']), (200, 'completed'))
+        providers = bridge.provider_status()
+        self.assertTrue(providers['openrouter_ready'])
+        self.assertEqual(len(providers['route_verification']), 1)
+        self.assertEqual(providers['route_verification'][0]['configuration_revision'], fresh['configuration_revision'])
+        self.assertEqual(providers['route_verification'][0]['result'], 'verified')
+
+    def test_late_failed_request_cannot_replace_fresh_current_proof(self):
+        self.configure('synthetic-old-key')
+        fresh = {}
+
+        def reordered_responses(request, **_):
+            if request.get_header('Authorization') == 'Bearer synthetic-new-key':
+                return self.CompletedResponse()
+            self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+            self.configure('synthetic-new-key')
+            status, body = self.probe()
+            self.assertEqual((status, body['verified']), (200, True))
+            fresh.update(body)
+            raise bridge.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {},
+                                                io.BytesIO(b'{"error":"old credential rejected"}'))
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = reordered_responses
+            status, _ = self.inference()
+        self.assertEqual(status, 401)
+        self.assertEqual(bridge.OPENROUTER_KEY, 'synthetic-new-key')
+        providers = bridge.provider_status()
+        self.assertTrue(providers['openrouter_ready'])
+        self.assertEqual(providers['route_verification'][0]['configuration_revision'], fresh['configuration_revision'])
+        self.assertEqual(providers['route_verification'][0]['result'], 'verified')
+
+    def test_late_probe_cannot_replace_fresh_current_proof(self):
+        for old_result in ('completed', 'auth_failed'):
+            with self.subTest(old_result=old_result):
+                self.configure('synthetic-old-key')
+                fresh = {}
+
+                def reordered_responses(request, **_):
+                    if request.get_header('Authorization') == 'Bearer synthetic-new-key':
+                        return self.CompletedResponse()
+                    self.assertEqual(request.get_header('Authorization'), 'Bearer synthetic-old-key')
+                    self.configure('synthetic-new-key')
+                    status, body = self.probe()
+                    self.assertEqual((status, body['verified']), (200, True))
+                    fresh.update(body)
+                    if old_result == 'auth_failed':
+                        raise bridge.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {},
+                                                            io.BytesIO(b'{"error":"old credential rejected"}'))
+                    return self.CompletedResponse()
+
+                with patch.object(bridge.urllib.request, 'build_opener') as opener:
+                    opener.return_value.open.side_effect = reordered_responses
+                    status, body = self.probe()
+                self.assertEqual((status, body['verified']), (503, False))
+                self.assertEqual(body['result'], 'configuration_changed')
+                providers = bridge.provider_status()
+                self.assertTrue(providers['openrouter_ready'])
+                self.assertEqual(providers['route_verification'][0]['configuration_revision'], fresh['configuration_revision'])
+                self.assertEqual(providers['route_verification'][0]['result'], 'verified')
 
 
 if __name__ == '__main__': unittest.main()

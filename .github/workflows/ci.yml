@@ -23,6 +23,10 @@ jobs:
         run: python3 -m unittest discover -s Tests -p 'test_*.py'
       - name: Build evaluation app
         run: ./scripts/build-app.sh --ad-hoc
+      - name: Exercise the packaged gateway without installing
+        env:
+          HARBOR_TEST_BUNDLE_RESOURCES: build/Build/Products/Debug/Model Harbor.app/Contents/Resources
+        run: python3 -B -W error::ResourceWarning -m unittest discover -s Tests -p test_gateway_lifecycle.py
       - name: Stage and verify evaluation artifact without installing
         run: python3 scripts/stage-update.py --app "build/Build/Products/Debug/Model Harbor.app" --name ci-evaluation
   website:

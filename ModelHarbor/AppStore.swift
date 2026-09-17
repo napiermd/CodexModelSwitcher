@@ -25,6 +25,7 @@ final class AppStore: ObservableObject {
     @Published var lastProviderID = ""
     @Published var lastRequestedModel = ""
     @Published var azureReady = false
+    @Published var providerCredentialsAvailable: [String: Bool] = [:]
     @Published var connectingAzure = false
     @Published var openRouterReady = false
     @Published var connectingOpenRouter = false
@@ -34,6 +35,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var usageLastAttempt = Date.distantPast
     private var usagePolling: Task<Void, Never>?
     private var connectionPolling: Task<Void, Never>?
+    private var gatewayBootID: String?
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -48,14 +50,17 @@ final class AppStore: ObservableObject {
     init(startAdapter: Bool = true) {
         load()
         if startAdapter {
-            do {
-                try grokAdapter.start()
-                proxyStatus = .starting
-                Task {
+            proxyStatus = .starting
+            Task {
+                do {
+                    try await grokAdapter.start()
                     for _ in 0..<50 {
-                        try? grokAdapter.start()
+                        try? await grokAdapter.start()
                         if await grokAdapter.isHealthy() {
                             proxyStatus = .active
+                            if grokAdapter.requiresMaintenanceForRuntimeUpdate {
+                                statusMessage = "The existing gateway is still serving tasks. Its runtime update requires coordinated maintenance."
+                            }
                             await refreshGrokAccount()
                             await syncOpenRouter()
                             await syncAzure()
@@ -89,8 +94,8 @@ final class AppStore: ObservableObject {
                         try? await Task.sleep(nanoseconds: 100_000_000)
                     }
                     proxyStatus = .error
-                }
-            } catch { errorMessage = error.localizedDescription; proxyStatus = .error }
+                } catch { errorMessage = error.localizedDescription; proxyStatus = .error }
+            }
         }
     }
 
@@ -98,7 +103,7 @@ final class AppStore: ObservableObject {
         WarmUpController.shared.stop()
         connectionPolling?.cancel()
         usagePolling?.cancel()
-        grokAdapter.stop()
+        grokAdapter.detach()
     }
 
     func usageSnapshot(for provider: String) -> UsageSnapshot? {
@@ -192,13 +197,13 @@ final class AppStore: ObservableObject {
     func reconnectBaseten() {
         guard !isBasetenReconnectRunning else { return }
         isBasetenReconnectRunning = true
-        statusMessage = "Unlock Baseten in 1Password once for this Harbor session."
+        statusMessage = "Unlock Baseten in 1Password once for this gateway session."
         Task {
             defer { isBasetenReconnectRunning = false; Task { await refreshConnectionStatus() } }
             do {
                 try await grokAdapter.reconnectBaseten()
                 errorMessage = ""
-                statusMessage = "Baseten is ready. Its credential stays in memory until Harbor quits or you reconnect."
+                statusMessage = "Baseten is ready. Its credential stays in memory until the gateway restarts or you reconnect."
             } catch {
                 statusMessage = ""
                 errorMessage = error.localizedDescription
@@ -226,8 +231,25 @@ final class AppStore: ObservableObject {
             return
         }
         proxyStatus = .active
+        let bootID = (value["runtime"] as? [String: Any])?["boot_id"] as? String
+        let gatewayRestarted = gatewayBootID != nil && bootID != nil && gatewayBootID != bootID
+        gatewayBootID = bootID
+        if gatewayRestarted {
+            do {
+                if let service = data.services.first(where: { $0.id == "openrouter" }), !service.apiKey.isEmpty {
+                    try await grokAdapter.configureOpenRouter(key: service.apiKey)
+                }
+                if let service = data.services.first(where: { $0.id == "azure" }), !service.apiKey.isEmpty {
+                    let endpoint = try AzureAPI.endpoint(service.baseURL).absoluteString
+                    try await grokAdapter.configureAzure(endpoint: endpoint, key: service.apiKey)
+                }
+                await refreshConnectionStatus()
+                return
+            } catch { errorMessage = "The gateway restarted, but its saved connections could not be restored: \(error.localizedDescription)" }
+        }
         basetenState = (value["baseten_auth"] as? [String: Any])?["state"] as? String ?? "not_loaded"
         if let providers = value["providers"] as? [String: Any] {
+            providerCredentialsAvailable = providers["credentials_available"] as? [String: Bool] ?? [:]
             openRouterReady = providers["openrouter_ready"] as? Bool ?? false
             azureReady = providers["azure_ready"] as? Bool ?? false
             providerActivity = (providers["activity"] as? [String: [String: Any]] ?? [:]).mapValues(ProviderActivity.init)
@@ -554,6 +576,7 @@ final class AppStore: ObservableObject {
     func providerConnectionLabel(_ id: String) -> String {
         if proxyStatus != .active { return "Offline" }
         if providerConnected(id) { return "Connected" }
+        if providerCredentialsAvailable[id] == true { return "Configured · verification needed" }
         if id == "codex-subscription" && codexConfigured { return "Configured" }
         return "Not connected"
     }

@@ -6,6 +6,15 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
 
+### Update safety foundation
+
+- Stage signed artifacts with a content manifest, without changing the installed app or running gateway.
+- Prepare a per-user gateway service with retained Python resources and exclusive startup ownership. GUI quit no longer terminates this independent runtime.
+- Persist unfinished turn ownership through tool gaps; refuse duplicate dispatch, changed account bindings, and replay after uncertain delivery. Storage pressure retains existing owners.
+- Separate saved credentials from route verification tied to runtime, configuration, and deployment. Status polling does not trigger paid inference.
+- Exercise the production entrypoint and packaged runtime with isolated state and synthetic providers.
+- Keep live promotion, retirement, and rollback disabled until actual desktop completion signals are verified. These changes are staged source work; no installed migration or uninterrupted desktop update is claimed.
+
 ### Azure OpenAI
 
 - Added direct Azure Responses routing with resource endpoint and exact deployment names, macOS Keychain storage, and a billable tool-call connection check.

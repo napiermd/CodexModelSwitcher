@@ -1,5 +1,7 @@
 """Local Responses bridge for Codex subscriptions, Grok OAuth and Baseten."""
 import copy
+import base64
+import importlib.util
 import io
 import math
 import random
@@ -34,7 +36,7 @@ TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.
 AUTH_PATH = pathlib.Path.home() / '.grok/auth.json'
 AUTH_LOCK = threading.Lock()
 CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.Path.home() / '.codex')))
-ROUTE_LOCK = threading.Lock()
+ROUTE_LOCK = threading.RLock()
 TURN_ROUTES = OrderedDict()
 LAST_ROUTE = None
 TASK_REPAIRS = None
@@ -42,6 +44,84 @@ PROVIDER_ACTIVITY = {}
 OPENROUTER_KEY = ''
 AZURE_CONNECTION = None
 USAGE_COLLECTOR = None
+RUNTIME = None
+_runtime_spec = importlib.util.spec_from_file_location('harbor_gateway_runtime', pathlib.Path(__file__).with_name('gateway_runtime.py'))
+_runtime_module = importlib.util.module_from_spec(_runtime_spec)
+_runtime_spec.loader.exec_module(_runtime_module)
+READINESS = _runtime_module.RouteReadiness()
+_control_spec = importlib.util.spec_from_file_location('harbor_gateway_control', pathlib.Path(__file__).with_name('gateway_control.py'))
+_control_module = importlib.util.module_from_spec(_control_spec)
+_control_spec.loader.exec_module(_control_module)
+
+
+def configuration_revision():
+    digest = hashlib.sha256()
+    paths = [CONFIG_DIR / 'model-switcher.json'] + sorted((CONFIG_DIR / 'model-catalogs').glob('*.json'))
+    for path in paths:
+        digest.update(path.name.encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    with ROUTE_LOCK:
+        private = json.dumps([AZURE_CONNECTION, OPENROUTER_KEY], sort_keys=True).encode()
+    try:
+        secret = TOKEN_PATH.read_bytes()
+    except OSError:
+        secret = READINESS.boot_id.encode()
+    digest.update(hmac.digest(secret, private, 'sha256'))
+    return digest.hexdigest()
+
+
+def prepared_routed_request(source, incoming_headers):
+    before = configuration_revision()
+    translation, headers, base, route = routed_request(source, incoming_headers)
+    with ROUTE_LOCK:
+        revision = configuration_revision()
+        if route['provider'] == 'azure':
+            matches = bool(AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']
+                           and base == AZURE_CONNECTION['endpoint'])
+        elif route['provider'] == 'openrouter':
+            matches = bool(OPENROUTER_KEY and headers.get('Authorization') == 'Bearer ' + OPENROUTER_KEY)
+        else:
+            matches = False
+        if not matches or before != revision:
+            revision = None
+    return translation, headers, base, route, revision
+
+
+def record_readiness(route, revision, result):
+    with ROUTE_LOCK:
+        if revision is None or configuration_revision() != revision:
+            return False
+        READINESS.record(route, revision, result)
+        return True
+
+
+def reject_provider_credentials(route, headers):
+    global OPENROUTER_KEY, AZURE_CONNECTION
+    with ROUTE_LOCK:
+        if route['provider'] == 'openrouter' and headers.get('Authorization') == 'Bearer ' + OPENROUTER_KEY:
+            OPENROUTER_KEY = ''
+            READINESS.invalidate('openrouter')
+        elif route['provider'] == 'azure' and AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
+            AZURE_CONNECTION = None
+            READINESS.invalidate('azure')
+
+
+def request_binding(route, headers, base, request):
+    credentials = {k.lower(): v for k, v in headers.items()
+                   if k.lower() in ('authorization', 'api-key', 'chatgpt-account-id')}
+    if route['provider'] in ('codex-subscription', 'grok-oauth'):
+        # Bind the authenticated account, allowing that account's normal token refresh.
+        token = credentials.get('authorization', '').removeprefix('Bearer ')
+        try:
+            part = token.split('.')[1]
+            claims = json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))
+            if isinstance(claims, dict) and isinstance(claims.get('sub'), str) and claims['sub']:
+                credentials['authorization'] = [claims.get('iss'), claims['sub']]
+        except (ValueError, IndexError, KeyError):
+            pass
+    private = json.dumps([route, base, credentials, request.get('reasoning')], sort_keys=True).encode()
+    return hmac.new(TOKEN_PATH.read_bytes(), private, hashlib.sha256).hexdigest()
 
 
 def provider_activity_start(route):
@@ -79,7 +159,12 @@ def provider_activity_finish(route, status, http_status=None):
 
 def provider_status():
     with ROUTE_LOCK:
-        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY), 'openrouter_ready': bool(OPENROUTER_KEY), 'azure_ready': bool(AZURE_CONNECTION)}
+        records = READINESS.snapshot(configuration_revision())
+        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY),
+                'credentials_available': {'openrouter': bool(OPENROUTER_KEY), 'azure': bool(AZURE_CONNECTION)},
+                'route_verification': records,
+                'openrouter_ready': bool(OPENROUTER_KEY) and any(r['verified'] and r['provider'] == 'openrouter' for r in records),
+                'azure_ready': bool(AZURE_CONNECTION) and any(r['verified'] and r['provider'] == 'azure' for r in records)}
 
 
 def openrouter_headers():
@@ -231,27 +316,17 @@ def requested_route(model_id):
 
 
 def route_for_turn(source, headers):
-    # Codex sends a canonical turn ID across inference/tool-result requests.
-    metadata = source.get('client_metadata') or {}
-    nested = metadata.get('x-codex-turn-metadata') or headers.get('x-codex-turn-metadata', '{}')
-    if isinstance(nested, str):
-        try:
-            nested = json.loads(nested)
-        except ValueError:
-            nested = {}
-    turn_id = nested.get('turn_id') or metadata.get('turn_id')
-    thread_id = nested.get('thread_id') or metadata.get('thread_id') or metadata.get('session_id', '')
-    key = (str(thread_id), str(turn_id)) if turn_id else None
+    key = _runtime_module.turn_key(source, headers)
+    if RUNTIME is not None:
+        return RUNTIME.pin(key, lambda: requested_route(source.get('model')))
     with ROUTE_LOCK:
         if key in TURN_ROUTES:
-            TURN_ROUTES.move_to_end(key)
             return dict(TURN_ROUTES[key])
         route = requested_route(source.get('model'))
         if key:
+            if len(TURN_ROUTES) >= 100000:
+                raise ValueError('Unfinished turn journal is full; existing owners are retained')
             TURN_ROUTES[key] = route
-            # Bound idle history; active turns are touched on every tool-result request.
-            if len(TURN_ROUTES) > 4096:
-                TURN_ROUTES.popitem(last=False)
         return dict(route)
 
 
@@ -260,7 +335,7 @@ class BasetenCredentialError(ValueError):
 
 
 class BasetenCredentials:
-    """One helper unlock per app session or explicit reconnect, shared by threads."""
+    """One helper unlock per gateway session or explicit reconnect, shared by threads."""
     def __init__(self):
         self.lock = threading.Lock()
         self.signature = None
@@ -946,7 +1021,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
-                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None}).encode()
+                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None,
+                               'runtime': RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id},
+                               'configuration_revision': configuration_revision()}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -987,6 +1064,76 @@ class Handler(http.server.BaseHTTPRequestHandler):
         readable, _, _ = select.select([self.connection], [], [], 0)
         return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
 
+    def server_proof(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
+            return self.error(400, 'Browser origins and transfer-encoded requests are not supported')
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= 256:
+            return self.error(400, 'Invalid gateway handshake')
+        value = json.loads(self.rfile.read(length))
+        if (not isinstance(value, dict) or set(value) != {'nonce'}
+                or not isinstance(value['nonce'], str) or not re.fullmatch('[a-f0-9]{64}', value['nonce'])):
+            return self.error(400, 'Invalid gateway handshake')
+        state = RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id}
+        runtime = {key: state[key] for key in ('mode', 'protocol_version', 'boot_id', 'runtime_id') if key in state}
+        binding = _control_module.connection_binding(self.connection, server=True)
+        proof = _control_module.proof_digest(_control_module.read_proof_secret(TOKEN_PATH), value['nonce'], runtime, binding)
+        body = json.dumps({'runtime': runtime, 'connection': binding, 'proof': proof}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.connection.settimeout(5)
+
+    def verify_route(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= 2048:
+            return self.error(400, 'Verification requires one model identifier')
+        payload = json.loads(self.rfile.read(length))
+        if not isinstance(payload, dict) or set(payload) != {'model'}:
+            return self.error(400, 'Verification accepts only a model identifier')
+        route = requested_route(payload['model'])
+        if route['provider'] not in ('azure', 'openrouter'):
+            return self.error(400, 'Explicit probes currently support Azure and OpenRouter. Other routes require a completed request.')
+        revision = None
+        result = 'unavailable'
+        try:
+            translation, headers, base, route, revision = prepared_routed_request({'model': payload['model'],
+                'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers)
+            headers.update({'Content-Type': 'application/json'})
+            request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(), headers=headers)
+            deadline = time.monotonic() + 10
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=2) as response:
+                body = bytearray()
+                while time.monotonic() < deadline and len(body) <= 1024 * 1024:
+                    part = response.read1(4096)
+                    if not part:
+                        break
+                    body.extend(part)
+                else:
+                    raise TimeoutError('Verification deadline or response limit exceeded')
+                value = json.loads(body)
+                result = 'verified' if response.status == 200 and value.get('status') == 'completed' else 'invalid_response'
+        except urllib.error.HTTPError as error:
+            result = 'auth_failed' if error.code in (401, 403) else 'unavailable'
+            error.close()
+        except (ValueError, OSError, urllib.error.URLError, TimeoutError):
+            result = 'unavailable'
+        current = record_readiness(route, revision, result)
+        body = json.dumps({'result': result if current else 'configuration_changed', 'verified': result == 'verified' and current,
+                           'boot_id': READINESS.boot_id, 'configuration_revision': revision}).encode()
+        self.send_response(200 if result == 'verified' and current else 503)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         global LAST_ROUTE, OPENROUTER_KEY, AZURE_CONNECTION
         started = False
@@ -996,8 +1143,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = None
         pacer = None
         acquired = False
+        request_lease = None
+        revision = None
         last_heartbeat = float("-inf")
         try:
+            if self.path == '/harbor/handshake':
+                return self.server_proof()
+            if self.path in ('/harbor/runtime/promote', '/harbor/runtime/retire', '/harbor/runtime/rollback', '/harbor/runtime/shutdown'):
+                if self.headers.get('Origin') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                return self.error(409, _runtime_module.LIFECYCLE_GATE)
+            if self.path == '/harbor/verify':
+                return self.verify_route()
             if self.path in ('/harbor/providers/openrouter', '/harbor/providers/azure'):
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
@@ -1011,8 +1168,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 endpoint = azure_endpoint(value.get('endpoint')) if self.path.endswith('/azure') and key else None
                 with ROUTE_LOCK:
                     if self.path.endswith('/azure'):
-                        AZURE_CONNECTION = {'key': key, 'endpoint': endpoint} if key else None
+                        connection = {'key': key, 'endpoint': endpoint} if key else None
+                        if connection != AZURE_CONNECTION:
+                            READINESS.invalidate('azure')
+                        AZURE_CONNECTION = connection
                     else:
+                        if OPENROUTER_KEY != key:
+                            READINESS.invalidate('openrouter')
                         OPENROUTER_KEY = key
                 body = b'{"configured":true}'
                 self.send_response(200)
@@ -1076,12 +1238,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             source = json.loads(raw)
             route = None
             if routed:
-                translation, headers, base, route = routed_request(source, self.headers)
+                translation, headers, base, route, revision = prepared_routed_request(source, self.headers)
             else:
                 translation = Translation(source)
                 headers = oauth_headers() if oauth else {'Authorization': authorization}
                 base = OAUTH_BASE if oauth else 'https://api.x.ai/v1'
             if route:
+                if RUNTIME is not None:
+                    request_lease = RUNTIME.begin(_runtime_module.turn_key(source, self.headers),
+                        request_binding(route, headers, base, translation.request))
                 provider_activity_start(route)
                 activity_started = True
                 with ROUTE_LOCK:
@@ -1161,18 +1326,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
                     self.wfile.write(json.dumps(translation.output(response)).encode())
                 activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
+                if route and revision and route['provider'] in ('azure', 'openrouter'):
+                    record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
                 if route and not translation.response_status:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
         except urllib.error.HTTPError as error:
             activity_http_status = error.code
-            if route and route['provider'] == 'openrouter' and error.code in (401, 403):
-                with ROUTE_LOCK:
-                    OPENROUTER_KEY = ''
-            if route and route['provider'] == 'azure' and error.code in (401, 403):
-                with ROUTE_LOCK:
-                    if AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
-                        AZURE_CONNECTION = None
+            if route and revision and route['provider'] in ('azure', 'openrouter'):
+                record_readiness(route, revision, 'auth_failed' if error.code in (401, 403) else 'unavailable')
+            if route and error.code in (401, 403):
+                reject_provider_credentials(route, headers)
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='failed', http_status=error.code)
@@ -1223,6 +1387,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if request_lease is not None:
+                # A completed response can still request tools. Keep the turn owner.
+                RUNTIME.finish(request_lease, activity_status == 'completed' or activity_http_status is not None and not started)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:
@@ -1230,17 +1397,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pacer.leave()
 
 
+class GatewayHTTPServer(http.server.ThreadingHTTPServer):
+    # Avoid reverse DNS during startup, including isolated test environments.
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
+
+
+def main():
+    global RUNTIME, TASK_REPAIRS
+    independent = os.environ.get('MODEL_HARBOR_INDEPENDENT') == '1'
+    if independent:
+        directory = os.environ.get('MODEL_HARBOR_STATE_DIR')
+        runtime_id = os.environ.get('MODEL_HARBOR_RUNTIME_DIGEST', '')
+        if not directory or not re.fullmatch('[a-f0-9]{64}', runtime_id):
+            raise ValueError('Independent gateway requires a state directory and retained artifact digest')
+        from gateway_service import inventory, runtime_digest
+        if runtime_digest(inventory(pathlib.Path(__file__).parent)) != runtime_id:
+            raise ValueError('Runtime payload does not match its retained artifact digest')
+        RUNTIME = _runtime_module.GatewayRuntime(directory, runtime_id, READINESS.boot_id)
+    server = None
+    try:
+        # Bind before starting any repair monitor or modifying provider state.
+        server = GatewayHTTPServer(ADDRESS, Handler)
+        server.daemon_threads = False
+        ensure_bridge_token()
+        _control_module.ensure_proof_secret(TOKEN_PATH)
+        from task_repair import RepairMonitor
+        TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
+        TASK_REPAIRS.start()
+        if not independent:
+            parent_pid = os.getppid()
+            def watch_parent():
+                while os.getppid() == parent_pid:
+                    time.sleep(2)
+                server.shutdown()
+            threading.Thread(target=watch_parent, daemon=True).start()
+        server.serve_forever()
+    finally:
+        if server:
+            server.server_close()
+        if RUNTIME:
+            RUNTIME.close()
+
+
 if __name__ == '__main__':
-    ensure_bridge_token()
-    from task_repair import RepairMonitor
-    TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
-    TASK_REPAIRS.start()
-    server = http.server.ThreadingHTTPServer(ADDRESS, Handler)
-    server.daemon_threads = True
-    parent_pid = os.getppid()
-    def watch_parent():
-        while os.getppid() == parent_pid:
-            time.sleep(2)
-        server.shutdown()
-    threading.Thread(target=watch_parent, daemon=True).start()
-    server.serve_forever()
+    main()

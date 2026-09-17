@@ -35,7 +35,8 @@ class AzureConnectionsTests(unittest.TestCase):
         self.assertEqual(self.configure()[0], 200)
         status, body = self.request('GET', '/harbor/status')
         self.assertEqual(status, 200)
-        self.assertTrue(body['providers']['azure_ready'])
+        self.assertFalse(body['providers']['azure_ready'])
+        self.assertTrue(body['providers']['credentials_available']['azure'])
         self.assertNotIn(self.key, json.dumps(body))
         self.assertEqual(self.request(path='/harbor/providers/azure', body={'key': ''})[0], 200)
         self.assertFalse(bridge.provider_status()['azure_ready'])
@@ -125,7 +126,8 @@ class AzureConnectionsTests(unittest.TestCase):
                 opener.return_value.open.side_effect = error
                 status, _ = self.request(path='/harbor/v1/responses', body={'model': 'harbor/azure/coding-prod', 'input': []}, headers={'Authorization': 'Bearer synthetic-owner-token'})
             self.assertEqual(status, code)
-            self.assertEqual(bridge.provider_status()['azure_ready'], code == 429)
+            self.assertFalse(bridge.provider_status()['azure_ready'])
+            self.assertEqual(bridge.provider_status()['credentials_available']['azure'], code == 429)
 
     def test_images_and_namespaced_tools_survive_translation_and_stream(self):
         self.configure()

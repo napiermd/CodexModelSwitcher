@@ -37,7 +37,7 @@ open "build/Build/Products/Debug/Model Harbor.app"
 
 This creates a local evaluation app. For ongoing use with saved accounts, use a **stable signing certificate**. Ad-hoc rebuilds can prompt for Keychain approval again. The build script can reuse the identity of an installed Model Harbor app, or you can set `MODEL_HARBOR_SIGNING_IDENTITY`. It does not install over an existing app or change signing certificates.
 
-Follow the [setup guide](docs/getting-started.md) to connect providers, choose a new-task default, and load the Codex picker. Keep one Harbor instance running while tasks use its bridge.
+Follow the [setup guide](docs/getting-started.md) to connect providers, choose a new-task default, and load the Codex picker. The source preview prepares a retained background gateway. Existing installations need the [coordinated migration](docs/runtime-service.md) before GUI quit can preserve inference.
 
 ## Bring your connections
 
@@ -76,7 +76,7 @@ The provider panel shows connection readiness, active requests, and completed re
 | **Providers** | Harbor tab visibility, connections, and saved Codex accounts. |
 | **Advanced** | Inactive-task route repair and confirmed Codex close/reopen actions. |
 
-Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** stops the bridge. Launch at login uses macOS login-item registration and opens quietly.
+Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** disconnects the UI from the new independent gateway; older GUI-owned gateways still require Harbor to remain open. See [runtime ownership and migration limits](docs/runtime-service.md). Launch at login uses macOS login-item registration and opens quietly.
 
 Warm-up sends one short, low-effort request through the current Codex account. Choose manual, after-startup, or daily operation and edit the prompt. Automatic attempts run only while Harbor is ready and idle, at most once per local day. Warm-up consumes subscription quota, does not raise rate limits, and makes no performance guarantee. See [lifecycle and startup](docs/lifecycle.md).
 
@@ -98,6 +98,8 @@ The app is SwiftUI. The local Responses bridge is Python with no Python package 
 
 - [Architecture](docs/architecture.md): request destinations, credential boundaries, and source files.
 - [Safe updates](docs/safe-updates.md): stage a verified build while preserving the running gateway; [audit and implementation plan](docs/update-safety-audit.md).
+- [Independent runtime](docs/runtime-service.md): ownership, credential handoff, and migration limits; [desktop lifecycle evidence](docs/desktop-lifecycle-evidence.md).
+- [Bifrost evaluation](docs/bifrost-evaluation.md): isolated pilot and adoption gates.
 - [Customization](docs/customization.md): model catalogs, providers, interface, and build configuration.
 - [Verification](FORK.md): automated coverage, live checks, and known limits.
 - [Contributing](CONTRIBUTING.md): local development and pull requests.

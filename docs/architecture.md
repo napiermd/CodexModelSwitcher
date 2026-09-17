@@ -87,7 +87,7 @@ Treat the entire Codex directory as private. Metadata can still contain account 
 
 ## Window lifecycle, startup, and warm-up
 
-`AppDelegate` owns a retained main window. `WindowLifecycleController` hides that window on close and changes macOS activation policy to keep Harbor in the Dock or only the menu bar. The SwiftUI menu-bar scene stays available. Explicit application termination stops the bridge.
+`AppDelegate` owns a retained main window. `WindowLifecycleController` hides that window on close and changes macOS activation policy to keep Harbor in the Dock or only the menu bar. The SwiftUI menu-bar scene stays available. In the independent runtime, application termination stops UI polling and warm-up, while the retained gateway continues serving. The existing GUI-owned installation must be migrated during coordinated maintenance before this behavior applies. See [runtime ownership](runtime-service.md).
 
 `LifecyclePreferences` persists presentation and close choices in user defaults. `LoginItemController` reads `SMAppService.mainApp` for OS registration status and registers only after an explicit user toggle. The open-application AppleEvent distinguishes login launches from manual launches so startup can stay quiet.
 

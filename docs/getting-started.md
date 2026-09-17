@@ -29,7 +29,7 @@ MODEL_HARBOR_SIGNING_IDENTITY="Apple Development: Your Name (YOUR_ID)" \
   ./scripts/build-app.sh
 ```
 
-The script also reuses the signing identity of `/Applications/Model Harbor.app` when no identity is supplied. It fails clearly if that certificate is unavailable. It never creates certificates, alters Keychain permissions, or silently changes the signer. Keep the same bundle ID and signer across updates. You can copy the built app into Applications yourself after quitting an older Harbor instance. Run only one instance at a time.
+The script also reuses the signing identity of `/Applications/Model Harbor.app` when no identity is supplied. It fails clearly if that certificate is unavailable. It never creates certificates, alters Keychain permissions, or silently changes the signer. Keep the same bundle ID and signer across updates. Stage the build with `python3 scripts/stage-update.py --app "build/Build/Products/Debug/Model Harbor.app"`. Replacing an older GUI-owned gateway requires coordinated maintenance after affected tasks are paused or finished; see [safe updates](safe-updates.md). A momentary gap between requests is not an installation window.
 
 ## Connect
 
@@ -51,7 +51,7 @@ Open **Settings → General**, or press **Command-comma** in the main window.
 3. Turn on **Launch at login** if Harbor should start after you sign in to this Mac. Follow the System Settings link if macOS requires approval.
 4. Choose System, Light, or Dark appearance. Leave warm-up off unless you want it to make a real Codex request on startup or a daily schedule.
 
-Closing the window keeps Harbor serving tasks. Quitting Harbor stops the bridge. Wait for active requests to finish before installing or restarting it. A session-only Baseten helper credential needs another unlock after Harbor restarts. See [lifecycle and startup](lifecycle.md).
+Closing the window keeps Harbor serving tasks. The new independent gateway survives GUI quit; an older GUI-owned gateway does not. Check the [runtime migration requirements](runtime-service.md) before installing. A session-only Baseten helper credential needs another unlock after the gateway itself restarts. GUI relaunch does not reset an independent gateway's credential cache. See [lifecycle and startup](lifecycle.md).
 
 ## Connect OpenRouter
 
@@ -127,7 +127,7 @@ cp examples/baseten-models.json ~/.codex/model-catalogs/baseten-frontier.json
 
 The catalog contains example model IDs previously verified with this project. Confirm their availability and capabilities for your Baseten account. Open Harbor again to read the catalog, choose a default if necessary, then reopen Codex to load any new picker entries.
 
-On the first Baseten request, approve the credential helper once. Harbor keeps the credential in process memory for that app session. A failed or canceled unlock pauses further attempts. Click **Reconnect Baseten** when ready; it deliberately requests the credential again. Quitting Harbor clears the in-memory credential.
+On the first Baseten request, approve the credential helper once. Harbor keeps the credential in the gateway process for that gateway session. A failed or canceled unlock pauses further attempts. Click **Reconnect Baseten** when ready; it deliberately requests the credential again. Restarting the gateway clears the in-memory credential. Quitting the UI leaves the independent gateway and its credential cache running.
 
 An `env_key` may be used instead of a helper. A Finder-launched app does not normally inherit your shell's exported variables; use a helper for that setup. Never paste a real API key into an issue, example file, or Git commit.
 
@@ -146,7 +146,7 @@ An `env_key` may be used instead of a helper. A Finder-launched app does not nor
 
 ## Return to your previous setup
 
-Quit Harbor before changing its config. Harbor creates private backups beside Codex configuration files. Review the backup you want to restore, or set your previous model/provider in Codex's config while preserving unrelated settings. Reopen Codex after removing the Harbor provider/catalog settings. Keep backups, account files, and Keychain entries until you have confirmed the old setup works. Deleting the app alone does not restore the config.
+Pause or finish affected tasks and coordinate maintenance before changing shared routing configuration. Quitting the UI alone does not stop the new independent gateway. Harbor creates private backups beside Codex configuration files. Review the backup you want to restore, or set your previous model/provider in Codex's config while preserving unrelated settings. Reopen Codex after removing the Harbor provider/catalog settings. Keep backups, account files, and Keychain entries until you have confirmed the old setup works. Deleting the app alone does not restore the config.
 
 ## Azure OpenAI
 

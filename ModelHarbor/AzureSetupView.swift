@@ -12,7 +12,7 @@ struct AzureSetupView: View {
     @State private var advanced = false
     @State private var hideBaseten = true
     @State private var makeDefault = true
-    @State private var deployments: [String] = []
+    @State private var deployments: [AzureDiscoveredDeployment] = []
     @State private var discoveryMessage = ""
     @State private var findingDeployments = false
     @State private var startedAt: Date?
@@ -84,8 +84,15 @@ struct AzureSetupView: View {
             if !deployments.isEmpty {
                 Picker("Deployment", selection: $deploymentName) {
                     Text("Choose a deployment…").tag("")
-                    if !deploymentName.isEmpty && !deployments.contains(deploymentName) { Text(deploymentName).tag(deploymentName) }
-                    ForEach(deployments, id: \.self) { Text($0).tag($0) }
+                    if !deploymentName.isEmpty && !deployments.contains(where: { $0.id == deploymentName }) { Text(deploymentName).tag(deploymentName) }
+                    ForEach(deployments) { Text($0.label).tag($0.id) }
+                }
+            }
+            if let discovered = deployments.first(where: { $0.id == deploymentName }) {
+                Text(discovered.modelName.map { "Underlying model: \($0)" } ?? "Azure did not report the underlying model. Check this deployment in the Azure portal.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let version = discovered.version {
+                    Text("Model version: \(version)").font(.caption).foregroundStyle(.secondary)
                 }
             }
             TextField("Or enter the deployment name from Azure", text: $deploymentName).textFieldStyle(.roundedBorder)

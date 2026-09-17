@@ -27,6 +27,17 @@ struct AzureDeployment {
     }
 }
 
+struct AzureDiscoveredDeployment: Identifiable, Equatable {
+    let id: String
+    let modelName: String?
+    let version: String?
+
+    var label: String {
+        guard let modelName, modelName != id else { return id }
+        return "\(id) — \(modelName)"
+    }
+}
+
 enum AzureAPI {
     static func endpoint(_ value: String) throws -> URL {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,22 +70,29 @@ enum AzureAPI {
         return request
     }
 
-    static func deploymentNames(_ bytes: Data) throws -> [String] {
+    static func deploymentOptions(_ bytes: Data) throws -> [AzureDiscoveredDeployment] {
         guard let result = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let rows = result["data"] as? [[String: Any]] else {
             throw ProviderError.message("Azure did not return deployment names. Enter the exact name from Azure manually.")
         }
-        let names = rows.compactMap { row -> String? in
+        var seen = Set<String>()
+        let deployments = rows.compactMap { row -> AzureDiscoveredDeployment? in
             guard let name = row["id"] as? String,
                   row["object"] as? String != "model",
                   (row["status"] as? String).map({ $0.lowercased() == "succeeded" }) ?? true,
-                  (try? AzureDeployment(name: name).validate()) != nil else { return nil }
-            return name
+                  (try? AzureDeployment(name: name).validate()) != nil,
+                  seen.insert(name).inserted else { return nil }
+            let model = row["model"] as? [String: Any]
+            let modelName = model?["name"] as? String ?? row["model"] as? String
+            let version = model?["version"] as? String ?? row["model_version"] as? String
+            return AzureDiscoveredDeployment(id: name,
+                modelName: modelName.flatMap { $0.isEmpty ? nil : $0 },
+                version: version.flatMap { $0.isEmpty ? nil : $0 })
         }
-        return Array(Set(names)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return deployments.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
     }
 
-    static func discoverDeployments(endpoint: String, key: String) async throws -> [String] {
+    static func discoverDeployments(endpoint: String, key: String) async throws -> [AzureDiscoveredDeployment] {
         let request = try discoveryRequest(endpoint: endpoint, key: key)
         let session = session(timeout: 20)
         defer { session.invalidateAndCancel() }
@@ -82,7 +100,7 @@ enum AzureAPI {
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ProviderError.message("Azure did not return an HTTP response.") }
         switch http.statusCode {
-        case 200: return try deploymentNames(bytes)
+        case 200: return try deploymentOptions(bytes)
         case 401, 403: throw ProviderError.message("Azure rejected this key or resource access. Check that the key belongs to this endpoint.")
         case 429: throw ProviderError.message("Azure is limiting deployment discovery. Wait briefly or enter a deployment name manually.")
         default: throw ProviderError.message("This Azure resource does not expose deployment discovery (HTTP \(http.statusCode)). Enter the exact deployment name from Azure manually.")

@@ -1467,7 +1467,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = requested_route(payload['model'])
         if route['provider'] not in ('azure', 'openrouter'):
             return self.error(400, 'Explicit probes currently support Azure and OpenRouter. Other routes require a completed request.')
-        budget = _transport_module.RequestBudget(AZURE_VERIFY_SECONDS, cancelled=self.client_disconnected) if route['provider'] == 'azure' else None
+        budget = _transport_module.RequestBudget(AZURE_VERIFY_SECONDS, cancelled=self.client_disconnected)
         try:
             return self.verify_prepared_route(payload, route, budget)
         finally:

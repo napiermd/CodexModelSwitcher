@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+import time
 import http.client
 import http.server
 import importlib.util
@@ -172,6 +174,70 @@ class ProviderConnectionsTests(unittest.TestCase):
 
     def configure(self, key):
         self.assertEqual(self.request(body={'key': key}), (200, {'configured': True}))
+
+    @contextmanager
+    def delayed_probe_server(self, delay, delay_body=False):
+        class Upstream(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                body = b'{"status":"completed","output":[]}'
+                try:
+                    if not delay_body:
+                        time.sleep(delay)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.flush()
+                    if delay_body:
+                        time.sleep(delay)
+                    self.wfile.write(body)
+                except OSError:
+                    pass
+
+        upstream = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
+        upstream.daemon_threads = True
+        runner = threading.Thread(target=lambda: upstream.serve_forever(poll_interval=.01), daemon=True)
+        runner.start()
+        build = bridge.urllib.request.build_opener
+
+        def loopback(*handlers):
+            opener = build(bridge.urllib.request.ProxyHandler({}), *handlers)
+            class LocalOpener:
+                def open(self, request, **kwargs):
+                    local = bridge.urllib.request.Request(
+                        f'http://127.0.0.1:{upstream.server_port}/responses', data=request.data,
+                        headers=dict(request.header_items()), method=request.get_method())
+                    return opener.open(local, **kwargs)
+            return LocalOpener()
+        try:
+            with patch.object(bridge.urllib.request, 'build_opener', side_effect=loopback):
+                yield
+        finally:
+            upstream.shutdown()
+            upstream.server_close()
+            runner.join(2)
+
+    def test_openrouter_probe_accepts_headers_and_body_after_two_seconds(self):
+        self.configure('synthetic-key')
+        for delay_body in (False, True):
+            with self.subTest(delay_body=delay_body), patch.object(bridge, 'AZURE_VERIFY_SECONDS', 3), self.delayed_probe_server(2.15, delay_body):
+                status, body = self.probe()
+            self.assertEqual((status, body['verified']), (200, True))
+            self.assertTrue(bridge.provider_status()['openrouter_ready'])
+
+    def test_openrouter_probe_still_enforces_its_absolute_deadline(self):
+        self.configure('synthetic-key')
+        with patch.object(bridge, 'AZURE_VERIFY_SECONDS', .2), self.delayed_probe_server(.6, True):
+            started = time.monotonic()
+            status, body = self.probe()
+            elapsed = time.monotonic() - started
+        self.assertEqual((status, body['verified']), (503, False))
+        self.assertLess(elapsed, .5)
+        self.assertFalse(bridge.provider_status()['openrouter_ready'])
 
     def test_stale_auth_failure_preserves_replacement_credential(self):
         self.configure('synthetic-old-key')

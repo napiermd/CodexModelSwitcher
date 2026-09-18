@@ -59,7 +59,7 @@ class AzureConnectionsTests(unittest.TestCase):
         with patch.object(bridge.urllib.request, 'build_opener') as opener, \
              patch.object(bridge, 'baseten_headers', side_effect=AssertionError('Baseten')), \
              patch.object(bridge, 'open_baseten', side_effect=AssertionError('Baseten pacing')):
-            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[]}')
+            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
             status, body = self.request(path='/harbor/v1/responses', body={
                 'model': 'harbor/azure/coding-prod', 'input': 'Hello', 'stream': False,
                 'reasoning': {'effort': 'none'}, 'service_tier': 'priority', 'client_metadata': {'thread_id': 'fixture'}
@@ -95,7 +95,7 @@ class AzureConnectionsTests(unittest.TestCase):
             status = 200
             headers = {'Content-Type': 'application/json'}
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[]}')
+            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
             status, _ = self.request(path='/harbor/v1/responses', body=source,
                                      headers={'Authorization': 'Bearer synthetic-owner-token'})
             payload = json.loads(opener.return_value.open.call_args.args[0].data)

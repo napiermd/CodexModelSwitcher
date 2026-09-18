@@ -53,11 +53,16 @@ struct AzureDeployment {
             models.first { $0["slug"] as? String == identity }
         }).first else { return entry }
         var result = entry
+        var sources: [String: String] = [:]
         for key in ["context_window", "max_context_window"] {
             if let limit = native[key] as? Int, limit >= 4096, limit <= 1_048_576 {
                 result[key] = limit
+                sources[key] = "codex_native_cache"
             }
         }
+        result["harbor_context_provenance"] = sources
+        result["harbor_native_client_version"] = object["client_version"]
+        result["harbor_native_fetched_at"] = object["fetched_at"]
         result["harbor_context_mode"] = "automatic"
         return result
     }

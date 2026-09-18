@@ -27,6 +27,7 @@ import tomllib
 from collections import OrderedDict, deque
 
 ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
+RECENT_FAILURES = deque(maxlen=32)
 MAX_BODY = 32 * 1024 * 1024
 BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
@@ -59,9 +60,63 @@ _admission_spec = importlib.util.spec_from_file_location('harbor_azure_admission
 _admission_module = importlib.util.module_from_spec(_admission_spec)
 _admission_spec.loader.exec_module(_admission_module)
 AZURE_ADMISSION = _admission_module.AdmissionQueue()
+_stream_spec = importlib.util.spec_from_file_location('harbor_response_stream', pathlib.Path(__file__).with_name('response_stream.py'))
+_stream_module = importlib.util.module_from_spec(_stream_spec)
+_stream_spec.loader.exec_module(_stream_module)
 _transport_spec = importlib.util.spec_from_file_location('harbor_azure_transport', pathlib.Path(__file__).with_name('azure_transport.py'))
 _transport_module = importlib.util.module_from_spec(_transport_spec)
 _transport_spec.loader.exec_module(_transport_module)
+
+
+_CATALOG_VERSION = None
+
+
+def detect_codex_version():
+    binary = pathlib.Path('/Applications/ChatGPT.app/Contents/Resources/codex')
+    if binary.is_file():
+        try:
+            return subprocess.check_output([str(binary), '--version'], timeout=.5, text=True).strip().removeprefix('codex-cli ')
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return None
+
+
+def catalog_diagnostics():
+    return inspect_catalog(CONFIG_DIR, _CATALOG_VERSION)
+
+
+def inspect_catalog(directory, current_version):
+    result = {'loaded_catalog': 'unknown', 'current_client_version': current_version, 'warnings': []}
+    try:
+        native = json.loads((directory / 'models_cache.json').read_text())
+        result['captured_client_version'] = native.get('client_version')
+        result['captured_at'] = native.get('fetched_at')
+        if current_version and native.get('client_version') != current_version:
+            result['warnings'].append('native_client_version_mismatch')
+    except (OSError, ValueError, TypeError, AttributeError):
+        result['warnings'].append('native_catalog_unavailable')
+    try:
+        raw = (directory / 'model-catalogs/model-harbor.json').read_bytes()
+        published = json.loads(raw)
+        result['published_sha256'] = hashlib.sha256(raw).hexdigest()
+        origins = published.get('harbor_sources', [])
+        if not origins:
+            result['warnings'].append('published_provenance_missing')
+        result['changed_sources'] = []
+        for source in origins:
+            try:
+                digest = hashlib.sha256(pathlib.Path(source['path']).read_bytes()).hexdigest()
+            except (OSError, KeyError):
+                digest = None
+            if digest != source.get('sha256'):
+                result['changed_sources'].append(source.get('provider'))
+        if result['changed_sources']:
+            result['warnings'].append('published_sources_changed')
+        result['fallback_models'] = [entry['slug'] for entry in published.get('models', [])
+                                     if entry.get('harbor_context_source') == 'fallback']
+    except (OSError, ValueError, TypeError, AttributeError):
+        result['warnings'].append('published_catalog_unavailable')
+    return result
 
 
 def configuration_revision(credentials=None):
@@ -1027,11 +1082,13 @@ def open_baseten(opener, request, pacer, tokens, deadline, cancelled, waiting):
 
 class Translation:
     def __init__(self, source, native_tools=False):
+        self.lifecycle = _stream_module.Lifecycle()
         self.names = {}
         self.groups = {}
         self.pending = set()
         self.response_status = None
         self.usage = None
+        self.has_output = False
         self.request = copy.deepcopy(source)
         # Codex can retain a forced tool choice when it creates a tool-free
         # compaction request. Every Responses provider rejects that pair, so
@@ -1150,6 +1207,14 @@ class Translation:
             result = self.output_item(result)
         return result
 
+    def validate_completion(self, response):
+        if response.get('status') != 'completed':
+            return response
+        if 'output' not in response or response.get('output') or self.has_output:
+            return response
+        return dict(response, status='failed', error={'code': 'empty_response',
+            'message': 'The provider completed without output. Model Harbor did not replay the request.'})
+
     def output_response(self, response):
         result = copy.deepcopy(response)
         if isinstance(result.get('output'), list):
@@ -1188,6 +1253,23 @@ class Translation:
         if not payload or payload == '[DONE]':
             return block + b'\n\n'
         event = json.loads(payload)
+        if not event.get('type'):
+            event_name = next((line[6:].strip() for line in lines if line.startswith('event:')), '')
+            if event_name:
+                event['type'] = event_name
+        original = copy.deepcopy(event)
+        kind = event.get('type', '')
+        item = event.get('item') or {}
+        if kind in ('response.output_text.delta', 'response.refusal.delta') and event.get('delta'):
+            self.has_output = True
+        if kind in ('response.output_item.added', 'response.output_item.done') and item.get('type') in ('function_call', 'custom_tool_call', 'message'):
+            self.has_output = True
+        if kind == 'response.completed':
+            event['response'] = self.validate_completion(dict(event.get('response') or {}, status='completed'))
+            if event['response']['status'] == 'failed':
+                event['type'] = 'response.failed'
+                lines = [line if not line.startswith('event:') else 'event: response.failed' for line in lines]
+        self.lifecycle.observe(event)
         if event.get('type') in ('response.completed', 'response.failed', 'response.incomplete'):
             self.response_status = event.get('response', {}).get('status') or event['type'].split('.')[-1]
             self.usage = event.get('response', {}).get('usage')
@@ -1199,7 +1281,7 @@ class Translation:
         if event.get('type', '').startswith('response.function_call_arguments.') and event.get('item_id') in self.pending:
             return b''
         obj = self.output(event)
-        if obj == event:
+        if obj == original and json.loads(payload) == obj:
             return block + b'\n\n'
         retained = [line for line in lines if not line.startswith('data:')]
         retained.append('data: ' + json.dumps(obj, separators=(',', ':')))
@@ -1252,7 +1334,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def stream_failure(self, status, message, budget=None):
         code = 'rate_limit_exceeded' if status == 429 else ('invalid_request_error' if status == 400 else 'server_error')
-        event = {'type': 'response.failed', 'response': {'id': 'resp_harbor_' + secrets.token_hex(12),
+        event = {'type': 'response.failed', 'response': {'id': getattr(self, 'response_id', None) or 'resp_harbor_' + secrets.token_hex(12),
                  'object': 'response', 'status': 'failed', 'output': [],
                  'error': {'code': code, 'message': message}}}
         try:
@@ -1285,12 +1367,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     @staticmethod
     def response_lines(upstream, budget=None):
-        iterator = iter(upstream)
-        while True:
-            try:
-                yield next(iterator) if budget is None else budget.io(next, iterator)
-            except StopIteration:
-                return
+        return _stream_module.lines_with_ticks(upstream, budget)
 
     def do_GET(self):
         global USAGE_COLLECTOR
@@ -1312,7 +1389,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/harbor/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
-            body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE, 'providers': provider_status(),
+            body = json.dumps({'routing': 'per-task', 'recent_failures': list(RECENT_FAILURES), 'catalog': catalog_diagnostics(), 'last_request': LAST_ROUTE, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
                                'azure_traffic': AZURE_ADMISSION.snapshot(),
@@ -1580,6 +1657,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if reporting is not None and reporting is not budget:
                 reporting.finish()
 
+    def native_image_request(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        require_inference_admission()
+        headers = codex_headers(self.headers)
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= MAX_BODY:
+            return self.error(413, 'Request body exceeds the adapter limit')
+        headers['Content-Type'] = self.headers.get('Content-Type', 'application/json')
+        headers['Accept'] = self.headers.get('Accept', 'application/json')
+        for name in ('Content-Encoding', 'x-codex-imagegen-request-id'):
+            if self.headers.get(name):
+                headers[name] = self.headers[name]
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            return self.error(400, 'Incomplete image request')
+        request = urllib.request.Request(CODEX_BASE + '/' + self.path.removeprefix('/harbor/v1/'),
+                                         data=raw, headers=headers)
+        # This subscription capability is separate from the task's text model.
+        # An untracked lease blocks maintenance while preserving that model binding.
+        lease = None
+        if RUNTIME is not None:
+            with ROUTE_LOCK, RUNTIME.lock:
+                require_inference_admission()
+                lease = RUNTIME.begin(None, None)
+        started = False
+        try:
+            try:
+                upstream = urllib.request.build_opener(NoRedirect).open(request, timeout=180)
+            except urllib.error.HTTPError as error:
+                upstream = error
+            with upstream:
+                self.send_response(upstream.status)
+                self.send_header('Content-Type', upstream.headers.get('Content-Type', 'application/json'))
+                if upstream.headers.get('x-codex-imagegen-request-id'):
+                    self.send_header('x-codex-imagegen-request-id', upstream.headers['x-codex-imagegen-request-id'])
+                for name, value in provider_response_headers(upstream.headers).items():
+                    self.send_header(name, value)
+                self.send_header('Connection', 'close')
+                self.close_connection = True
+                self.end_headers()
+                started = True
+                while True:
+                    chunk = upstream.read1(65536)
+                    if not chunk:
+                        break
+                    self.write_output(chunk)
+        except Exception:
+            if started:
+                self.close_connection = True
+            else:
+                self.error(502, 'Native image request connection failed; no replay was attempted.')
+        finally:
+            if lease is not None:
+                RUNTIME.finish(lease, False)
+
     def do_POST(self):
         global LAST_ROUTE, OPENROUTER_KEY, AZURE_CONNECTION
         started = False
@@ -1597,6 +1730,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         azure_outcome_known = False
         maintenance_not_dispatched = False
         revision = None
+        request_started_at = time.monotonic()
+        failure_kind = None
         last_heartbeat = float("-inf")
 
         def azure_stopped():
@@ -1630,7 +1765,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return True
 
         def report_error(code, message, response_headers=None):
-            nonlocal started
+            nonlocal started, failure_kind
+            failure_kind = failure_kind or 'http_' + str(code)
             try:
                 if started:
                     if headers_complete and streaming_response:
@@ -1646,6 +1782,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.close_connection = True
 
         try:
+            if self.path in ('/harbor/v1/images/generations', '/harbor/v1/images/edits'):
+                return self.native_image_request()
             if self.path == '/harbor/handshake':
                 return self.server_proof()
             if self.path in ('/harbor/runtime/promote', '/harbor/runtime/retire', '/harbor/runtime/rollback', '/harbor/runtime/shutdown'):
@@ -1822,10 +1960,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if 'text/event-stream' in content_type:
                     block = []
                     for line in self.response_lines(upstream, azure_budget):
+                        if line is None:
+                            heartbeat = translation.lifecycle.heartbeat()
+                            if heartbeat:
+                                self.write_output(heartbeat, azure_budget)
+                            continue
                         if line.strip():
                             block.append(line.rstrip(b'\r\n'))
                         elif block:
                             event = translation.event(b'\n'.join(block))
+                            self.response_id = (translation.lifecycle.response or {}).get('id')
                             if route and translation.response_status:
                                 with ROUTE_LOCK:
                                     LAST_ROUTE = dict(route, state=translation.response_status)
@@ -1848,6 +1992,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     if response is None:
                         response = json.load(upstream)
+                    response = translation.validate_completion(response)
                     translation.response_status = response.get('status')
                     translation.usage = response.get('usage')
                     if route:
@@ -1947,6 +2092,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             report_error(400, str(error))
         except socket.timeout:
+            failure_kind = 'upstream_timeout'
             if azure_stopped():
                 return
             if route:
@@ -1956,6 +2102,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             report_error(504, 'The upstream response timed out. Model Harbor did not retry the partial response.')
             self.close_connection = True
         except (BrokenPipeError, ConnectionResetError):
+            failure_kind = 'connection_interrupted'
             if azure_stopped():
                 return
             if route:
@@ -1977,6 +2124,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # A completed response can still request tools. Keep the turn owner.
                 known = (azure_outcome_known or not azure_budget.dispatch_possible) if azure_budget is not None else (activity_status == 'completed' or activity_http_status is not None and not started)
                 RUNTIME.finish(request_lease, known or maintenance_not_dispatched)
+            if activity_started and activity_status != 'completed':
+                with ROUTE_LOCK:
+                    RECENT_FAILURES.append({'provider': route['provider'], 'model': route['model'],
+                        'kind': failure_kind or (azure_budget.stop_reason if azure_budget else None) or 'incomplete',
+                        'elapsed_seconds': round(time.monotonic() - request_started_at, 3),
+                        'at': time.time()})
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:
@@ -1994,7 +2147,8 @@ class GatewayHTTPServer(http.server.ThreadingHTTPServer):
 
 
 def main():
-    global RUNTIME, TASK_REPAIRS
+    global RUNTIME, TASK_REPAIRS, _CATALOG_VERSION
+    _CATALOG_VERSION = detect_codex_version()
     independent = os.environ.get('MODEL_HARBOR_INDEPENDENT') == '1'
     if independent:
         directory = os.environ.get('MODEL_HARBOR_STATE_DIR')

@@ -57,7 +57,7 @@ class AzureHandlerAdmissionTests(unittest.TestCase):
         class Response(io.BytesIO):
             status = 200
             headers = {'Content-Type': 'application/json'}
-        return Response(b'{"status":"completed","output":[]}')
+        return Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
 
     def test_third_request_waits_until_one_complete_stream_closes(self):
         release = [threading.Event(), threading.Event()]
@@ -83,7 +83,7 @@ class AzureHandlerAdmissionTests(unittest.TestCase):
                 delivered[self.index].set()
                 if not release[self.index].wait(3):
                     raise TimeoutError('Synthetic stream was not released')
-                yield b'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n'
+                yield b'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}}\n'
                 yield b'\n'
 
         def upstream(request, **_):
@@ -138,7 +138,7 @@ class AzureHandlerAdmissionTests(unittest.TestCase):
                 if not release.wait(2):
                     raise TimeoutError('Client did not close')
             def __iter__(self):
-                yield b'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n'
+                yield b'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}}\n'
                 yield b'\n'
 
         with patch.object(bridge.urllib.request, 'build_opener') as opener:

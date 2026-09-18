@@ -279,7 +279,7 @@ class HTTPTests(unittest.TestCase):
         return response, body
 
     def test_rate_limit_retries_keep_one_unlock_and_forward_success_headers_and_usage(self):
-        event = {'type': 'response.completed', 'response': {'status': 'completed', 'output': [],
+        event = {'type': 'response.completed', 'response': {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'OK'}]}],
                  'usage': {'input_tokens': 190000, 'output_tokens': 5000, 'input_tokens_details': {'cached_tokens': 189000}}}}
         data = ('data: ' + json.dumps(event) + '\n\n').encode()
         self.opener.open.side_effect = [rejected(429, Retry_After=45),
@@ -379,7 +379,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(module.LAST_ROUTE['state'], 'disconnected')
 
     def test_json_response_reconciles_full_usage(self):
-        self.opener.open.return_value = Response(json.dumps({'status': 'completed', 'output': [],
+        self.opener.open.return_value = Response(json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'OK'}]}],
             'usage': {'input_tokens': 200000, 'output_tokens': 10000}}).encode(), Content_Type='application/json')
         response, body = self.post(stream=False)
         self.assertEqual(response.status, 200)

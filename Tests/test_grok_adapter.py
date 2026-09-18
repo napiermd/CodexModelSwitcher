@@ -434,7 +434,7 @@ class LiveRoutingTests(unittest.TestCase):
         import threading, urllib.request, urllib.error, io
         from unittest.mock import patch
         token = self.root/'token'; token.write_text('test-local-bridge-token')
-        response = {'type':'response.completed','response':{'id':'r','model':'grok-4.6','status':'completed','output':[]}}
+        response = {'type':'response.completed','response':{'id':'r','model':'grok-4.6','status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'OK'}]}]}}
         body = ('event: response.completed\ndata: '+json.dumps(response)+'\n\n').encode()
         class Upstream(io.BytesIO):
             status = 200

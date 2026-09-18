@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// A stable provider with a separate model identity for each route.
 enum LiveRouting {
@@ -48,6 +49,7 @@ enum LiveRouting {
 
     static func catalog(in data: AppData) throws -> Data {
         var entries: [[String: Any]] = []
+        var provenance: [[String: Any]] = []
         for service in data.pickerServices {
             let source: [[String: Any]]
             if let path = service.catalogPath,
@@ -55,6 +57,11 @@ enum LiveRouting {
                let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                let models = object["models"] as? [[String: Any]] {
                 source = models
+                var origin: [String: Any] = ["provider": service.id, "path": path,
+                    "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()]
+                origin["client_version"] = object["client_version"]
+                origin["fetched_at"] = object["fetched_at"]
+                provenance.append(origin)
             } else { source = [] }
             for model in service.models {
                 var entry = source.first { $0["slug"] as? String == model.id } ?? [
@@ -66,6 +73,10 @@ enum LiveRouting {
                     "truncation_policy": ["mode": "tokens", "limit": 10000],
                     "experimental_supported_tools": []
                 ]
+                entry["harbor_context_source"] = source.contains { $0["slug"] as? String == model.id } ? "provider_catalog" : "fallback"
+                if entry["harbor_context_source"] as? String == "fallback" {
+                    entry["harbor_context_warning"] = "Unverified 128,000-token fallback. Verify the provider capacity."
+                }
                 if service.id == "azure" { entry = AzureDeployment.resolvingContext(in: entry) }
                 let routeID = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
                 entry["slug"] = routeID
@@ -87,7 +98,12 @@ enum LiveRouting {
             entry["visibility"] = "hide"
             entries.append(entry)
         }
-        return try JSONSerialization.data(withJSONObject: ["models": entries], options: [.prettyPrinted, .sortedKeys])
+        if data.pickerServices.contains(where: { $0.id == "azure" }),
+           let native = try? AzureDeployment.readNativeMetadata() {
+            provenance.append(["provider": "azure_native_context", "path": AppPaths.codexDirectory.appendingPathComponent("models_cache.json").path,
+                "sha256": SHA256.hash(data: native).map { String(format: "%02x", $0) }.joined()])
+        }
+        return try JSONSerialization.data(withJSONObject: ["models": entries, "harbor_sources": provenance], options: [.prettyPrinted, .sortedKeys])
     }
 
     static func service(in data: AppData) -> CodexService {

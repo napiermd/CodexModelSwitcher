@@ -14,12 +14,12 @@ The stream bridge could close after premature EOF, socket timeout, or an excepti
 
 | Area | Codex Router | Harbor / next action |
 | --- | --- | --- |
-| Capability metadata | `src/model-capabilities.mjs` merges defaults, live metadata, verified presets, and user overrides per field. Its conservative context default is 131,072. | Harbor has separate provider builders and a generic 128,000 fallback. This repair addresses Azure/Grok; centralize capability provenance and expose fallback warnings next. |
+| Capability metadata | `src/model-capabilities.mjs` merges defaults, live metadata, verified presets, and user overrides per field. Its conservative context default is 131,072. | Azure/Grok preserve distinct context limits. Published catalogs now record source SHA-256 digests and native context provenance. Generic 128,000 fallbacks carry explicit warning metadata. |
 | Context choices | `src/native-context-variants.mjs` offers a hidden, opt-in larger-context Sol alias. `src/catalog.mjs` still assigns one generic context value to both fields. | Preserve distinct default/maximum metadata. A wholesale fork would not itself guarantee correct context. Larger context must be an explicit, provider-verified choice. |
-| Catalog freshness | `src/native-catalog-freshness.mjs` compares captured and current Codex versions; native drift/source modules support reconciliation. | Harbor does not have equivalent version-aware native capture reconciliation. Add catalog source/version tracking and a loaded-versus-published diagnostic. |
-| Silent reasoning | `src/responses-heartbeat.mjs` relays lifecycle heartbeats only after a response announces its identity and before a terminal event. | Harbor only emits comments during Baseten capacity waits. Those do not provide equivalent lifecycle coverage. Add bounded heartbeats without extending provider deadlines or faking output. |
-| Broken streams | `src/http-utils.mjs` explicitly signals stream errors; `src/empty-completion-guard.mjs` guards empty success. | This patch adds missing EOF/timeout/exception failure signals. Empty-success validation remains a separate gap. |
-| Request formats | API, OAuth, and provider-specific forwarders plus Chat Completions/Responses compatibility modules. | Harbor primarily requires Responses support. Keep working subscription/account and tool translation paths until replacement adapters pass round-trip tests. |
+| Catalog freshness | `src/native-catalog-freshness.mjs` compares captured and current Codex versions; native drift/source modules support reconciliation. | The owner-authenticated status endpoint compares captured versus running-backend Codex CLI versions and published source digests. It flags missing provenance and source drift. Desktop loaded-catalog state remains explicitly unknown; no automatic refresh or restart is claimed. |
+| Silent reasoning | `src/responses-heartbeat.mjs` relays lifecycle heartbeats only after a response announces its identity and before a terminal event. | The candidate sends response.in_progress after an upstream response ID exists, every ten seconds of silence, until a terminal event. One writer serializes events and adjusts sequence numbers after an inserted heartbeat. Existing provider deadlines remain in force. |
+| Broken streams | `src/http-utils.mjs` explicitly signals stream errors; `src/empty-completion-guard.mjs` guards empty success. | EOF/timeout/exception failure signals preserve partial output. Explicit empty output at completion now becomes a failure unless useful output already streamed. The last 32 failed requests expose provider, model, elapsed time and failure class through authenticated status, without prompts or credentials. |
+| Request formats | API, OAuth, and provider-specific forwarders plus Chat Completions/Responses compatibility modules. | The candidate accepts SSE event names when JSON omits type and forwards native Codex images/generations and images/edits to the same caller’s subscription account. Chat Completions-only providers remain unsupported; no blanket compatibility claim is made. |
 | Retry policy | `src/upstream-retry.mjs` offers bounded retries before any downstream bytes, plus provider policies. | Installed Harbor deliberately avoids Azure replay and records uncertain dispatches. No downstream bytes does not prove the upstream did no work. Preserve that protection when adopting retry behavior. |
 | Safe runtime updates | Router has a different service/control-center architecture. This review did not verify transfer of active Harbor turns into it. | Installed Harbor has independent runtime ownership, dispatch uncertainty, and coordinated maintenance. Replacing it with the older task checkout would regress those safeguards. |
 
@@ -27,7 +27,7 @@ The stream bridge could close after premature EOF, socket timeout, or an excepti
 
 Keep Harbor’s current signed interface, subscription credentials, per-task routing, and runtime ownership. Adopt the specific missing behaviors with regression tests. Evaluate codex-router on an isolated port and synthetic tasks before considering a backend migration. Stars are not evidence of compatibility with the current live tasks.
 
-Prioritize capability provenance/freshness, loaded-catalog diagnostics, bounded lifecycle heartbeats, and empty-completion tests. Avoid a broad gateway replacement during active work.
+The candidate implements freshness diagnostics, provenance, lifecycle heartbeats, explicit empty-completion rejection, named SSE events, and native image endpoints. Remaining work is automatic capture reconciliation, verified desktop catalog adoption, and a separately tested adapter for Chat Completions-only providers.
 
 ## Build and activation
 
@@ -36,3 +36,16 @@ The task initially ran from `fix/openrouter-parameters` at `cedc468`, while the 
 A signed candidate is staged under `build/staged-updates/context-stream-20260918/`. The backend and matching signed interface were subsequently activated through authorized coordinated maintenance; Azure and OpenRouter passed live verification. See `verification/context-stream-repair.md`. Corrected on-disk catalogs do not establish an in-memory desktop reload.
 
 Verification completed: 103 Swift tests and 421 Python tests passed on the integrated source. The signed Xcode build and strict signature verification passed. A separate real-loopback Azure EOF regression was added afterward to verify terminal failure and retention of uncertain delivery. All 12 Azure deadline/EOF tests passed, including the new EOF regression.
+
+
+## Follow-up patch, 2026-09-18
+
+Branch `codex/router-hardening` builds on the activated context repair. The current live gateway remains at runtime `12082cbe94b9b3619196f3317a9fc4999926dd309eac0c891d01dcd6c5f09564` until coordinated maintenance.
+
+The reported “response connection was interrupted” text comes from Harbor’s BrokenPipeError/ConnectionResetError path. It does not identify which peer reset the connection. Inspection found the gateway still running, three failed Azure requests, and successful requests afterward. The old service discards stderr and has no per-failure history. Consequently the exact initiating peer for those historical failures cannot be reconstructed. Heartbeats address silence; they cannot repair an actual socket reset.
+
+Native image generation had a separate reproducible cause: Harbor’s allowlist rejected the tool’s two image POST paths before forwarding. The installed Codex binary and [OpenAI’s ImagesClient source](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/endpoint/images.rs) identify `images/generations` and `images/edits`. The candidate forwards only those additional paths to `https://chatgpt.com/backend-api/codex`, with local authorization plus the caller’s ChatGPT subscription credentials. It preserves payload bytes and the model supplied by Codex. It never reads another account or substitutes an API-billed image model.
+
+Isolated live probes using deliberately incomplete bodies reached OpenAI and returned HTTP 400. This establishes upstream endpoint reachability, not completed generation or access to a particular image-model version. A real built-in image generation remains an activation follow-up.
+
+See [router hardening verification](verification/router-hardening.md) for test and staging evidence. The earlier “Build and activation” section describes the previous context patch, not this follow-up.

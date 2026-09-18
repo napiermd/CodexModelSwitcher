@@ -104,7 +104,7 @@ class ProviderConnectionsTests(unittest.TestCase):
             headers = {'Content-Type': 'text/event-stream'}
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
             opener.return_value.open.return_value = Response(
-                b'data: {"type":"response.completed","response":{"status":"completed","output":[]}}')
+                b'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}}')
             conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
             try:
                 conn.request('POST', '/harbor/v1/responses', body=json.dumps({
@@ -177,7 +177,7 @@ class ProviderConnectionsTests(unittest.TestCase):
             self.assertEqual(body['provider'], {'require_parameters': False})
             self.assertEqual(body['tool_choice'], 'auto')
             self.assertEqual(body['tools'][0]['name'], 'check')
-            return Response(b'{"status":"completed","output":[]}')
+            return Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
             opener.return_value.open.side_effect = upstream
             status, body = self.request(path='/harbor/v1/responses', body={
@@ -235,7 +235,7 @@ class ProviderConnectionsTests(unittest.TestCase):
             headers = {'Content-Type': 'application/json'}
         bridge.OPENROUTER_KEY = 'synthetic-router-key'
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[]}')
+            opener.return_value.open.return_value = Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
             status, body = self.request(path='/harbor/v1/responses', body={'model': 'harbor/openrouter/fixture/coder', 'input': [], 'stream': False}, headers={'Authorization': 'Bearer synthetic-owner-token'})
         self.assertEqual((status, body['status']), (200, 'completed'))
         activity = bridge.provider_status()['activity']['openrouter']
@@ -263,7 +263,7 @@ class ProviderConnectionsTests(unittest.TestCase):
         headers = {'Content-Type': 'application/json'}
 
         def __init__(self):
-            super().__init__(b'{"status":"completed","output":[]}')
+            super().__init__(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
 
     def inference(self):
         return self.request(path='/harbor/v1/responses',
@@ -284,7 +284,7 @@ class ProviderConnectionsTests(unittest.TestCase):
 
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
-                body = b'{"status":"completed","output":[]}'
+                body = b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}'
                 try:
                     if not delay_body:
                         time.sleep(delay)

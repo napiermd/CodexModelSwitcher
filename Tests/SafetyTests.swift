@@ -8,6 +8,31 @@ final class SafetyTests: XCTestCase {
                      models: [CodexModel(id: "test-model", name: "Test"), CodexModel(id: "__native__", name: "Native")], usesExistingProvider: existing)
     }
 
+    func testCatalogRecordsSourceDigestAndFlagsMissingMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("models.json")
+        try Data(#"{"client_version":"fixture-v1","models":[{"slug":"test-model","context_window":272000,"max_context_window":872000}]}"#.utf8).write(to: source)
+        var provider = service("codex-subscription")
+        provider.catalogPath = source.path
+        let data = AppData(services: [provider], selectedModel: nil)
+        let catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let origins = try XCTUnwrap(catalog["harbor_sources"] as? [[String: Any]])
+        XCTAssertEqual(origins.first?["client_version"] as? String, "fixture-v1")
+        XCTAssertEqual(origins.first?["path"] as? String, source.path)
+        XCTAssertEqual((origins.first?["sha256"] as? String)?.count, 64)
+        let entries = try XCTUnwrap(catalog["models"] as? [[String: Any]])
+        XCTAssertEqual(entries[0]["context_window"] as? Int, 272000)
+        XCTAssertEqual(entries[0]["max_context_window"] as? Int, 872000)
+        XCTAssertEqual(entries[1]["harbor_context_source"] as? String, "fallback")
+        XCTAssertNotNil(entries[1]["harbor_context_warning"])
+        try Data(#"{"models":[]}"#.utf8).write(to: source)
+        let changed = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let changedOrigins = try XCTUnwrap(changed["harbor_sources"] as? [[String: Any]])
+        XCTAssertNotEqual(origins.first?["sha256"] as? String, changedOrigins.first?["sha256"] as? String)
+    }
+
     func testBasetenTeamCatalogPreservesSelectionAndCustomModels() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

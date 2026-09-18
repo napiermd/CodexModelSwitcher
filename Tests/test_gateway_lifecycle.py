@@ -86,14 +86,14 @@ class LifecycleTests(unittest.TestCase):
                         self.close_connection = True
                         return
                     owner.release.wait(8)
-                    end = {'type': 'response.completed', 'response': {'status': 'completed', 'output': []}}
+                    end = {'type': 'response.completed', 'response': {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'OK'}]}]}}
                     try:
                         self.wfile.write(('data: ' + json.dumps(end) + '\n\n').encode())
                     except (BrokenPipeError, ConnectionResetError):
                         pass
                     self.close_connection = True
                 else:
-                    body = json.dumps({'status': 'completed', 'output': [], 'model': value['model']}).encode()
+                    body = json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'OK'}]}], 'model': value['model']}).encode()
                     self.send_response(200)
                     self.send_header('Content-Length', str(len(body)))
                     self.send_header('Content-Type', 'application/json')

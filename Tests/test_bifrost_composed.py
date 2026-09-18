@@ -45,7 +45,7 @@ class PassthroughHandler(http.server.BaseHTTPRequestHandler):
         if self.path != '/azure_passthrough/openai/v1/responses':
             self.send_error(404)
             return
-        connection = http.client.HTTPConnection('127.0.0.1', self.server.upstream_port, timeout=30)
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.upstream_port, timeout=60)
         response = None
         try:
             body = self.rfile.read(int(self.headers['Content-Length']))
@@ -104,8 +104,18 @@ class ComposedTests(unittest.TestCase):
                                                     'source_unchanged': True, 'logs_content_free': True})
         self.assertFalse(report['installed_runtime_changed'])
         self.assertEqual(report['harbor_policy'], {'active_limit': 2, 'max_waiting': 16, 'wait_seconds': 30.0})
-        self.assertEqual(report['total_upstream_attempts'], 32)
-        self.assertEqual(report['client_total_deadline_seconds'], 24)
+        self.assertEqual(report['total_upstream_attempts'], 34)
+        self.assertEqual(report['client_total_deadline_seconds'], 55)
+        self.assertTrue(report['queue_timeout_tested'])
+        timeout = next(row for row in report['cases'] if row['case'] == 'queue_timeout')
+        self.assertEqual(timeout['http_statuses'], [503, 200, 200])
+        self.assertEqual(list(timeout['upstream_attempts'].values()), [1, 1, 0])
+        self.assertGreaterEqual(timeout['queued_request_elapsed_ms'], 30000)
+        self.assertGreaterEqual(timeout['queue_observed_wait_ms'], 29000)
+        self.assertLess(timeout['queued_request_elapsed_ms'], 38000)
+        self.assertTrue(timeout['checks']['held_streams_open_after_timeout'])
+        self.assertTrue(timeout['checks']['held_streams_completed'])
+        self.assertTrue(timeout['checks']['timeout_does_not_make_turn_uncertain'])
         self.assertTrue(report['all_upstream_requests_accounted_for'])
 
     def test_partial_case_selection_cannot_claim_composed_gate(self):
@@ -116,6 +126,7 @@ class ComposedTests(unittest.TestCase):
         report = composed.suite('127.0.0.1', ['error429'], control, passthrough.server_port, fixture)
         self.assertTrue(report['cases'][0]['passed'])
         self.assertFalse(report['study_complete'])
+        self.assertFalse(report['queue_timeout_tested'])
         self.assertFalse(report['composed_synthetic_gate_passed'])
         self.assertTrue(all(report['gateway_cleanup'].values()))
 
@@ -241,3 +252,54 @@ class ComposedTests(unittest.TestCase):
         self.assertEqual(provider['concurrency_and_buffer_size'], {'concurrency': 32, 'buffer_size': 32})
         self.assertEqual(provider['network_config']['max_retries'], 0)
         self.assertGreater(provider['network_config']['stream_idle_timeout_in_seconds'], composed.HOLD_SECONDS)
+        self.assertGreater(provider['network_config']['default_request_timeout_in_seconds'], composed.REQUEST_SECONDS)
+        self.assertGreater(composed.REQUEST_SECONDS, composed.HOLD_SECONDS)
+        self.assertGreater(composed.HOLD_SECONDS, 30 + 2 * composed.STEP)
+        self.assertIn('queue_timeout', composed.CASES)
+
+    def test_queue_timeout_claim_requires_complete_measured_evidence(self):
+        ids = ['held-first', 'held-second', 'expired-waiter']
+        row = {
+            'case': 'queue_timeout', 'passed': True, 'request_ids': ids,
+            'http_statuses': [503, 200, 200], 'total_upstream_attempts': 2,
+            'upstream_attempts': {'held-first': 1, 'held-second': 1, 'expired-waiter': 0},
+            'queued_request_elapsed_ms': 30025.0, 'queue_observed_wait_ms': 30000.0,
+            'checks': {
+                'two_established_streams_and_waiters': True, 'queued_has_no_upstream_attempt': True,
+                'local_queue_timeout_response': True, 'production_queue_deadline': True,
+                'held_streams_open_after_timeout': True, 'timed_out_waiter_removed': True,
+                'timed_out_request_has_no_active_lease': True, 'timeout_does_not_make_turn_uncertain': True,
+                'held_streams_completed': True, 'exact_attempt_counts': True,
+                'no_unexpected_upstream_requests': True,
+            },
+        }
+        self.assertTrue(composed.queue_timeout_verified([row]))
+        for rows in ([], [dict(row, case='queue_capacity')], [row, row],
+                     [dict(row, passed=False)], [dict(row, checks={})],
+                     [dict(row, queued_request_elapsed_ms=25000)],
+                     [dict(row, queue_observed_wait_ms=1000)],
+                     [dict(row, queued_request_elapsed_ms=float('nan'))],
+                     [dict(row, http_statuses=[200, 200, 200])],
+                     [dict(row, upstream_attempts={'held-first': 1, 'held-second': 1, 'expired-waiter': 1})],
+                     [dict(row, upstream_attempts={'held-first': 1, 'held-second': 1})]):
+            with self.subTest(rows=rows):
+                self.assertFalse(composed.queue_timeout_verified(rows))
+        for check in row['checks']:
+            changed = copy.deepcopy(row)
+            changed['checks'][check] = False
+            self.assertFalse(composed.queue_timeout_verified([changed]), check)
+
+    def test_queue_timeout_attempt_evidence_rejects_dispatch_or_replay(self):
+        bodies = [composed.request('queue_timeout', stream=True, hold=True) for _ in range(2)]
+        bodies.append(composed.request('queue_timeout', stream=True))
+        first, second, expired = [body['metadata']['harbor_pilot_request'] for body in bodies]
+        def record(key):
+            return {'path': '/openai/v1/responses', 'body': {'model': 'pilot-deployment'},
+                    'synthetic_key_correct': True, 'request_id': key}
+        for keys in ([first, second, expired], [first, first, second], [first],
+                     [first, second, 'unowned-request']):
+            with self.subTest(keys=keys):
+                row = composed.evidence('queue_timeout', {'local_queue_timeout_response': True},
+                                        bodies, [], [record(key) for key in keys],
+                                        {first: 1, second: 1, expired: 0})
+                self.assertFalse(row['passed'])

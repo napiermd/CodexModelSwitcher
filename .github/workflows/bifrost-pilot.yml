@@ -108,22 +108,32 @@ jobs:
           assert composed['image'] == expected_image
           assert composed['surface'] == 'azure-passthrough' and composed['max_retries'] == 0
           assert composed['study'] == 'harbor-composed' and composed['entrypoint_verified']
-          assert composed['client_total_deadline_seconds'] == 24
+          assert composed['client_total_deadline_seconds'] == 55
           assert composed['harbor_source_inventory'] == source
           assert composed['harbor_runtime_digest'] == runtime_digest(source)
           assert composed['harbor_policy'] == {'active_limit': 2, 'max_waiting': 16, 'wait_seconds': 30.0}
           assert composed['bifrost_provider_limits'] == {'concurrency': 32, 'buffer_size': 32}
           assert [row['case'] for row in composed['cases']] == [
-              'stream_lifetime', 'queue_capacity', 'queued_cancellation', 'dispatched_cancellation',
+              'stream_lifetime', 'queue_capacity', 'queue_timeout', 'queued_cancellation', 'dispatched_cancellation',
               'error429', 'error503', 'partial_disconnect', 'opaque_json', 'opaque_sse', 'invalid_encrypted']
           assert composed['study_complete'] and composed['composed_synthetic_gate_passed']
           assert composed['all_synthetic_gates_passed'] and not composed['cleanup_errors']
           assert composed['fixture_started_without_upstream_requests'] and composed['all_upstream_requests_accounted_for']
-          assert composed['total_upstream_attempts'] == 32
+          assert composed['total_upstream_attempts'] == 34
           assert composed['gateway_cleanup'] == {
               'process_exited': True, 'sentinel_unchanged': True, 'source_unchanged': True, 'logs_content_free': True}
           assert composed['installed_runtime_changed'] is False and composed['live_azure_tested'] is False
-          assert composed['queue_timeout_tested'] is False
+          assert composed['queue_timeout_tested'] is True
+          expiration = next(row for row in composed['cases'] if row['case'] == 'queue_timeout')
+          assert expiration['http_statuses'] == [503, 200, 200]
+          first, second, expired = expiration['request_ids']
+          assert expiration['upstream_attempts'] == {first: 1, second: 1, expired: 0}
+          assert 30000 <= expiration['queued_request_elapsed_ms'] < 38000
+          assert 29000 <= expiration['queue_observed_wait_ms'] <= expiration['queued_request_elapsed_ms']
+          for check in ('local_queue_timeout_response', 'held_streams_open_after_timeout',
+                        'held_streams_completed', 'timed_out_request_has_no_active_lease',
+                        'timeout_does_not_make_turn_uncertain'):
+              assert expiration['checks'][check] is True, check
           composed_summary = {'report_sha256': hashlib.sha256(composed_path.read_bytes()).hexdigest(),
                               'harbor_runtime_digest': composed['harbor_runtime_digest'],
                               'all_synthetic_gates_passed': composed['all_synthetic_gates_passed'],

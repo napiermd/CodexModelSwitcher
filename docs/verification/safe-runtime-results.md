@@ -48,7 +48,7 @@ Tests run `grok_adapter.py` as a real process from a retained copy of the comple
 
 A read-only review reproduced two credential races and a fake-listener vulnerability. Dedicated regressions now cover stale success/failure/probe outcomes, key replacement during request preparation, a fake listener knowing the inference token, wrong socket/nonce proofs, and listener replacement between proof and control. The client disables automatic reconnection after proving the server.
 
-Gateway startup work runs off the UI actor. A detected new gateway boot restores Azure/OpenRouter credentials already loaded in the open UI, without reading Keychain again. A gateway restart while the UI is closed still requires reopening the UI to restore those volatile connections. Uncertain deliveries remain blocked rather than replayed.
+Gateway startup work runs off the UI actor. Automatic restoration of already-loaded Azure/OpenRouter credentials is enabled only in the UI session that bootstrapped a new service. A reopened UI attaches to an existing service without hydrating credentials or synchronizing configuration. Reopening alone therefore does not restore volatile connections after a gateway restart; an explicit connection action is required. Uncertain deliveries remain blocked rather than replayed.
 
 ## Remaining execution gates
 

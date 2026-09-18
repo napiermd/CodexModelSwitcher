@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -24,13 +25,13 @@ NAME = 'harbor-composed'
 SCRIPT = 'composed_pilot.py'
 SCOPE = 'synthetic composed Harbor/Bifrost contract; no live Azure or installed runtime changes'
 GATE_FIELD = 'composed_synthetic_gate_passed'
-CASES = ('stream_lifetime', 'queue_capacity', 'queued_cancellation', 'dispatched_cancellation',
+CASES = ('stream_lifetime', 'queue_capacity', 'queue_timeout', 'queued_cancellation', 'dispatched_cancellation',
          'error429', 'error503', 'partial_disconnect', 'opaque_json', 'opaque_sse', 'invalid_encrypted')
 MOCK_PIDS = 192
 MOCK_MEMORY = '256m'
 STEP = 8
-REQUEST_SECONDS = 24
-HOLD_SECONDS = 22
+REQUEST_SECONDS = 55
+HOLD_SECONDS = 50
 CONTENT = 'SYNTHETIC-PILOT-CONTENT-DO-NOT-LOG'
 OWNER_TOKEN = 'synthetic-composed-owner-token'
 PROVIDER_KEY = 'synthetic-pilot-key'
@@ -55,8 +56,8 @@ def configure(config):
     config['client']['drop_excess_requests'] = True
     provider = config['providers']['azure']
     provider['concurrency_and_buffer_size'] = {'concurrency': 32, 'buffer_size': 32}
-    provider['network_config'].update(max_retries=0, default_request_timeout_in_seconds=28,
-                                      stream_idle_timeout_in_seconds=28)
+    provider['network_config'].update(max_retries=0, default_request_timeout_in_seconds=60,
+                                      stream_idle_timeout_in_seconds=60)
     return config
 
 
@@ -353,6 +354,8 @@ def evidence(case, checks, bodies, results, records, expected_counts):
 
 def admission_case(case, gateway, control, baseline):
     bodies, runs, results, checks = [], [], [], {}
+    measurements = {}
+    before_uncertain = gateway.status()['runtime']['uncertain_turns']
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         try:
             for _ in range(2):
@@ -368,6 +371,7 @@ def admission_case(case, gateway, control, baseline):
                 bodies.append(body)
                 runs.append(Run(pool, gateway, body))
             status = gateway.traffic(2, followers)
+            queued_observed_at = time.monotonic()
             initial = control.snapshot()['requests'][baseline:]
             checks['two_established_streams_and_waiters'] = (len(initial) == 2 and all(
                 'stream_started_at' in row for row in initial) and status['azure_traffic']['waiting'] == followers)
@@ -382,6 +386,32 @@ def admission_case(case, gateway, control, baseline):
                 checks['overflow_rejected_before_dispatch'] = (overflow.get('status') == 503
                     and {k.lower(): v for k, v in overflow.get('headers', {}).items()}.get('retry-after') == '1')
                 gateway.traffic(2, 16)
+            if case == 'queue_timeout':
+                rejected = runs[2].id
+                expired = runs[2].result()
+                measurements = {
+                    'queued_request_elapsed_ms': expired.get('elapsed_ms'),
+                    'queue_observed_wait_ms': round((time.monotonic() - queued_observed_at) * 1000, 2),
+                }
+                results.append(expired)
+                try:
+                    local_error = json.loads(expired.get('data', '')) == {'error': 'Azure admission queue timed out'}
+                except (TypeError, ValueError):
+                    local_error = False
+                checks['local_queue_timeout_response'] = (expired.get('status') == 503 and local_error
+                    and not expired.get('events')
+                    and {k.lower(): v for k, v in expired.get('headers', {}).items()}.get('retry-after') == '1')
+                checks['production_queue_deadline'] = queue_timeout_timing(measurements)
+                after_timeout = gateway.traffic(2, 0)
+                held = control.snapshot()['requests'][baseline:]
+                checks['held_streams_open_after_timeout'] = (all(not run.future.done() for run in runs[:2])
+                    and {row['request_id'] for row in held} == {run.id for run in runs[:2]}
+                    and all('finished_at' not in row for row in held))
+                checks['timed_out_waiter_removed'] = after_timeout['azure_traffic']['waiting'] == 0
+                settled = wait_until(gateway.status, lambda value: value['runtime']['active_requests'] == 2,
+                                     'Expired waiter retained an active request lease')
+                checks['timed_out_request_has_no_active_lease'] = settled['runtime']['active_requests'] == 2
+                checks['timeout_does_not_make_turn_uncertain'] = settled['runtime']['uncertain_turns'] == before_uncertain
             if case == 'queued_cancellation':
                 rejected = runs[2].id
                 runs[2].cancel()
@@ -401,7 +431,11 @@ def admission_case(case, gateway, control, baseline):
                     checks['response_affinity_' + run.id] = correlated(result, run.id)
             gateway.traffic(0, 0)
             expected = {b['metadata']['harbor_pilot_request']: int(b['metadata']['harbor_pilot_request'] != rejected) for b in bodies}
-            return evidence(case, checks, bodies, results, control.snapshot()['requests'][baseline:], expected)
+            if case == 'queue_timeout':
+                checks['held_streams_completed'] = all(checks['response_affinity_' + run.id] for run in runs[:2])
+            row = evidence(case, checks, bodies, results, control.snapshot()['requests'][baseline:], expected)
+            row.update(measurements)
+            return row
         finally:
             for run in runs:
                 try:
@@ -515,6 +549,33 @@ def opaque_case(case, gateway, control, baseline):
                     {b['metadata']['harbor_pilot_request']: 1 for b in (body, followup)})
 
 
+def queue_timeout_timing(row):
+    elapsed, observed = row.get('queued_request_elapsed_ms'), row.get('queue_observed_wait_ms')
+    return (type(elapsed) in (int, float) and math.isfinite(elapsed)
+            and type(observed) in (int, float) and math.isfinite(observed)
+            and POLICY['wait_seconds'] * 1000 <= elapsed < (POLICY['wait_seconds'] + STEP) * 1000
+            and (POLICY['wait_seconds'] - 1) * 1000 <= observed <= elapsed)
+
+
+def queue_timeout_verified(rows):
+    matches = [row for row in rows if row.get('case') == 'queue_timeout']
+    if len(matches) != 1:
+        return False
+    row = matches[0]
+    ids = row.get('request_ids', [])
+    required = ('two_established_streams_and_waiters', 'queued_has_no_upstream_attempt',
+                'local_queue_timeout_response', 'production_queue_deadline',
+                'held_streams_open_after_timeout', 'timed_out_waiter_removed',
+                'timed_out_request_has_no_active_lease', 'timeout_does_not_make_turn_uncertain',
+                'held_streams_completed', 'exact_attempt_counts', 'no_unexpected_upstream_requests')
+    return (row.get('passed') is True and len(ids) == 3 and len(set(ids)) == 3
+            and row.get('upstream_attempts') == {ids[0]: 1, ids[1]: 1, ids[2]: 0}
+            and row.get('total_upstream_attempts') == 2
+            and row.get('http_statuses') == [503, 200, 200]
+            and queue_timeout_timing(row)
+            and all(row.get('checks', {}).get(check) is True for check in required))
+
+
 def suite(host, cases, control=None, port=8080, fixture=None):
     control = control or MockControl()
     fixture = Path(fixture or '/tmp/composed-source')
@@ -537,7 +598,7 @@ def suite(host, cases, control=None, port=8080, fixture=None):
         for case in cases:
             baseline = len(control.snapshot()['requests'])
             try:
-                if case in ('stream_lifetime', 'queue_capacity', 'queued_cancellation'):
+                if case in ('stream_lifetime', 'queue_capacity', 'queue_timeout', 'queued_cancellation'):
                     row = admission_case(case, gateway, control, baseline)
                 elif case in ('opaque_json', 'opaque_sse'):
                     row = opaque_case(case, gateway, control, baseline)
@@ -555,8 +616,10 @@ def suite(host, cases, control=None, port=8080, fixture=None):
             gateway.close()
             report['gateway_cleanup'] = gateway.cleanup
     report['cases'] = rows
+    report['queue_timeout_tested'] = queue_timeout_verified(rows)
     report['study_complete'] = list(cases) == list(CASES)
-    report[GATE_FIELD] = (report['study_complete'] and report['entrypoint_verified'] and len(rows) == len(cases)
+    report[GATE_FIELD] = (report['study_complete'] and report['entrypoint_verified'] and report['queue_timeout_tested']
+        and len(rows) == len(cases)
         and all(row['passed'] for row in rows) and report.get('all_upstream_requests_accounted_for') is True
         and report.get('fixture_started_without_upstream_requests') is True
         and all(report.get('gateway_cleanup', {}).values()) and bool(report.get('gateway_cleanup')))

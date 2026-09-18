@@ -826,6 +826,8 @@ class Translation:
         self.response_status = None
         self.usage = None
         self.request = copy.deepcopy(source)
+        if not source.get('tools'):
+            self.request.pop('tool_choice', None)
         if native_tools:
             # Codex supports its own namespace/custom tools. Full history carries
             # content and call_id links; provider-owned item IDs are not portable.
@@ -837,7 +839,7 @@ class Translation:
             self.request.pop('reasoning', None)
         self.request['tools'] = self.tools(source.get('tools', []))
         self.request['input'] = self.input_items(source.get('input', []))
-        if isinstance(source.get('tool_choice'), dict):
+        if self.request['tools'] and isinstance(source.get('tool_choice'), dict):
             self.request['tool_choice'] = self.choice(source['tool_choice'])
 
     def tools(self, source, namespace=None):

@@ -35,6 +35,10 @@ Codex loads the custom catalog at startup. Reopen Codex when active tasks are fi
 
 Azure uses `/openai/v1/responses` with the resource key in `api-key`. Harbor never forwards the Codex subscription token to Azure, never substitutes another model, and does not place Azure requests in the Baseten queue. Namespaces and custom tools are translated to function tools. Tool-result images retain their original data and call IDs and are moved into a labeled following message.
 
+Each generated Azure catalog entry sets `auto_review_model_override` to its own full Harbor route, such as `harbor/azure/gpt-5.6-sol`. This explicitly keeps automatic review on that deployment, including when an imported catalog names a different review model. The hidden compatibility entry retains the route of its pinned Azure deployment. Harbor generates this metadata; no separate hand-edited Codex model bundle is needed.
+
+This is routing hardening, not a proven explanation for the reported incident. Current Codex can fall back to the parent model when an automatic-review model is unavailable. A missing override alone does not establish that review used another model, and a passing catalog-generation test does not prove what an already-running desktop loaded.
+
 Azure still applies deployment quotas and capacity limits. HTTP 429 is returned with available retry headers; partial streams are never replayed by Harbor. The new provider does not guarantee lower latency. Test your actual workload and inspect Azure's deployment metrics when evaluating performance.
 
 Azure inference keys do not provide a Harbor billing integration. Usage shows that Azure quota and spend are unavailable and links to the Azure dashboard. Use Azure Cost Management for billed charges.
@@ -64,4 +68,4 @@ The September 17 safe-runtime candidate limits each Azure endpoint/deployment to
 
 A full or expired queue returns local HTTP 503 with Retry-After: 1. Cancelled queued requests never call Azure and do not mark their task delivery uncertain. A local busy/cancelled readiness probe preserves the existing provider proof. The authenticated status response exposes only aggregate Azure admission counters.
 
-This policy is process-local. It does not coordinate multiple gateway runtimes, discover account limits, add Azure retries, or establish a total queue-to-response deadline. Upstream statuses and Retry-After headers retain their original values and each explicit request makes one upstream attempt. Effective retry settings in the already-running Codex desktop remain unverified. The candidate is staged separately; it has not replaced the installed gateway.
+This admission policy is process-local. It does not coordinate multiple gateway runtimes, discover account limits, or add Azure retries. The candidate also applies a [shared queue-to-response deadline](azure-request-policy.md). Upstream statuses and Retry-After headers retain their original values and each explicit request makes one upstream attempt. Effective retry settings in the already-running Codex desktop remain unverified. The candidate is staged separately; it has not replaced the installed gateway.

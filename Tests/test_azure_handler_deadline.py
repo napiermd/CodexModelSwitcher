@@ -279,12 +279,25 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
 
     def test_completed_error_is_delivered_once_and_is_not_uncertain(self):
         self.mode = 'retryable'
-        status, body = self.inference('retryable-once')
-        self.assertEqual(status, 429)
-        self.assertEqual(json.loads(body)['error']['message'], 'synthetic limit')
-        self.finished()
-        self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
-        self.assertEqual(self.attempts, 1)
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
+        held_socket = None
+        try:
+            connection.request('POST', '/harbor/v1/responses', json.dumps(self.source('retryable-once')),
+                               {'Authorization': 'Bearer synthetic-owner-token'})
+            # HTTPResponse closes its socket after reading a Connection: close body.
+            # Keep this client connected until the handler's delivery checks finish.
+            held_socket = connection.sock.dup()
+            with connection.getresponse() as response:
+                body = response.read()
+                self.assertEqual(response.status, 429)
+            self.assertEqual(json.loads(body)['error']['message'], 'synthetic limit')
+            self.finished()
+            self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+            self.assertEqual(self.attempts, 1)
+        finally:
+            connection.close()
+            if held_socket is not None:
+                held_socket.close()
 
 
 if __name__ == '__main__':

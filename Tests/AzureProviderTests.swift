@@ -85,9 +85,49 @@ final class AzureProviderTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
         let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
         XCTAssertEqual(entries.first?["slug"] as? String, "harbor/azure/coding-deploy")
+        XCTAssertEqual(entries.first?["auto_review_model_override"] as? String, "harbor/azure/coding-deploy")
         XCTAssertEqual(entries.first?["use_responses_lite"] as? Bool, false)
         XCTAssertEqual(entries.first?["supported_reasoning_levels"] as? [[String: String]], [["effort": "medium", "description": "Medium"]])
         XCTAssertEqual(entries.first?["input_modalities"] as? [String], ["text", "image"])
         XCTAssertFalse(String(decoding: raw, as: UTF8.self).contains("fixture-secret"))
+    }
+
+    func testAzureAutomaticReviewUsesEachExactRouteAndPreservesCatalogMetadata() throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let source: [[String: Any]] = [
+            ["slug": "gpt-5.6-sol", "auto_review_model_override": "foreign-review-model",
+             "context_window": 272000, "use_responses_lite": false,
+             "experimental_supported_tools": ["fixture-tool"], "fixture_extension": ["preserved": true]],
+            ["slug": "other-model", "auto_review_model_override": "provider-review-model"]
+        ]
+        try JSONSerialization.data(withJSONObject: ["models": source]).write(to: temp)
+        var data = AppData(services: [
+            CodexService(id: "azure", name: "Azure", baseURL: "https://fixture.openai.azure.com/openai/v1",
+                         envKey: "", apiKey: "", models: [.init(id: "gpt-5.6-sol", name: "Sol"),
+                                                         .init(id: "custom-deployment", name: "Custom")], catalogPath: temp.path),
+            CodexService(id: "baseten", name: "Baseten", baseURL: "https://example.invalid/v1",
+                         envKey: "", apiKey: "", models: [.init(id: "other-model", name: "Other")], catalogPath: temp.path)
+        ], selectedModel: nil, legacyModel: .init(serviceID: "azure", modelID: "gpt-5.6-sol"))
+        data.modelPicker.hiddenModels.insert("harbor/azure/custom-deployment")
+        let raw = try LiveRouting.catalog(in: data)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+        let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
+        XCTAssertEqual(entries.count, 4)
+        for route in ["harbor/azure/gpt-5.6-sol", "harbor/azure/custom-deployment"] {
+            let entry = try XCTUnwrap(entries.first { $0["slug"] as? String == route })
+            XCTAssertEqual(entry["auto_review_model_override"] as? String, route)
+        }
+        let sol = try XCTUnwrap(entries.first { $0["slug"] as? String == "harbor/azure/gpt-5.6-sol" })
+        XCTAssertEqual(sol["context_window"] as? Int, 272000)
+        XCTAssertEqual(sol["use_responses_lite"] as? Bool, false)
+        XCTAssertEqual(sol["experimental_supported_tools"] as? [String], ["fixture-tool"])
+        XCTAssertEqual(sol["fixture_extension"] as? [String: Bool], ["preserved": true])
+        XCTAssertEqual(entries.first { $0["slug"] as? String == "harbor/azure/custom-deployment" }?["visibility"] as? String, "hide")
+        XCTAssertEqual(entries.first { $0["slug"] as? String == "harbor-selected" }?["auto_review_model_override"] as? String,
+                       "harbor/azure/gpt-5.6-sol")
+        XCTAssertEqual(entries.first { $0["slug"] as? String == "harbor/baseten/other-model" }?["auto_review_model_override"] as? String,
+                       "provider-review-model")
+        XCTAssertEqual(try LiveRouting.catalog(in: data), raw)
     }
 }

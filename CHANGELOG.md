@@ -13,9 +13,12 @@ This tracks changes to the source preview. It does not announce a notarized inst
 - Persist unfinished turn ownership through tool gaps; refuse duplicate dispatch, changed account bindings, and replay after uncertain delivery. Storage pressure retains existing owners.
 - Separate saved credentials from route verification tied to runtime, configuration, and deployment. Status polling does not trigger paid inference.
 - Exercise the production entrypoint and packaged runtime with isolated state and synthetic providers.
-- Keep live promotion, retirement, and rollback disabled until actual desktop completion signals are verified. These changes are staged source work; no installed migration or uninterrupted desktop update is claimed.
+- Keep live promotion, retirement, and rollback disabled until actual desktop completion signals are verified. The independent service and signed interface have separate local installation evidence; newer gateway code remains pending maintenance. See [installed interface verification](docs/verification/gui-attachment.md). No uninterrupted gateway replacement is claimed.
 
 ### Azure OpenAI
+
+- Remove stale tool choices from tool-free compaction requests across native and translated routes, while preserving opaque Azure history.
+- Pin each Azure catalog entry's automatic-review model to its own Harbor deployment route. This hardens routing without claiming that a missing override caused the reported failure.
 
 - Added direct Azure Responses routing with resource endpoint and exact deployment names, macOS Keychain storage, and a billable tool-call connection check.
 - Deployment options explicitly select image input, context limits, and the reasoning setting tested during setup. Azure requests do not use Baseten's queue.

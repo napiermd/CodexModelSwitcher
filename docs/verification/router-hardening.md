@@ -24,6 +24,22 @@ Date: 2026-09-18. Branch: `codex/router-hardening`, based on `68fafc2`.
 
 ## Activation boundary
 
-The signed candidate is staged under `build/staged-updates/router-hardening-20260918/`. This patch has not replaced the live backend. Existing tasks, credentials, model selections and conversation files were not modified.
+The signed candidate is staged under `build/staged-updates/router-hardening-20260918/`. The backend and matching signed interface were activated after Andrew explicitly approved coordinated maintenance. Existing credentials, model selections and conversation files were not modified.
 
 Per `AGENTS.md` and `docs/safe-updates.md`, activation requires explicit coordinated maintenance and the tested `scripts/gateway-maintenance.py` controller. A quiet request counter does not authorize replacement. After activation, verify the new runtime identity, provider readiness, a real response stream, and built-in image generation before claiming the live issue resolved.
+
+
+## Installed activation
+
+- Commit: `679c35f`.
+- Active runtime: `c40778835d0f26fc46e91a4deb66e7a4576a29b16017fc5f0ce733cb5d2184bd`.
+- Boot: `c3313230-10c2-4d0c-9f43-fdf5c5f4ed22`.
+- Coordinated transaction `2797773b-d2fa-48ea-8f82-9f585a1d3bd9` ended in `resumed`, preserving ownership and shared configuration. Pause through final record was approximately 6.59 seconds. All inspected local Codex processes resumed.
+- An earlier attempt `90ef93cc-29d6-4fc8-aa8f-aef71dee9a27` safely aborted when a request raced the pause. It made no service replacement.
+- Authenticated status confirms the new identity, Azure and OpenRouter readiness true, and no remaining maintenance admission gate.
+- `scripts/verify-openrouter-tools.py --live --installed` passed actual tool selection and a streamed tool-result continuation on Fable 5.1.
+- Subsequent activity snapshot recorded eight successful Azure requests, six Codex-subscription requests, two OpenRouter requests and no failures since activation.
+- `/Applications/Model Harbor.app` matches the staged manifest. Signature and inventory were reverified. Updating the interface preserved gateway boot identity and configuration at the check.
+- Previous interface retained under `~/Library/Application Support/Model Harbor/updates/router-hardening-20260918-ui/Model Harbor.app`. The maintenance transaction retains the previous backend and recovery information.
+- Freshness diagnostics correctly report the existing native client-version mismatch and old published catalog without provenance. New provenance is written when Harbor next publishes its catalog. The desktop's loaded catalog remains unknown.
+- The native image-generation task was told to retry after verified activation; completed generation remains pending its report.

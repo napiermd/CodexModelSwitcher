@@ -40,7 +40,7 @@ Verification completed: 103 Swift tests and 421 Python tests passed on the integ
 
 ## Follow-up patch, 2026-09-18
 
-Branch `codex/router-hardening` builds on the activated context repair. The current live gateway remains at runtime `12082cbe94b9b3619196f3317a9fc4999926dd309eac0c891d01dcd6c5f09564` until coordinated maintenance.
+Branch `codex/router-hardening` builds on the activated context repair. The follow-up is now active at runtime `c40778835d0f26fc46e91a4deb66e7a4576a29b16017fc5f0ce733cb5d2184bd` after user-authorized coordinated maintenance. The signed interface matches it. Azure/OpenRouter readiness and an actual OpenRouter tool round trip passed.
 
 The reported “response connection was interrupted” text comes from Harbor’s BrokenPipeError/ConnectionResetError path. It does not identify which peer reset the connection. Inspection found the gateway still running, three failed Azure requests, and successful requests afterward. The old service discards stderr and has no per-failure history. Consequently the exact initiating peer for those historical failures cannot be reconstructed. Heartbeats address silence; they cannot repair an actual socket reset.
 

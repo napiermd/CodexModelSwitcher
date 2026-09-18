@@ -35,6 +35,8 @@ Codex loads the custom catalog at startup. Reopen Codex when active tasks are fi
 
 Azure uses `/openai/v1/responses` with the resource key in `api-key`. Harbor never forwards the Codex subscription token to Azure, never substitutes another model, and does not place Azure requests in the Baseten queue. Namespaces and custom tools are translated to function tools. Tool-result images retain their original data and call IDs and are moved into a labeled following message.
 
+Each generated Azure catalog entry names its own Harbor route as Codex's automatic-review model. This keeps `--approve-for-me` review requests on the same verified Azure deployment instead of relying on a review model that the Azure catalog does not provide. Harbor writes this metadata into its generated catalog; do not maintain a separate hand-edited Codex model bundle.
+
 Azure still applies deployment quotas and capacity limits. HTTP 429 is returned with available retry headers; partial streams are never replayed by Harbor. The new provider does not guarantee lower latency. Test your actual workload and inspect Azure's deployment metrics when evaluating performance.
 
 Azure inference keys do not provide a Harbor billing integration. Usage shows that Azure quota and spend are unavailable and links to the Azure dashboard. Use Azure Cost Management for billed charges.

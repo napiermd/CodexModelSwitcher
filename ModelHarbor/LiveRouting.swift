@@ -66,7 +66,9 @@ enum LiveRouting {
                     "truncation_policy": ["mode": "tokens", "limit": 10000],
                     "experimental_supported_tools": []
                 ]
-                entry["slug"] = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
+                let routeID = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
+                entry["slug"] = routeID
+                if service.id == "azure" { entry["auto_review_model_override"] = routeID }
                 entry["display_name"] = "\(model.name) · \(providerName(service.id))"
                 entry["description"] = "Uses \(providerName(service.id)) through Model Harbor. Selected independently for this task."
                 entry["visibility"] = data.modelPicker.isVisible(SelectedModel(serviceID: service.id, modelID: model.id)) ? "list" : "hide"

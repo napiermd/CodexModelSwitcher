@@ -85,6 +85,7 @@ final class AzureProviderTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
         let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
         XCTAssertEqual(entries.first?["slug"] as? String, "harbor/azure/coding-deploy")
+        XCTAssertEqual(entries.first?["auto_review_model_override"] as? String, "harbor/azure/coding-deploy")
         XCTAssertEqual(entries.first?["use_responses_lite"] as? Bool, false)
         XCTAssertEqual(entries.first?["supported_reasoning_levels"] as? [[String: String]], [["effort": "medium", "description": "Medium"]])
         XCTAssertEqual(entries.first?["input_modalities"] as? [String], ["text", "image"])

@@ -138,6 +138,66 @@ class TaskRepairTests(unittest.TestCase):
         (locks / '.coordination.lock').touch()
         return locks
 
+    def add_second_task(self):
+        task = '22222222-2222-4333-8444-555555555555'
+        rollout = self.rollout.with_name('second.jsonl')
+        metadata = json.loads(json.dumps(self.metadata))
+        metadata['payload']['id'] = task
+        rollout.write_bytes(json.dumps(metadata).encode() + b'\n' + self.history)
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
+            db.execute('INSERT INTO threads VALUES (?, ?, ?, ?, ?)',
+                       (task, 'openai', MODEL, str(rollout), 'Second task'))
+        return task, rollout
+
+    def run_batch(self, *options):
+        return subprocess.run([sys.executable, repair.__file__, '--codex-home', str(self.home),
+                               '--all', *options], capture_output=True, text=True)
+
+    def test_batch_skips_loaded_task_and_repairs_next_task(self):
+        locks = self.prepare_locks()
+        second, rollout = self.add_second_task()
+        with (locks / (TASK + '.lock')).open('w+b') as loaded:
+            fcntl.flock(loaded, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_batch('--apply', '--unloaded')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        results = json.loads(result.stdout)
+        self.assertEqual(results[0]['state'], 'waiting')
+        self.assertTrue(results[1]['conversation_unchanged'])
+        self.assertEqual(self.rollout.read_bytes(), self.original)
+        self.assertEqual(self.row()[0], 'openai')
+        self.assertEqual(self.row(second)[0], 'model-harbor')
+        self.assertEqual(rollout.read_bytes().split(b'\n', 1)[1], self.history)
+
+    def test_batch_reports_invalid_task_and_repairs_next_task(self):
+        self.prepare_locks()
+        second, _ = self.add_second_task()
+        self.metadata['payload']['model_provider'] = 'model-harbor'
+        self.rollout.write_bytes(json.dumps(self.metadata).encode() + b'\n' + self.history)
+        original = self.rollout.read_bytes()
+        result = self.run_batch('--apply', '--unloaded')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        results = json.loads(result.stdout)
+        self.assertEqual(results[0]['state'], 'error')
+        self.assertIn('disagree', results[0]['error'])
+        self.assertTrue(results[1]['conversation_unchanged'])
+        self.assertEqual(self.rollout.read_bytes(), original)
+        self.assertEqual(self.row()[0], 'openai')
+        self.assertEqual(self.row(second)[0], 'model-harbor')
+
+    def test_batch_preview_reports_all_tasks_without_writing(self):
+        second, rollout = self.add_second_task()
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
+            db.execute('UPDATE threads SET model=? WHERE id=?', ('harbor/unknown/model', TASK))
+        original_second = rollout.read_bytes()
+        result = self.run_batch()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        results = json.loads(result.stdout)
+        self.assertEqual(results[0]['state'], 'error')
+        self.assertTrue(results[1]['preview'])
+        self.assertEqual(self.row(second)[0], 'openai')
+        self.assertEqual(rollout.read_bytes(), original_second)
+        self.assertFalse((self.home / 'model-harbor-task-backups').exists())
+
     def test_live_repair_refuses_loaded_writer_then_repairs_after_release(self):
         locks = self.prepare_locks()
         with (locks / (TASK + '.lock')).open('w+b') as loaded:

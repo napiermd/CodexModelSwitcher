@@ -70,6 +70,8 @@ Baseten's Responses converter accepts `input_image` in message content but rejec
 
 ## Tools and history
 
+Codex 0.150.1 selects its compaction implementation from the saved task provider. A native `openai` task that selects a `harbor/...` model can therefore send that name to OpenAI's remote compaction endpoint and receive an unsupported-model error. Repairing the saved provider to `model-harbor` selects Codex's local summarization flow, which calls Harbor's normal `/harbor/v1/responses` route with the same model. Harbor removes stale `tool_choice` values when a request has no tools. It does not substitute a subscription model or fabricate a successful compaction response. `scripts/verify-task-repair.py` reproduces the failed remote request, repairs the unloaded task, and verifies compaction and continuation using local mock endpoints.
+
 Codex subscription requests retain native namespaces and custom tools. Grok and Baseten use a translation layer for tool definitions, calls, results, and streaming. Replayed history keeps tool-call links while removing provider-owned item IDs and opaque reasoning that cannot safely move between providers. Requests requiring opaque `previous_response_id` state fail instead of silently losing context.
 
 Protocol compatibility can change. The current checks exercise synthetic tool calls and remembered conversation content; they do not prove every tool or modality works with every provider.

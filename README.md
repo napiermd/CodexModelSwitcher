@@ -24,6 +24,8 @@ Model Harbor connects your Codex subscription, Grok sign-in, Azure OpenAI, Baset
 
 See [what changed](CHANGELOG.md) and the [roadmap](ROADMAP.md).
 
+If an older task fails with `Error running remote compact task` and says a `harbor/...` model is unsupported with a ChatGPT account, repair its saved provider using the [task recovery instructions](docs/getting-started.md#repair-an-older-openai-task). Retrying Continue or choosing the model again does not change that provider. Repair preserves the conversation and selected model.
+
 ## Build and connect
 
 Install macOS 13+, Xcode 16+, and Homebrew Python 3.14. Open Codex and sign in once so its local configuration and model catalog exist.

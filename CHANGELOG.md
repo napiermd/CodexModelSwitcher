@@ -4,7 +4,11 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Task-repair batches now report loaded and invalid tasks individually and continue repairing other eligible tasks. Added a Codex 0.150.1 end-to-end check for the unsupported Harbor model error during remote compaction, followed by provider repair, successful compaction, and continuation. README and recovery docs distinguish this saved-provider mismatch from tool-choice validation failures.
+
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
+- Tool-free Codex compaction requests now discard stale tool choices before provider routing, preventing long-running tasks from entering an unrecoverable retry loop at the context limit.
+- Azure routes now select themselves for Codex automatic review, so `--approve-for-me` does not depend on a missing Azure review model.
 
 ### Azure OpenAI
 

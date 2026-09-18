@@ -28,7 +28,7 @@ For UI changes, check light/dark macOS appearance and keyboard access. Use injec
 
 ## Offline task-repair verification
 
-With the Codex CLI on PATH, run `python3 scripts/verify-task-repair.py`. It creates a synthetic task with a mismatched provider in a temporary Codex home, demonstrates the failure against a local mock endpoint, repairs the saved provider, and resumes the same task in a second Codex process. It checks paginated history and verifies that the conversation bytes survive unchanged. It uses synthetic keys and makes no real inference requests. Verified with Codex CLI 0.150.1; protocol changes may require updating this optional check.
+With the Codex CLI on PATH, run `python3 scripts/verify-task-repair.py`. It creates a synthetic task with a mismatched provider in a temporary Codex home and demonstrates both inference and remote-compaction failures against a local mock endpoint. It archives the task to release its writer lock, repairs the saved provider, and resumes the same task without restarting Codex. It verifies paginated conversation bytes survive repair, then checks that compaction uses Harbor's normal Responses route with the same model and that another turn completes. It uses synthetic keys and makes no real inference requests. Verified with Codex CLI 0.150.1; protocol changes may require updating this optional check.
 
 ## Live verification
 

@@ -62,6 +62,32 @@ class GatewayServiceTests(unittest.TestCase):
         return service.ensure_service(self.source, self.state, self.config, self.token, 49123,
             Path('/fixture/python3'), self.root, launcher or self.launcher, probe or (lambda *_: None))
 
+    def test_existing_gateway_reports_matching_bundle_without_writes(self):
+        digest = service.runtime_digest(service.inventory(self.source))
+        existing = {'state': 'attached', 'mode': 'independent', 'runtime_id': digest,
+                    'maintenance_required': False}
+        before = {str(path.relative_to(self.root)): path.read_bytes()
+                  for path in self.root.rglob('*') if path.is_file()}
+        result = self.ensure(probe=lambda *_: existing)
+        after = {str(path.relative_to(self.root)): path.read_bytes()
+                 for path in self.root.rglob('*') if path.is_file()}
+        self.assertEqual(result['candidate_runtime_id'], digest)
+        self.assertFalse(result['maintenance_required'])
+        self.assertEqual(before, after)
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.launcher.calls, [])
+
+    def test_existing_gateway_reports_different_bundle_without_promoting(self):
+        existing = {'state': 'attached', 'mode': 'independent', 'runtime_id': 'a' * 64,
+                    'maintenance_required': False}
+        result = self.ensure(probe=lambda *_: existing)
+        self.assertTrue(result['maintenance_required'])
+        self.assertEqual(result['runtime_id'], 'a' * 64)
+        self.assertEqual(result['candidate_runtime_id'], service.runtime_digest(service.inventory(self.source)))
+        self.assertFalse(existing['maintenance_required'])
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.launcher.calls, [])
+
     def test_new_service_retains_all_python_files_and_declares_exact_identity(self):
         result = self.ensure()
         self.assertEqual(result['state'], 'registered')

@@ -5,6 +5,8 @@ on:
       - 'experiments/bifrost/**'
       - 'Tests/test_bifrost_pilot.py'
       - 'Tests/test_bifrost_pressure.py'
+      - 'Tests/test_bifrost_composed.py'
+      - 'ModelHarbor/Support/**'
       - '.github/workflows/bifrost-pilot.yml'
   workflow_dispatch:
 permissions:
@@ -37,7 +39,7 @@ jobs:
           python-version: '3.14'
       - name: Pull exact transport and synthetic helper images
         run: |
-          python3 - <<'PY'
+          python3 -B - <<'PY'
           import json, os, platform, subprocess
           from pathlib import Path
           pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
@@ -55,11 +57,14 @@ jobs:
       - name: Measure bounded buffer and established stream behavior
         run: |
           python3 -B experiments/bifrost/pressure_pilot.py --surface azure-passthrough --output "$REPORT_DIR/pressure.json"
+      - name: Exercise Harbor admission and history through pinned Bifrost
+        run: |
+          python3 -B experiments/bifrost/composed_pilot.py --surface azure-passthrough --output "$REPORT_DIR/composed.json"
       - name: Require complete conformance and pressure evidence
         if: always()
         run: |
-          python3 - <<'PY'
-          import hashlib, json, os, subprocess
+          python3 -B - <<'PY'
+          import hashlib, json, os, subprocess, sys
           from pathlib import Path
           directory = Path(os.environ['REPORT_DIR'])
           pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
@@ -95,10 +100,40 @@ jobs:
                               'all_synthetic_gates_passed': pressure['all_synthetic_gates_passed'],
                               'pacing_verified': pressure['pacing_verified'], 'cases': pressure['cases']}
           print(json.dumps(pressure_summary, indent=2))
+          composed_path = directory / 'composed.json'
+          composed = json.loads(composed_path.read_text())
+          sys.path.insert(0, str(Path('ModelHarbor/Support').resolve()))
+          from gateway_service import inventory, runtime_digest
+          source = inventory(Path('ModelHarbor/Support'))
+          assert composed['image'] == expected_image
+          assert composed['surface'] == 'azure-passthrough' and composed['max_retries'] == 0
+          assert composed['study'] == 'harbor-composed' and composed['entrypoint_verified']
+          assert composed['client_total_deadline_seconds'] == 24
+          assert composed['harbor_source_inventory'] == source
+          assert composed['harbor_runtime_digest'] == runtime_digest(source)
+          assert composed['harbor_policy'] == {'active_limit': 2, 'max_waiting': 16, 'wait_seconds': 30.0}
+          assert composed['bifrost_provider_limits'] == {'concurrency': 32, 'buffer_size': 32}
+          assert [row['case'] for row in composed['cases']] == [
+              'stream_lifetime', 'queue_capacity', 'queued_cancellation', 'dispatched_cancellation',
+              'error429', 'error503', 'partial_disconnect', 'opaque_json', 'opaque_sse', 'invalid_encrypted']
+          assert composed['study_complete'] and composed['composed_synthetic_gate_passed']
+          assert composed['all_synthetic_gates_passed'] and not composed['cleanup_errors']
+          assert composed['fixture_started_without_upstream_requests'] and composed['all_upstream_requests_accounted_for']
+          assert composed['total_upstream_attempts'] == 32
+          assert composed['gateway_cleanup'] == {
+              'process_exited': True, 'sentinel_unchanged': True, 'source_unchanged': True, 'logs_content_free': True}
+          assert composed['installed_runtime_changed'] is False and composed['live_azure_tested'] is False
+          assert composed['queue_timeout_tested'] is False
+          composed_summary = {'report_sha256': hashlib.sha256(composed_path.read_bytes()).hexdigest(),
+                              'harbor_runtime_digest': composed['harbor_runtime_digest'],
+                              'all_synthetic_gates_passed': composed['all_synthetic_gates_passed'],
+                              'total_upstream_attempts': composed['total_upstream_attempts'],
+                              'cases': composed['cases']}
+          print(json.dumps(composed_summary, indent=2))
           provenance = {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                         'repository': os.environ['GITHUB_REPOSITORY'], 'architecture': os.environ['EXPECTED_ARCH'],
                         'checkout_sha': subprocess.check_output(['git', 'rev-parse', '--verify', 'HEAD'], text=True).strip(),
-                        'live_azure_tested': False, 'samples': summaries, 'pressure': pressure_summary}
+                        'live_azure_tested': False, 'samples': summaries, 'pressure': pressure_summary, 'composed': composed_summary}
           (directory / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
           PY
       - name: Retain synthetic report

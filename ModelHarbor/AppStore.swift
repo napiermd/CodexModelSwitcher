@@ -11,7 +11,7 @@ final class AppStore: ObservableObject {
     @Published var checkingOpenAIAccountIDs: Set<String> = []
     @Published var proxyStatus: ProxyServerStatus = .notRunning
     @Published private(set) var storageReady = false
-    @Published var grokAccount = "Checking sign-in…"
+    @Published var grokAccount = "Sign-in not checked"
     @Published var grokIsSignedIn = false
     @Published var isGrokLoginRunning = false
     @Published var isBasetenReconnectRunning = false
@@ -36,6 +36,8 @@ final class AppStore: ObservableObject {
     private var usagePolling: Task<Void, Never>?
     private var connectionPolling: Task<Void, Never>?
     private var gatewayBootID: String?
+    private var allowsAutomaticProviderRestoration = false
+    private var credentialsLoaded = false
     private let writer = CodexConfigWriter()
     private let authManager = OpenAIAuthManager()
     private let grokAdapter = GrokAdapter()
@@ -48,54 +50,51 @@ final class AppStore: ObservableObject {
     }
 
     init(startAdapter: Bool = true) {
-        load()
-        if startAdapter {
-            proxyStatus = .starting
-            Task {
-                do {
-                    try await grokAdapter.start()
-                    for _ in 0..<50 {
-                        try? await grokAdapter.start()
-                        if await grokAdapter.isHealthy() {
-                            proxyStatus = .active
-                            if grokAdapter.requiresMaintenanceForRuntimeUpdate {
-                                statusMessage = "The existing gateway is still serving tasks. Its runtime update requires coordinated maintenance."
-                            }
-                            await refreshGrokAccount()
-                            await syncOpenRouter()
-                            await syncAzure()
-                            WarmUpController.shared.start(
-                                isBusy: { [weak self] in
-                                    guard let self else { return true }
-                                    return self.providerActivity.values.contains { $0.active > 0 }
-                                },
-                                isReady: { [weak self] in
-                                    self?.proxyStatus == .active && self?.codexConfigured == true
-                                })
-                            usagePolling = Task { [weak self] in
-                                while !Task.isCancelled {
-                                    if UserDefaults.standard.object(forKey: "harbor.usageAutoRefresh") as? Bool ?? true {
-                                        await self?.refreshUsage()
-                                    }
-                                    try? await Task.sleep(nanoseconds: 300_000_000_000)
-                                }
-                            }
-                            connectionPolling = Task { [weak self] in
-                                while !Task.isCancelled {
-                                    await self?.refreshConnectionStatus()
-                                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                                }
-                            }
-                            if let selected = data.selectedModel, LiveRouting.supports(selected.serviceID) {
-                                perform { try writer.applySelection(selected, in: data) }
-                            }
-                            return
+        guard startAdapter else { load(); return }
+        proxyStatus = .starting
+        Task {
+            do {
+                let mode = try await GatewayStartupCoordinator.start(adapter: grokAdapter,
+                    loadDisplay: { self.load(persist: false) }, bootstrap: {
+                        self.allowsAutomaticProviderRestoration = true
+                        self.load()
+                        await self.refreshGrokAccount()
+                        await self.syncOpenRouter()
+                        await self.syncAzure()
+                        if let selected = self.data.selectedModel, LiveRouting.supports(selected.serviceID) {
+                            self.perform { try self.writer.applySelection(selected, in: self.data) }
                         }
-                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    })
+                proxyStatus = .active
+                if grokAdapter.requiresMaintenanceForRuntimeUpdate {
+                    statusMessage = "The existing gateway is still serving tasks. Its runtime update requires coordinated maintenance."
+                }
+                await refreshConnectionStatus()
+                if mode == .bootstrapped {
+                    WarmUpController.shared.start(
+                        isBusy: { [weak self] in
+                            guard let self else { return true }
+                            return self.providerActivity.values.contains { $0.active > 0 }
+                        },
+                        isReady: { [weak self] in
+                            self?.proxyStatus == .active && self?.codexConfigured == true
+                        })
+                }
+                usagePolling = Task { [weak self] in
+                    while !Task.isCancelled {
+                        if UserDefaults.standard.object(forKey: "harbor.usageAutoRefresh") as? Bool ?? true {
+                            await self?.refreshUsage()
+                        }
+                        try? await Task.sleep(nanoseconds: 300_000_000_000)
                     }
-                    proxyStatus = .error
-                } catch { errorMessage = error.localizedDescription; proxyStatus = .error }
-            }
+                }
+                connectionPolling = Task { [weak self] in
+                    while !Task.isCancelled {
+                        await self?.refreshConnectionStatus()
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    }
+                }
+            } catch { errorMessage = error.localizedDescription; proxyStatus = .error }
         }
     }
 
@@ -190,6 +189,14 @@ final class AppStore: ObservableObject {
     func unlockAccounts() {
         CredentialStore.allowAuthenticationUI = true
         defer { CredentialStore.allowAuthenticationUI = false }
+        if grokAdapter.preservesExistingGateway {
+            do {
+                try hydrateCredentials()
+                storageReady = true
+                errorMessage = ""
+            } catch { errorMessage = error.localizedDescription }
+            return
+        }
         load()
         if storageReady { errorMessage = ""; Task { await refreshGrokAccount() } }
     }
@@ -234,7 +241,7 @@ final class AppStore: ObservableObject {
         let bootID = (value["runtime"] as? [String: Any])?["boot_id"] as? String
         let gatewayRestarted = gatewayBootID != nil && bootID != nil && gatewayBootID != bootID
         gatewayBootID = bootID
-        if gatewayRestarted {
+        if gatewayRestarted && allowsAutomaticProviderRestoration {
             do {
                 if let service = data.services.first(where: { $0.id == "openrouter" }), !service.apiKey.isEmpty {
                     try await grokAdapter.configureOpenRouter(key: service.apiKey)
@@ -253,6 +260,9 @@ final class AppStore: ObservableObject {
             openRouterReady = providers["openrouter_ready"] as? Bool ?? false
             azureReady = providers["azure_ready"] as? Bool ?? false
             providerActivity = (providers["activity"] as? [String: [String: Any]] ?? [:]).mapValues(ProviderActivity.init)
+            if !grokIsSignedIn {
+                grokAccount = providerActivity["grok-oauth"]?.verifiedConnection == true ? "Verified request activity" : "Sign-in not checked"
+            }
         }
         if let request = value["last_request"] as? [String: Any] {
             lastProviderID = request["provider"] as? String ?? ""
@@ -289,6 +299,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func refreshGrokAccount() async -> Bool {
         do {
+            try hydrateCredentials()
             let bytes = try await grokAdapter.accountStatus()
             guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                   let models = value["models"] as? [[String: Any]] else { throw AppError.missingModel }
@@ -312,8 +323,18 @@ final class AppStore: ObservableObject {
         } catch { grokIsSignedIn = false; grokAccount = "Sign in to load your models"; return false }
     }
 
-    func load() {
+    func load(persist: Bool = true) {
         do {
+            if !persist {
+                var candidate = FileManager.default.fileExists(atPath: AppPaths.appData.path)
+                    ? try JSONDecoder().decode(AppData.self, from: Data(contentsOf: AppPaths.appData))
+                    : defaultData()
+                try reflectActiveConfiguration(in: &candidate)
+                data = candidate
+                credentialsLoaded = false
+                storageReady = true
+                return
+            }
             var didMigrate = false
             var candidate = defaultData()
             if FileManager.default.fileExists(atPath: AppPaths.appData.path) {
@@ -342,6 +363,7 @@ final class AppStore: ObservableObject {
             }
             try reflectActiveConfiguration(in: &candidate)
             try save(candidate)
+            credentialsLoaded = true
             storageReady = true
             if didMigrate { statusMessage = "Per-task models are ready. Reopen Codex once to load the new picker entries." }
         } catch { storageReady = false; errorMessage = error.localizedDescription }
@@ -385,7 +407,7 @@ final class AppStore: ObservableObject {
     }
 
     func setModelVisible(_ selection: SelectedModel, visible: Bool) {
-        perform {
+        perform(needsCredentials: false) {
             var candidate = data
             try candidate.setPickerVisibility(visible, for: selection)
             try savePickerPreferences(candidate)
@@ -393,7 +415,7 @@ final class AppStore: ObservableObject {
     }
 
     func setProviderModelsVisible(_ providerID: String, visible: Bool) {
-        perform {
+        perform(needsCredentials: false) {
             var candidate = data
             try candidate.setPickerVisibility(visible, forProvider: providerID)
             try savePickerPreferences(candidate)
@@ -415,10 +437,22 @@ final class AppStore: ObservableObject {
         statusMessage = "Model list saved. Reopen Codex when your tasks are idle to refresh its picker. Existing tasks keep their models."
     }
 
-    private func perform(_ operation: () throws -> Void) {
+    private func hydrateCredentials() throws {
+        guard !credentialsLoaded else { return }
+        var candidate = data
+        do { try candidate.loadCredentials() }
+        catch { storageReady = false; throw error }
+        data = candidate
+        credentialsLoaded = true
+    }
+
+    private func perform(needsCredentials: Bool = true, _ operation: () throws -> Void) {
         guard storageReady else { return }
-        do { try operation(); errorMessage = "" }
-        catch { statusMessage = ""; errorMessage = error.localizedDescription }
+        do {
+            if needsCredentials { try hydrateCredentials() }
+            try operation()
+            errorMessage = ""
+        } catch { statusMessage = ""; errorMessage = error.localizedDescription }
     }
 
     func setReasoningEffort(_ effort: ReasoningEffort) {
@@ -533,6 +567,7 @@ final class AppStore: ObservableObject {
         statusMessage = "Complete Codex sign-in in your browser."
         Task {
             do {
+                try hydrateCredentials()
                 let account = try await authManager.loginAccount(suggestedName: "Codex account")
                 var candidate = data
                 try adding(account.authJSON, name: account.name, to: &candidate)
@@ -545,6 +580,8 @@ final class AppStore: ObservableObject {
     }
 
     func checkOpenAIAccounts() {
+        do { try hydrateCredentials() }
+        catch { errorMessage = error.localizedDescription; return }
         for account in data.openAIAccounts {
             checkingOpenAIAccountIDs.insert(account.id)
             Task {
@@ -585,7 +622,7 @@ final class AppStore: ObservableObject {
         guard proxyStatus == .active else { return false }
         switch id {
         case "baseten": return basetenState == "ready"
-        case "grok-oauth": return grokIsSignedIn
+        case "grok-oauth": return grokIsSignedIn || providerActivity[id]?.verifiedConnection == true
         case "openrouter": return openRouterReady
         case "azure": return azureReady
         case "codex-subscription": return providerActivity[id]?.verifiedConnection ?? false
@@ -604,6 +641,7 @@ final class AppStore: ObservableObject {
 
     func disconnectAzure() async {
         do {
+            try hydrateCredentials()
             try await grokAdapter.configureAzure(endpoint: "", key: "")
             var candidate = data
             if let index = candidate.services.firstIndex(where: { $0.id == "azure" }) { candidate.services[index].apiKey = "" }
@@ -620,6 +658,7 @@ final class AppStore: ObservableObject {
         errorMessage = ""; statusMessage = ""
         defer { connectingAzure = false }
         do {
+            try hydrateCredentials()
             if hideBasetenModels && !makeDefault && data.selectedModel?.serviceID == "baseten" {
                 throw ProviderError.message("Enable Use for new tasks before hiding Baseten, or choose another default in Settings → Models.")
             }
@@ -675,6 +714,7 @@ final class AppStore: ObservableObject {
 
     func disconnectOpenRouter() async {
         do {
+            try hydrateCredentials()
             try await grokAdapter.configureOpenRouter(key: "")
             var candidate = data
             if let index = candidate.services.firstIndex(where: { $0.id == "openrouter" }) { candidate.services[index].apiKey = "" }
@@ -700,6 +740,7 @@ final class AppStore: ObservableObject {
     func connectOpenRouter(key: String, models: Set<String>) async -> Bool {
         guard storageReady else { return false }
         do {
+            try hydrateCredentials()
             let picked = openRouterModels.filter { models.contains($0.id) }
             guard !picked.isEmpty else { throw ProviderError.message("Choose at least one model.") }
             let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -720,6 +761,7 @@ final class AppStore: ObservableObject {
     }
 
     func saveService(originalID: String?, form: ServiceFormData) {
+        let preserveStoredKey = !credentialsLoaded && form.apiKey.isEmpty
         perform {
             let name = form.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let id = originalID ?? (form.id.isEmpty ? slugify(name) : form.id)
@@ -729,7 +771,8 @@ final class AppStore: ObservableObject {
             guard !models.isEmpty else { throw AppError.invalidModelList }
             let existing = data.services.first { $0.id == originalID }
             let service = CodexService(id: id, name: name.isEmpty ? id : name,
-                baseURL: form.baseURL, envKey: form.envKey, apiKey: form.apiKey, models: models,
+                baseURL: form.baseURL, envKey: form.envKey,
+                apiKey: preserveStoredKey ? existing?.apiKey ?? "" : form.apiKey, models: models,
                 catalogPath: existing?.catalogPath, usesExistingProvider: existing?.usesExistingProvider ?? false)
             var candidate = data
             if let index = candidate.services.firstIndex(where: { $0.id == id }) { candidate.services[index] = service }

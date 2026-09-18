@@ -217,22 +217,31 @@ class Launchctl:
 def ensure_service(source, state, config, token, port, python, home, launcher=None, probe=listener_status):
     if not 1 <= port <= 65535:
         raise ServiceError('The gateway port is invalid.')
+    def attachment(existing):
+        if existing.get('mode') != 'independent':
+            return existing
+        candidate = runtime_digest(inventory(source))
+        return dict(existing, candidate_runtime_id=candidate,
+                    maintenance_required=existing.get('runtime_id') != candidate)
+
     existing = probe(port, token)
     if existing is not None:
-        return existing
+        return attachment(existing)
     state = private_directory(state)
     launcher = launcher or Launchctl()
     with ownership_lock(state):
         existing = probe(port, token)
         if existing is not None:
-            return existing
+            return attachment(existing)
         suffix = hashlib.sha256(f'{state}\0{port}'.encode()).hexdigest()[:24]
         label = 'dev.napier.ModelHarbor.gateway.' + suffix
         domain = f'gui/{os.getuid()}'
         if launcher.registered(domain + '/' + label):
-            return {'state': 'registered', 'mode': 'independent', 'maintenance_required': False}
+            return {'state': 'registered', 'mode': 'independent', 'existing_service': True,
+                    'candidate_runtime_id': runtime_digest(inventory(source)), 'maintenance_required': True}
         job = state / ('service-' + str(port) + '.plist')
-        if job.exists() or job.is_symlink():
+        existing_job = job.exists() or job.is_symlink()
+        if existing_job:
             # Reuse an earlier registration attempt's exact runtime and settings.
             if job.is_symlink():
                 raise ServiceError('The existing gateway job file is invalid.')
@@ -273,7 +282,10 @@ def ensure_service(source, state, config, token, port, python, home, launcher=No
                 output.flush()
                 os.fsync(output.fileno())
         launcher.bootstrap(domain, job)
-        return {'state': 'registered', 'mode': 'independent', 'runtime_id': digest, 'maintenance_required': False}
+        candidate = runtime_digest(inventory(source))
+        return {'state': 'registered', 'mode': 'independent', 'runtime_id': digest,
+                'existing_service': existing_job, 'candidate_runtime_id': candidate,
+                'maintenance_required': digest != candidate}
 
 
 def main():

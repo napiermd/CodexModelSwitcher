@@ -66,7 +66,7 @@ An older task created with the native OpenAI provider may report that a `harbor/
 
 ## Dock, menu bar, and settings
 
-The provider panel shows connection readiness, active requests, and completed responses. Codex shows **Configured** until Harbor verifies a completed response. The panel grows to fit its content and scrolls when it reaches the available screen height.
+The provider panel shows connection readiness, active requests, and completed responses. Codex shows **Configured** until Harbor verifies a completed response. An expired readiness check shows that another connection check is needed while preserving access to saved connection settings. The panel grows to fit its content and scrolls when it reaches the available screen height.
 
 | Settings section | Controls |
 | --- | --- |
@@ -76,7 +76,7 @@ The provider panel shows connection readiness, active requests, and completed re
 | **Providers** | Harbor tab visibility, connections, and saved Codex accounts. |
 | **Advanced** | Inactive-task route repair and confirmed Codex close/reopen actions. |
 
-Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** disconnects the UI from the new independent gateway; older GUI-owned gateways still require Harbor to remain open. See [runtime ownership and migration limits](docs/runtime-service.md). Launch at login uses macOS login-item registration and opens quietly.
+Closing Harbor's window keeps the bridge running. The close dialog offers **Keep in Dock**, **Menu Bar Only**, **Cancel**, and **Remember this choice**. **Quit Harbor** disconnects the UI from the new independent gateway; older GUI-owned gateways still require Harbor to remain open. Reopening the interface attaches to the existing gateway without resending credentials or changing its configuration. A newer bundled gateway remains pending until a coordinated update. See [runtime ownership and migration limits](docs/runtime-service.md). Launch at login uses macOS login-item registration and opens quietly.
 
 Warm-up sends one short, low-effort request through the current Codex account. Choose manual, after-startup, or daily operation and edit the prompt. Automatic attempts run only while Harbor is ready and idle, at most once per local day. Warm-up consumes subscription quota, does not raise rate limits, and makes no performance guarantee. See [lifecycle and startup](docs/lifecycle.md).
 

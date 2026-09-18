@@ -168,6 +168,15 @@ The immutable image, source commit, and observed results identify what was exerc
 
 ### Harbor admission follow-through
 
-The staged Harbor candidate now holds a process-local Azure admission slot until upstream close. Its per endpoint/deployment defaults are two active requests, sixteen FIFO waiters, and a 30-second queue deadline. Gateway verification shares that queue. Twenty scheduler tests and six actual-handler tests cover stream-close barriers, no-dispatch cancellation/timeouts, and preserved readiness. The full local suite passes 298 Python tests.
+The installed Harbor runtime at checkpoint `85040f6` holds a process-local Azure admission slot until upstream close. Its per endpoint/deployment defaults are two active requests, sixteen FIFO waiters, and a 30-second queue deadline. Gateway verification shares that queue. Twenty scheduler tests and six actual-handler tests cover stream-close barriers, no-dispatch cancellation/timeouts, and preserved readiness. The full local suite passes 298 Python tests.
 
-This is a direct Harbor implementation prompted by the pinned Bifrost pressure finding. It has not been measured as a composed Harbor→Bifrost→Azure route and is not installed. Azure still makes one attempt per explicit gateway request. The follow-up implements an overall Azure deadline and explicit zero caller retries, with an isolated CLI behavior check. Actual desktop reload behavior, multiple-runtime coordination, and real Azure parity remain open; the production no-go decision is unchanged.
+This is a direct Harbor implementation prompted by the pinned Bifrost pressure finding. That runtime was installed on September 17, 2026 and passed a live Azure route check. Its composed Harbor→Bifrost→Azure behavior remains a separate test requirement. Azure still makes one attempt per explicit gateway request. The follow-up implements an overall Azure deadline and explicit zero caller retries, with an isolated CLI behavior check. Actual desktop reload behavior, multiple-runtime coordination, and real Azure parity remain open; the production no-go decision is unchanged.
+
+
+### Composed admission and history study
+
+`experiments/bifrost/composed_pilot.py` launches the unmodified retained Harbor entrypoint in the synthetic helper container. A fixture-only redirect sends its exact synthetic Azure URL through pinned Bifrost native Azure passthrough. Bifrost's concurrency and buffer limits are both 32, so Harbor's two-stream and sixteen-waiter limits must supply the admission behavior being tested.
+
+The ten cases cover established stream lifetime, queue overflow, queued and dispatched cancellation, single-attempt 429 and 503 responses, partial-stream disconnect, opaque JSON and SSE history, and rejected ciphertext. Each report binds the tested Harbor source inventory and digest, checks all 32 upstream attempts, verifies cleanup, and labels live Azure and queue-expiration tests as unperformed. The composed request deadline is 24 seconds.
+
+Local behavior tests passed through an explicitly synthetic passthrough double. Hosted CI runs the same production entrypoint against the exact AMD64 and ARM64 Bifrost image pins. This study does not activate Bifrost in the installed app. Real Azure continuation, cost, latency, and multi-runtime admission remain separate adoption requirements.

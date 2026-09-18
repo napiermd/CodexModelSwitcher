@@ -274,9 +274,10 @@ def decode_frame(lines):
 
 
 def perform(port, body, cancel=False, host="127.0.0.1", surface="converted",
-            on_sent=None, on_event=None):
+            on_sent=None, on_event=None, path=None, headers=None, deadline=None, on_connect=None):
     start = time.monotonic()
-    conn = http.client.HTTPConnection(host, port, timeout=DEADLINE)
+    duration = DEADLINE if deadline is None else deadline
+    conn = http.client.HTTPConnection(host, port, timeout=duration)
     transport_socket = [None]
     def expire():
         if transport_socket[0] is not None:
@@ -284,7 +285,7 @@ def perform(port, body, cancel=False, host="127.0.0.1", surface="converted",
                 transport_socket[0].shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-    timer = threading.Timer(DEADLINE, expire)
+    timer = threading.Timer(duration, expire)
     timer.daemon = True
     timer.start()
     chunks, events = [], []
@@ -292,7 +293,10 @@ def perform(port, body, cancel=False, host="127.0.0.1", surface="converted",
     try:
         conn.connect()
         transport_socket[0] = conn.sock
-        conn.request('POST', SURFACES[surface]['path'], json.dumps(body), {'Content-Type': 'application/json'})
+        if on_connect is not None:
+            on_connect(conn.sock)
+        conn.request('POST', path or SURFACES[surface]['path'], json.dumps(body),
+                     {'Content-Type': 'application/json', **(headers or {})})
         if on_sent is not None:
             on_sent()
         response = conn.getresponse()
@@ -487,15 +491,19 @@ def main(study=None):
         if study is not None:
             provider_config = study.configure(provider_config)
         (root/'config.json').write_text(json.dumps(provider_config))
+        fixture = study.prepare_fixture(root) if study is not None and hasattr(study, 'prepare_fixture') else None
         try:
             docker('network', 'create', '--internal', network)
             network_created = True
             docker('create', '--name', mock_name, '--network', network, '--cap-drop', 'ALL',
-                   '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m',
+                   '--security-opt', 'no-new-privileges', '--pids-limit', str(getattr(study, 'MOCK_PIDS', 64)),
+                   '--memory', getattr(study, 'MOCK_MEMORY', '128m'),
                    '-e', 'HOME=/tmp', pin['mock_image'],
                    'python3', *(['/tmp/' + study.SCRIPT, '--mock'] if study is not None else ['/tmp/mock_server.py']))
             created.append(mock_name)
             docker('cp', str(HERE) + '/.', mock_name + ':/tmp/')
+            if fixture is not None:
+                docker('cp', str(fixture), mock_name + ':/tmp/')
             docker('start', mock_name)
             def probe(*arguments):
                 return json.loads(docker('exec', mock_name, 'python3',
@@ -543,7 +551,9 @@ def main(study=None):
                                                    and result['all_requested_case_checks_passed']
                                                    and result['transport_version_banner_verified']
                                                    and not result['synthetic_content_in_console_logs']
-                                                   and not result['synthetic_content_in_runtime_files'])
+                                                   and not result['synthetic_content_in_runtime_files']
+                                                   and (not getattr(study, 'GATE_FIELD', None)
+                                                        or result.get(study.GATE_FIELD) is True))
             save()
         except Exception as error:
             result['harness_error'] = str(error)

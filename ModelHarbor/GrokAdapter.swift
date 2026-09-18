@@ -3,7 +3,17 @@ import Foundation
 @MainActor
 final class GrokAdapter {
     private var servicePrepared = false
+    private var candidateRuntimeID: String?
+    private let serviceRequest: () async throws -> Data
+    private let statusRequest: () async throws -> Data
+    private(set) var preservesExistingGateway = false
     private(set) var requiresMaintenanceForRuntimeUpdate = false
+
+    init(serviceRequest: (() async throws -> Data)? = nil,
+         statusRequest: (() async throws -> Data)? = nil) {
+        self.serviceRequest = serviceRequest ?? Self.prepareService
+        self.statusRequest = statusRequest ?? { try await Self.ownerControl("GET", path: "/harbor/status") }
+    }
     private static var bridgePort: Int {
         let port = Int(ProcessInfo.processInfo.environment["MODEL_HARBOR_PORT"] ?? "48118") ?? 48118
         return (1...65535).contains(port) ? port : 48118
@@ -19,12 +29,24 @@ final class GrokAdapter {
 
     func start() async throws {
         if servicePrepared { return }
+        let bytes = try await serviceRequest()
+        let status = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        guard let state = status?["state"] as? String, ["attached", "registered"].contains(state) else {
+            throw ProviderError.message(status?["error"] as? String ?? "The independent gateway could not start. Existing services were preserved.")
+        }
+        preservesExistingGateway = state == "attached" || status?["existing_service"] as? Bool == true
+        candidateRuntimeID = status?["candidate_runtime_id"] as? String
+        requiresMaintenanceForRuntimeUpdate = status?["maintenance_required"] as? Bool ?? true
+        servicePrepared = true
+    }
+
+    private static func prepareService() async throws -> Data {
         guard let script = Bundle.main.url(forResource: "gateway_service", withExtension: "py") else {
             throw ProviderError.message("The independent gateway helper is missing from the app bundle.")
         }
         let executable = try PythonRuntime.executable()
-        let environment = Self.bridgeEnvironment
-        let maintenanceRequired = try await Task.detached {
+        let environment = bridgeEnvironment
+        return try await Task.detached {
             let helper = Process()
             helper.executableURL = executable
             helper.arguments = ["-B", "-u", script.path, "--source", script.deletingLastPathComponent().path]
@@ -36,16 +58,12 @@ final class GrokAdapter {
             try helper.run()
             let bytes = output.fileHandleForReading.readDataToEndOfFile()
             helper.waitUntilExit()
-            let status = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-            guard helper.terminationStatus == 0,
-                  let state = status?["state"] as? String,
-                  ["attached", "registered"].contains(state) else {
+            guard helper.terminationStatus == 0 else {
+                let status = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
                 throw ProviderError.message(status?["error"] as? String ?? "The independent gateway could not start. Existing services were preserved.")
             }
-            return status?["maintenance_required"] as? Bool ?? true
+            return bytes
         }.value
-        requiresMaintenanceForRuntimeUpdate = maintenanceRequired
-        servicePrepared = true
     }
 
     func isHealthy() async -> Bool {
@@ -64,7 +82,9 @@ final class GrokAdapter {
                   identity.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
                   let bootID = runtime["boot_id"] as? String,
                   UUID(uuidString: bootID) != nil else { return false }
-            requiresMaintenanceForRuntimeUpdate = false
+            if let candidateRuntimeID {
+                requiresMaintenanceForRuntimeUpdate = identity != candidateRuntimeID
+            }
         } else {
             requiresMaintenanceForRuntimeUpdate = true
         }
@@ -110,7 +130,7 @@ final class GrokAdapter {
     }
 
     func connectionStatus() async throws -> Data {
-        try await Self.ownerControl("GET", path: "/harbor/status")
+        try await statusRequest()
     }
 
     func verifyRoute(model: String) async throws {
@@ -167,6 +187,29 @@ final class GrokAdapter {
                 throw NSError(domain: "ModelHarbor", code: 2, userInfo: [NSLocalizedDescriptionKey: "Grok sign-in did not finish. Try signing in again."])
             }
         }.value
+    }
+}
+
+enum GatewayStartupMode: Equatable {
+    case attached
+    case bootstrapped
+}
+
+@MainActor
+enum GatewayStartupCoordinator {
+    static func start(adapter: GrokAdapter, loadDisplay: () -> Void,
+                      bootstrap: () async -> Void) async throws -> GatewayStartupMode {
+        loadDisplay()
+        try await adapter.start()
+        for _ in 0..<50 {
+            if await adapter.isHealthy() {
+                if adapter.preservesExistingGateway { return .attached }
+                await bootstrap()
+                return .bootstrapped
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw ProviderError.message("The gateway did not become available. Existing services were preserved.")
     }
 }
 

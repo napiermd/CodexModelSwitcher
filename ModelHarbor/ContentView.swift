@@ -24,6 +24,7 @@ struct ContentView: View {
     private var service: CodexService? { store.data.services.first { $0.id == focusedProvider } }
     private var activity: ProviderActivity { store.providerActivity[focusedProvider] ?? ProviderActivity() }
     private var connected: Bool { store.providerConnected(focusedProvider) }
+    private var configured: Bool { connected || store.providerCredentialsAvailable[focusedProvider] == true }
     private var visibleProviders: [ProviderDefinition] {
         let visible = ProviderDefinition.all.filter { !hiddenProviders.split(separator: ",").contains(Substring($0.id)) }
         return visible.isEmpty ? ProviderDefinition.all : visible
@@ -220,8 +221,14 @@ struct ContentView: View {
                     Text(activity.httpStatus.flatMap { $0 >= 400 ? "Last request returned HTTP \($0)" : nil } ?? "Last request did not complete").font(.caption).foregroundStyle(.orange)
                 } else if let date = activity.lastSuccess {
                     Text("Last response \(date, style: .relative) ago").font(.caption).foregroundStyle(.secondary)
+                } else if focusedProvider == "codex-subscription" && store.codexConfigured {
+                    Text("No completed request this session").font(.caption).foregroundStyle(.secondary)
+                } else if connected {
+                    Text("Ready for the next request").font(.caption).foregroundStyle(.secondary)
+                } else if configured && store.proxyStatus == .active {
+                    Text("Credentials available · connection check needed").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text(focusedProvider == "codex-subscription" && store.codexConfigured ? "No completed request this session" : (connected ? "Ready for the next request" : "No connection established")).font(.caption).foregroundStyle(.secondary)
+                    Text("No connection established").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if activity.completed > 0 { Text("\(activity.completed) completed").font(.caption).monospacedDigit().foregroundStyle(.secondary).help("Completed requests since Harbor started") }
@@ -243,12 +250,12 @@ struct ContentView: View {
         case "grok-oauth":
             Button(store.isGrokLoginRunning ? "Signing in…" : (connected ? "Switch account…" : "Sign in to Grok")) { store.signInGrok() }.disabled(store.isGrokLoginRunning).buttonStyle(.bordered)
         case "azure":
-            Menu(connected ? "Manage connection" : "Connect Azure OpenAI") {
-                Button(connected ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }
-                if connected { Button("Disconnect") { Task { await store.disconnectAzure() } } }
+            Menu(configured ? "Manage connection" : "Connect Azure OpenAI") {
+                Button(configured ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }
+                if configured { Button("Disconnect") { Task { await store.disconnectAzure() } } }
             }.fixedSize()
         case "openrouter":
-            if connected {
+            if configured {
                 Menu("Manage connection") {
                     Button("Choose models…") { beginOpenRouter() }
                     Button("Open OpenRouter dashboard") { open(provider.dashboard) }

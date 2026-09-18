@@ -373,7 +373,7 @@ def main():
     parser.add_argument('thread_id', nargs='?', help='Exact task UUID')
     parser.add_argument('--all', action='store_true', help='Find all incompatible Harbor task routes')
     parser.add_argument('--codex-home', type=Path, default=Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser())
-    parser.add_argument('--apply', action='store_true', help='Apply after quitting Codex')
+    parser.add_argument('--apply', action='store_true', help='Apply after quitting Codex, or use --unloaded for inactive tasks')
     parser.add_argument('--unloaded', action='store_true', help='Apply only with the Codex per-task writer lock')
     args = parser.parse_args()
     if bool(args.thread_id) == bool(args.all):
@@ -385,17 +385,30 @@ def main():
         ids = candidate_ids(home) if args.all else [args.thread_id]
         results = []
         for thread_id in ids:
-            if args.apply and args.unloaded:
-                result = repair_unloaded(home, thread_id)
-            else:
-                plan = task_plan(home, thread_id)
-                if args.apply:
-                    result = apply_plan(home, plan)
+            try:
+                if args.apply and args.unloaded:
+                    result = repair_unloaded(home, thread_id)
                 else:
-                    result = {key: value for key, value in plan.items() if key not in ('metadata', 'first_line')}
-                    result.update(preview=True, codex_is_running=bool(codex_processes()))
+                    plan = task_plan(home, thread_id)
+                    if args.apply:
+                        result = apply_plan(home, plan)
+                    else:
+                        result = {key: value for key, value in plan.items() if key not in ('metadata', 'first_line')}
+                        result.update(preview=True, codex_is_running=bool(codex_processes()))
+            except TaskInUse as error:
+                if not args.all:
+                    raise
+                result = {'thread_id': thread_id, 'state': 'waiting', 'error': str(error)}
+            except (ValueError, OSError, sqlite3.Error, KeyError) as error:
+                if not args.all:
+                    raise
+                result = {'thread_id': thread_id, 'state': 'error', 'error': str(error)}
             results.append(result)
         print(json.dumps(results if args.all else results[0], indent=2))
+        if any(result.get('state') == 'error' for result in results):
+            raise SystemExit(1)
+        if any(result.get('state') == 'waiting' for result in results):
+            raise SystemExit(2)
     except (ValueError, OSError, sqlite3.Error, KeyError) as error:
         parser.exit(1, f'Repair stopped: {error}\n')
 

@@ -18,7 +18,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = 'harbor/baseten/verification-model'
+MODEL = 'harbor/openrouter/anthropic/claude-fable-5.1'
 spec = importlib.util.spec_from_file_location('repair', ROOT / 'ModelHarbor/Support/task_repair.py')
 repair = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(repair)
@@ -98,6 +98,14 @@ class Client:
     def turn(self, task_id, text):
         self.pending.clear()
         self.rpc('turn/start', {'threadId': task_id, 'input': [{'type': 'text', 'text': text}]})
+        return self.completed_turn()
+
+    def compact(self, task_id):
+        self.pending.clear()
+        self.rpc('thread/compact/start', {'threadId': task_id})
+        return self.completed_turn()
+
+    def completed_turn(self):
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             event = self.pending.pop(0) if self.pending else self.events.get(timeout=30)
@@ -126,6 +134,7 @@ model_provider = "model-harbor"
 model_catalog_json = {json.dumps(str(catalog))}
 [features]
 apps = false
+remote_compaction_v2 = false
 [model_providers.model-harbor]
 name = "Model Harbor test"
 base_url = "http://127.0.0.1:{server.server_port}/harbor/v1"
@@ -148,6 +157,10 @@ stream_max_retries = 0
         assert before['status'] == 'failed', before['status']
         assert server.requests[-1] == ('/native/v1/responses', MODEL)
         print('BEFORE: existing task fails through native provider.', flush=True)
+        before_compact = first.compact(task_id)
+        assert before_compact['status'] == 'failed', before_compact
+        assert server.requests[-1] == ('/native/v1/responses/compact', MODEL), server.requests
+        print('BEFORE COMPACTION: native endpoint rejects the Harbor model.', flush=True)
         try:
             repair.repair_unloaded(root, task_id)
         except repair.TaskInUse:
@@ -170,6 +183,13 @@ stream_max_retries = 0
         assert after['status'] == 'completed', after['status']
         assert server.requests[-1] == ('/harbor/v1/responses', MODEL)
         print('AFTER: same task completes through Harbor without restarting Codex.', flush=True)
+        server.requests.clear()
+        after_compact = first.compact(task_id)
+        assert after_compact['status'] == 'completed', after_compact
+        assert server.requests == [('/harbor/v1/responses', MODEL)], server.requests
+        continued = first.turn(task_id, 'Continue after compaction.')
+        assert continued['status'] == 'completed', continued
+        print('AFTER COMPACTION: same model compacts through Harbor and continues.', flush=True)
     finally:
         first.close()
 

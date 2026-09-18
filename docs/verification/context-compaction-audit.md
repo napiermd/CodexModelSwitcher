@@ -20,12 +20,17 @@ Three completed examples, all on September 18 UTC:
 
 The first example includes 27 tool outputs totaling 626,137 compact ASCII JSON bytes. This is a serialization metric, not a token count or the exact provider wire size. The compactor's own response is excluded by response ID in all three examples.
 
-The roughly 123,000-token difference remains unattributed. The earliest two cycles in the same rollout showed differences of only 10,455 and 9,948 tokens. Request composition or accounting changed during the task, but this audit cannot identify which component changed. Do not label the difference duplicated history, tool schemas, instructions, images, or a provider bug without measurement.
+The provider usage records attribute the dominant difference to a fixed cached prefix. Every sampled first request in both the 121,600- and 258,400-window periods reports 129,025 cached input tokens. Cached input is already included in total provider input and must not be added again. After subtracting it once, the sampled post-compaction requests contain 11,824–15,010 uncached input tokens, while the local estimates are 16,249–20,653. The remaining difference is negative by 4,957–5,643 tokens. That proves the two counters use different scopes; it does not prove missing history or duplicated context.
+
+The fixed prefix corresponds to the part of the request that survives compaction and benefits from provider caching. The rollout also records a stable full world-state payload whose permissions section contains 567 approved command prefixes, but serialized bytes are not token counts. Request metrics added by this patch can measure instructions, tools, inputs, images and encrypted payloads at the gateway boundary when `MODEL_HARBOR_REQUEST_METRICS=1`. They remain disabled by default, retain only 32 content-free records and do not alter request bytes.
 
 ## Implementation and files
 
 - `scripts/audit-context.py` streams an explicitly supplied local rollout read-only and emits JSON with recent compaction cycles.
-- `Tests/test_context_audit.py` covers accounting, confidentiality, malformed and partial records, replayed usage, model changes, retention bounds, and CLI behavior.
+- `ModelHarbor/Support/request_metrics.py` records bounded content-free request component sizes and provider usage when explicitly enabled.
+- `scripts/verify-context-capacity.py` verifies one exact synthetic payload against one explicitly supplied deployment. It does not discover credentials or modify catalogs.
+- `experiments/chat_compat.py` is an isolated Responses-to-Chat-Completions pilot. No production route imports it.
+- The focused Python tests cover accounting, confidentiality, malformed and partial records, request-byte parity, concurrency, capacity gating, translation, streaming, usage and fail-closed unsupported features.
 - `Package.swift` excludes the new Python test from SwiftPM.
 - `docs/codex-router-comparison.md` links this follow-up without reopening the deployed patch.
 
@@ -43,14 +48,14 @@ A model change clears the currently observed window until a new observation arri
 
 These constraints prevent content disclosure and false precision. No runtime, routing, thresholds, catalogs, conversation history, or global settings were changed.
 
-## Focused issues and implementation order
+## Focused issues and disposition
 
-1. [SAY-3359](https://linear.app/sayvant/issue/SAY-3359): reproducible content-free rollout audit. Implemented here.
-2. [SAY-3360](https://linear.app/sayvant/issue/SAY-3360): content-free request composition measurements, correlated to usage, before attempting to reduce the unexplained difference. Preserve body bytes and routing. Test text, tools, images, references, cumulative and cached usage, and diagnostic redaction.
-3. [SAY-3361](https://linear.app/sayvant/issue/SAY-3361): atomically reconcile changed catalog sources while preserving manual capability overrides and route bindings. Test drift, interrupted writes, unchanged captures, and manual restrictions.
-4. [SAY-3362](https://linear.app/sayvant/issue/SAY-3362): distinguish task-observed context from published defaults, advertised maxima, and unknown desktop adoption. Test model switches, stale observations and absent evidence.
-5. [SAY-3363](https://linear.app/sayvant/issue/SAY-3363): verify deployment capacity before offering explicit larger context. Test opt-in selection, rejected capacity, fallback and unchanged unrelated tasks.
-6. [SAY-3364](https://linear.app/sayvant/issue/SAY-3364): optional isolated Chat Completions compatibility pilot. Verify streaming tools, reasoning, usage, cancellation and partial failures. This is not a compaction fix.
+1. [SAY-3359](https://linear.app/sayvant/issue/SAY-3359): implemented the reproducible content-free rollout audit.
+2. [SAY-3360](https://linear.app/sayvant/issue/SAY-3360): attributed the dominant difference to a fixed cached prefix and added opt-in gateway composition metrics. No request component was removed because the evidence does not show redundant content.
+3. [SAY-3361](https://linear.app/sayvant/issue/SAY-3361): implemented single-snapshot validation, source-race refusal, atomic publication through the existing private writer and exclusion of merged catalog metadata from gateway route-binding revisions. Manual limits and hidden routes remain intact.
+4. [SAY-3362](https://linear.app/sayvant/issue/SAY-3362): implemented separate task, published, native and current-client evidence with explicit unknown, stale, mismatch and model-change states.
+5. [SAY-3363](https://linear.app/sayvant/issue/SAY-3363): implemented the verification gate and confirmed there is no evidence to enable a larger option yet. Harbor leaves it unavailable until a bounded synthetic payload passes against the exact deployment.
+6. [SAY-3364](https://linear.app/sayvant/issue/SAY-3364): implemented and tested the isolated compatibility pilot. It remains intentionally unwired because no Chat-Completions-only production provider was identified.
 
 Each Linear issue contains its implementation map, acceptance criteria, risks and required tests. Instrumentation precedes any pressure-reduction change. Catalog and compatibility work must not silently change active task bindings or retry uncertain provider work.
 
@@ -58,10 +63,9 @@ Each Linear issue contains its implementation map, acceptance criteria, risks an
 
 - Seven initial regression tests failed because the CLI did not exist, then passed with the implementation.
 - An added model-switch regression exposed loss of a pending request's estimate. The implementation now captures estimates with each pending request.
-- Fourteen focused tests pass, including unchanged source hash and private sentinels absent from output.
-- Swift suite: 104 tests passed.
+- The audit, request-metrics, capacity and compatibility focused suites pass, including unchanged source hash and private sentinels absent from output.
 - Real rollout audit at one checkpoint: 43 compactions, no malformed records. The task was still appending; totals are not a permanent task-wide count.
-- Full Python suite: 444 tests passed in 125.820 seconds, including all 14 audit tests.
+- Final full-suite counts are recorded in the decision trail after this integrated patch.
 
 ## Execution checklist
 
@@ -69,7 +73,7 @@ Each Linear issue contains its implementation map, acceptance criteria, risks an
 - [x] Create six focused Linear issues with dependencies.
 - [x] Implement and test the read-only audit in an isolated worktree.
 - [x] Reproduce the short-loop and corrected-window patterns without publishing task content.
-- [ ] Attribute the unexplained request difference with nonmutating measurements.
-- [ ] Reconcile catalogs and report observed versus advertised context separately.
-- [ ] Verify larger-context capacity before offering it explicitly.
-- [ ] Evaluate the optional compatibility adapter in isolation.
+- [x] Attribute the request difference with cached-input evidence and nonmutating measurements.
+- [x] Reconcile catalogs and report observed versus advertised context separately.
+- [x] Add a fail-closed larger-context verification gate; keep the option unavailable because capacity is unverified.
+- [x] Evaluate the optional compatibility adapter in isolation; keep it out of production routing.

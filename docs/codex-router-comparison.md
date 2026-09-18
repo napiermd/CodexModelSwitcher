@@ -33,6 +33,6 @@ Prioritize capability provenance/freshness, loaded-catalog diagnostics, bounded 
 
 The task initially ran from `fix/openrouter-parameters` at `cedc468`, while the installed app uses the later independent gateway. The final candidate is based on `b72ad38` in branch `codex/context-stream-fix`, preserving those newer changes. The original checkout retains the equivalent source repair.
 
-A signed candidate is staged under `build/staged-updates/context-stream-20260918/`. Staging does not activate its backend. Follow `docs/safe-updates.md` for coordinated activation and provider verification. Corrected on-disk catalogs do not establish an in-memory desktop reload.
+A signed candidate is staged under `build/staged-updates/context-stream-20260918/`. The backend and matching signed interface were subsequently activated through authorized coordinated maintenance; Azure and OpenRouter passed live verification. See `verification/context-stream-repair.md`. Corrected on-disk catalogs do not establish an in-memory desktop reload.
 
 Verification completed: 103 Swift tests and 421 Python tests passed on the integrated source. The signed Xcode build and strict signature verification passed. A separate real-loopback Azure EOF regression was added afterward to verify terminal failure and retention of uncertain delivery. All 12 Azure deadline/EOF tests passed, including the new EOF regression.

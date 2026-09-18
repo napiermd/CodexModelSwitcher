@@ -76,6 +76,8 @@ If Codex reports **"The 'harbor/...' model is not supported when using Codex wit
 
 Model changes in an existing native task do not update its saved provider. Repeatedly selecting models or signing in again will not repair it.
 
+The same mismatch can appear as **"Error running remote compact task"** after a context-compaction marker. Codex chooses its compaction protocol from the task's saved provider, so an `openai` task sends its `harbor/...` model name to OpenAI. Repairing the provider makes Codex summarize through Harbor's Responses route with the selected model. The marker alone does not mean compaction succeeded. This routing rejection is separate from a provider rejecting a stale `tool_choice` on a tool-free summary request; Harbor also strips that stale choice.
+
 Enable **Repair inactive task routes automatically** under **Settings → Advanced**. Harbor checks saved routes every ten seconds. It repairs only tasks saved under `openai` whose selected model is in your installed Harbor catalog. It preserves the task ID, selected model, title, and conversation. The setting survives Harbor restarts.
 
 A loaded task holds Codex's writer lock, even between turns. Harbor waits for that lock rather than modifying a live task. To release an affected task sooner:
@@ -99,6 +101,14 @@ Repair an unloaded task using Codex's own per-task writer lock:
 ```sh
 python3 scripts/repair-task-provider.py TASK_ID --apply --unloaded
 ```
+
+To repair all eligible inactive tasks while leaving loaded tasks alone:
+
+```sh
+python3 scripts/repair-task-provider.py --all --apply --unloaded
+```
+
+Batch preview and repair report each task separately. A loaded or invalid task does not prevent other eligible tasks from being checked or repaired. Exit status `0` means the requested checks or repairs completed, `2` means tasks are waiting for their writer locks, and `1` means at least one task needs review. Error status takes precedence over waiting. Rerun after unloading waiting tasks; already repaired tasks no longer appear as candidates. Inconsistent metadata stays untouched.
 
 For versions without that lock namespace, quit every Codex/ChatGPT and Codex CLI process, then use the offline fallback:
 

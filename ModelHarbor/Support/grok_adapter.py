@@ -1033,6 +1033,9 @@ class Translation:
         self.response_status = None
         self.usage = None
         self.request = copy.deepcopy(source)
+        # Codex can retain a forced tool choice when it creates a tool-free
+        # compaction request. Every Responses provider rejects that pair, so
+        # keep the request internally consistent at the routing boundary.
         if not source.get('tools'):
             self.request.pop('tool_choice', None)
         if native_tools:

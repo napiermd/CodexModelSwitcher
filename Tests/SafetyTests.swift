@@ -33,6 +33,57 @@ final class SafetyTests: XCTestCase {
         XCTAssertNotEqual(origins.first?["sha256"] as? String, changedOrigins.first?["sha256"] as? String)
     }
 
+    func testCatalogCandidateUsesOneSnapshotAndDetectsSourceRace() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("provider.json")
+        let original = Data(#"{"models":[{"slug":"test-model","context_window":200000,"max_context_window":300000}]}"#.utf8)
+        try original.write(to: source)
+        var provider = service("codex-subscription")
+        provider.catalogPath = source.path
+        let candidate = try LiveRouting.catalogCandidate(in: AppData(services: [provider], selectedModel: nil))
+        XCTAssertEqual(candidate.inputs[source], original)
+        XCTAssertTrue(candidate.inputsAreUnchanged())
+        try Data(#"{"models":[]}"#.utf8).write(to: source)
+        XCTAssertFalse(candidate.inputsAreUnchanged())
+    }
+
+    func testCatalogRejectsInvalidLimitsWithoutPublishingFallback() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for model in [
+            ["slug": "test-model", "context_window": 400000, "max_context_window": 200000],
+            ["slug": "test-model", "context_window": "private-invalid", "max_context_window": 200000]
+        ] {
+            let source = directory.appendingPathComponent(UUID().uuidString)
+            try JSONSerialization.data(withJSONObject: ["models": [model]]).write(to: source)
+            var provider = service("codex-subscription")
+            provider.catalogPath = source.path
+            XCTAssertThrowsError(try LiveRouting.catalog(in: AppData(services: [provider], selectedModel: nil)))
+        }
+    }
+
+    func testManualAzureCatalogDoesNotRequireNativeCapture() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("azure.json")
+        try JSONSerialization.data(withJSONObject: ["models": [["slug": "test-model",
+            "context_window": 128000, "max_context_window": 128000,
+            "harbor_context_mode": "manual"]]]).write(to: source)
+        var provider = service("azure")
+        provider.models = [CodexModel(id: "test-model", name: "Test")]
+        provider.catalogPath = source.path
+        let candidate = try LiveRouting.catalogCandidate(in: AppData(services: [provider], selectedModel: nil))
+        XCTAssertEqual(Set(candidate.inputs.keys), [source])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: candidate.data) as? [String: Any])
+        let entry = try XCTUnwrap((object["models"] as? [[String: Any]])?.first)
+        XCTAssertEqual(entry["harbor_context_mode"] as? String, "manual")
+        XCTAssertEqual(entry["context_window"] as? Int, 128000)
+    }
+
     func testBasetenTeamCatalogPreservesSelectionAndCustomModels() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

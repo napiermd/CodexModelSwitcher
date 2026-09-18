@@ -7,6 +7,15 @@ enum LiveRouting {
     static let modelID = "harbor-selected" // Hidden compatibility entry for existing tasks.
     static let catalogURL = AppPaths.codexDirectory.appendingPathComponent("model-catalogs/model-harbor.json")
 
+    struct CatalogCandidate {
+        let data: Data
+        let inputs: [URL: Data]
+
+        func inputsAreUnchanged(read: (URL) throws -> Data = { try Data(contentsOf: $0) }) -> Bool {
+            inputs.allSatisfy { url, captured in (try? read(url)) == captured }
+        }
+    }
+
     static func supports(_ serviceID: String) -> Bool {
         ["grok-oauth", "baseten", "codex-subscription", "openrouter", "azure"].contains(serviceID)
     }
@@ -48,21 +57,51 @@ enum LiveRouting {
     }
 
     static func catalog(in data: AppData) throws -> Data {
+        try catalogCandidate(in: data).data
+    }
+
+    static func catalogCandidate(in data: AppData,
+                                 read: (URL) throws -> Data = { try Data(contentsOf: $0) }) throws -> CatalogCandidate {
         var entries: [[String: Any]] = []
         var provenance: [[String: Any]] = []
+        var inputs: [URL: Data] = [:]
+        var sources: [String: [[String: Any]]] = [:]
         for service in data.pickerServices {
-            let source: [[String: Any]]
-            if let path = service.catalogPath,
-               let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)),
-               let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-               let models = object["models"] as? [[String: Any]] {
-                source = models
-                var origin: [String: Any] = ["provider": service.id, "path": path,
-                    "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()]
-                origin["client_version"] = object["client_version"]
-                origin["fetched_at"] = object["fetched_at"]
-                provenance.append(origin)
-            } else { source = [] }
+            guard let path = service.catalogPath else { continue }
+            let url = URL(fileURLWithPath: path)
+            let bytes = try read(url)
+            guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  let models = object["models"] as? [[String: Any]] else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            inputs[url] = bytes
+            sources[service.id] = models
+            var origin: [String: Any] = ["provider": service.id, "path": path,
+                "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()]
+            origin["client_version"] = object["client_version"]
+            origin["fetched_at"] = object["fetched_at"]
+            provenance.append(origin)
+        }
+        let azureSources = sources["azure"] ?? []
+        let azureNeedsNative = data.pickerServices.first(where: { $0.id == "azure" })?.models.contains { model in
+            guard let entry = azureSources.first(where: { $0["slug"] as? String == model.id }) else { return true }
+            let mode = entry["harbor_context_mode"] as? String
+            return mode == "automatic" || (mode == nil && entry["context_window"] as? Int == 128000
+                && entry["max_context_window"] as? Int == 128000)
+        } ?? false
+        var nativeMetadata: Data?
+        if azureNeedsNative {
+            let url = AppPaths.codexDirectory.appendingPathComponent("models_cache.json")
+            let bytes = try read(url)
+            guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  object["models"] is [[String: Any]] else { throw CocoaError(.fileReadCorruptFile) }
+            nativeMetadata = bytes
+            inputs[url] = bytes
+            provenance.append(["provider": "azure_native_context", "path": url.path,
+                "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()])
+        }
+        for service in data.pickerServices {
+            let source = sources[service.id] ?? []
             for model in service.models {
                 var entry = source.first { $0["slug"] as? String == model.id } ?? [
                     "base_instructions": "You are a coding assistant. Follow the user instructions, use the available tools, and verify results.",
@@ -77,7 +116,10 @@ enum LiveRouting {
                 if entry["harbor_context_source"] as? String == "fallback" {
                     entry["harbor_context_warning"] = "Unverified 128,000-token fallback. Verify the provider capacity."
                 }
-                if service.id == "azure" { entry = AzureDeployment.resolvingContext(in: entry) }
+                if service.id == "azure", let nativeMetadata {
+                    entry = AzureDeployment.resolvingContext(in: entry, readNativeMetadata: { nativeMetadata })
+                }
+                entry = try normalizedContext(in: entry)
                 let routeID = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
                 entry["slug"] = routeID
                 if service.id == "azure" { entry["auto_review_model_override"] = routeID }
@@ -98,12 +140,30 @@ enum LiveRouting {
             entry["visibility"] = "hide"
             entries.append(entry)
         }
-        if data.pickerServices.contains(where: { $0.id == "azure" }),
-           let native = try? AzureDeployment.readNativeMetadata() {
-            provenance.append(["provider": "azure_native_context", "path": AppPaths.codexDirectory.appendingPathComponent("models_cache.json").path,
-                "sha256": SHA256.hash(data: native).map { String(format: "%02x", $0) }.joined()])
+        let result = try JSONSerialization.data(withJSONObject: ["models": entries, "harbor_sources": provenance], options: [.prettyPrinted, .sortedKeys])
+        return CatalogCandidate(data: result, inputs: inputs)
+    }
+
+    private static func normalizedContext(in original: [String: Any]) throws -> [String: Any] {
+        var entry = original
+        let defaultWindow = entry["context_window"]
+        let maximumWindow = entry["max_context_window"]
+        if defaultWindow == nil && maximumWindow == nil {
+            entry["context_window"] = 128000
+            entry["max_context_window"] = 128000
+            entry["harbor_context_warning"] = "Unverified 128,000-token fallback. Verify the provider capacity."
+            return entry
         }
-        return try JSONSerialization.data(withJSONObject: ["models": entries, "harbor_sources": provenance], options: [.prettyPrinted, .sortedKeys])
+        guard (defaultWindow == nil || defaultWindow is Int), (maximumWindow == nil || maximumWindow is Int) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let defaultValue = defaultWindow as? Int ?? maximumWindow as! Int
+        let maximumValue = maximumWindow as? Int ?? defaultValue
+        guard (4096...1_048_576).contains(defaultValue), (4096...1_048_576).contains(maximumValue),
+              defaultValue <= maximumValue else { throw CocoaError(.fileReadCorruptFile) }
+        entry["context_window"] = defaultValue
+        entry["max_context_window"] = maximumValue
+        return entry
     }
 
     static func service(in data: AppData) -> CodexService {

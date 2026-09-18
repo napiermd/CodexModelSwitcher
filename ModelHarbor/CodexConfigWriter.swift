@@ -14,9 +14,13 @@ struct CodexConfigWriter {
 
     func updateCatalog(in data: AppData) throws {
         try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let catalog = try LiveRouting.catalog(in: data)
-        if (try? Data(contentsOf: LiveRouting.catalogURL)) != catalog {
-            try privateWrite(catalog, to: LiveRouting.catalogURL)
+        let candidate = try LiveRouting.catalogCandidate(in: data)
+        if (try? Data(contentsOf: LiveRouting.catalogURL)) != candidate.data {
+            guard candidate.inputsAreUnchanged() else {
+                throw NSError(domain: "ModelHarbor.Catalog", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "A model catalog changed while Harbor was reconciling it. Try again."])
+            }
+            try privateWrite(candidate.data, to: LiveRouting.catalogURL)
         }
     }
 

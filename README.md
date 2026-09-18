@@ -99,6 +99,7 @@ The app is SwiftUI. The local Responses bridge is Python with no Python package 
 - [Architecture](docs/architecture.md): request destinations, credential boundaries, and source files.
 - [Safe updates](docs/safe-updates.md): stage a verified build while preserving the running gateway; [audit and implementation plan](docs/update-safety-audit.md).
 - [Independent runtime](docs/runtime-service.md): ownership, credential handoff, and migration limits; [desktop lifecycle evidence](docs/desktop-lifecycle-evidence.md).
+- [Azure history verification](docs/verification/azure-history.md): reasoning preservation, tool continuity, and the remaining real-provider check.
 - [Azure request policy](docs/azure-request-policy.md): total deadlines, cancellation, no automatic replay, and verified caller retry settings.
 - [Bifrost evaluation](docs/bifrost-evaluation.md): isolated pilot and adoption gates.
 - [Customization](docs/customization.md): model catalogs, providers, interface, and build configuration.

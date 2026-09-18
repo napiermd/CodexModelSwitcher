@@ -1,6 +1,6 @@
 # Protect tasks during Harbor updates
 
-Status: stage-only release tooling and a verified independent-runtime candidate are available. The candidate is not installed. Automatic promotion, retirement, and rollback remain disabled until actual desktop lifecycle integration is verified.
+Status: the signed independent gateway was installed on September 17, 2026 after an explicit request for immediate installation. Azure GPT-5.6 Sol passed a live verification request. Automatic promotion, retirement, and rollback remain disabled until actual desktop lifecycle integration is verified. The installation was a maintenance restart; it does not establish interruption-free gateway replacement.
 
 See the [audit, file map, Linear issues, and execution checklist](update-safety-audit.md).
 
@@ -10,7 +10,7 @@ The September 17, 2026 update used an ad hoc installer that checked the bridge's
 
 The installer also accepted the presence of the `azure_ready` status field without requiring its value to be true. A replacement process could therefore be announced as running before its Azure credentials were configured.
 
-The shared bridge is a child of the menu app (`GrokAdapter.swift`). Its parent watcher shuts the HTTP server down when the app exits (`Support/grok_adapter.py`). Restarting the app affects every task routed through that bridge. The Azure request-format regression fix and its successful synthetic probe did not establish that the installation was safe for concurrent tasks.
+At the time of that update, the shared bridge was a child of the menu app (`GrokAdapter.swift`). Its parent watcher shut the HTTP server down when the app exited (`Support/grok_adapter.py`). Restarting the app therefore affected every task routed through that bridge. The Azure request-format regression fix and its successful synthetic probe did not establish that the installation was safe for concurrent tasks.
 
 ## Current update procedure
 

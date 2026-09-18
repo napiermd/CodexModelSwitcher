@@ -20,7 +20,7 @@ A signed candidate runs from its own retained runtime directory. Exiting or repl
 
 ## Throughput checkpoint
 
-The installed gateway is shared infrastructure. Its availability is the limiting constraint. Development uses separate ports and state. Architecture comparisons run in parallel with lifecycle research. Implementation can then separate runtime ownership, adapter readiness, and the Bifrost pilot by file ownership. Checks exercise the production entrypoint before app packaging. No task database, live route, or installed process is modified by this run.
+The installed gateway is shared infrastructure. Its availability is the limiting constraint. Development uses separate ports and state. Architecture comparisons run in parallel with lifecycle research. Implementation can then separate runtime ownership, adapter readiness, and the Bifrost pilot by file ownership. Checks exercise the production entrypoint before app packaging. Development preserves task databases and live routes. The first installed migration later occurred under explicit user authorization, with a rollback artifact and live Azure verification.
 
 ## Initial data shapes
 
@@ -48,7 +48,7 @@ Selected the retained service as the first unit, with durable ownership and veri
 - [ ] Establish authoritative completion events for existing desktop tasks (SAY-3341).
 - [ ] Implement and verify promotion/draining/rollback against that lifecycle feed (SAY-3343); complete the dependent matrix (SAY-3342).
 - [ ] Complete real Azure continuation and matched performance checks, local deployment-environment verification, bounded queue/pacing, cost provenance, and layered retry/affinity evaluation (SAY-3344–SAY-3346).
-- [ ] Coordinate the first installed migration after affected tasks are paused or finished.
+- [x] Perform the first installed migration after explicit user authorization for immediate installation; verify the signed artifact, retained runtime, and live Azure route. This was a maintenance restart, not a tested rolling handoff.
 
 This checkpoint records completed work without marking the original completion predicate achieved.
 
@@ -62,3 +62,13 @@ This checkpoint records completed work without marking the original completion p
 - [x] Generate zero caller retries and verify one attempt in fresh isolated CLI 0.150.1 runs for 429, 503, and interrupted output.
 - [ ] Verify effective retry settings/reload in the actual desktop and the composed Harbor/Bifrost route.
 - [ ] Complete the unchanged desktop lifecycle and first-install gates above.
+
+## Direct Azure history follow-through
+
+- [x] Reproduce reasoning deletion and unintended output-metadata rewriting.
+- [x] Preserve opaque Azure history while retaining the existing public tool-ID compatibility fix.
+- [x] Verify ordered JSON/SSE tool continuation and one-attempt invalid-history rejection through the actual handler.
+- [x] Build, review, and stage the signed candidate; 335 Python tests and ten packaged lifecycle tests pass.
+- [ ] Run the bounded real Azure continuation experiment. Credential acquisition timed out before dispatch; the installed gateway remains unchanged.
+
+See [Azure history evidence and limits](azure-history.md).

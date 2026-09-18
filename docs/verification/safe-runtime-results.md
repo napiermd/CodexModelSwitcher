@@ -1,6 +1,6 @@
 # Independent runtime verification
 
-September 17, 2026. Scope: the staged source change for SAY-3339–SAY-3342. This is not an installed migration or proof of rolling desktop updates.
+September 17, 2026. This file records successive source, packaging, and installation checkpoints for SAY-3339–SAY-3342. The first checkpoints are historical stage-only results. The installation record below supersedes their installation status without claiming rolling desktop updates.
 
 ## Executed checks
 
@@ -97,3 +97,22 @@ A final independent review also found that probe `read1()` could accept a comple
 Final local rerun after the readiness fix: **327 Python tests passed in 63.389 seconds**, with all warnings treated as errors. The unchanged Swift changes passed 73 tests. The rebuilt signed candidate passed all ten packaged lifecycle tests in 12.574 seconds, plus site and JavaScript checks. Independent review passed 28 focused tests before the last probe-framing regression and confirmed the preceding error-budget findings closed.
 
 The new signed stage is `build/staged-updates/independent-gateway-deadline-review-20260917`. Its manifest observed clean checkout `a8f4c320547b77282796ad0294fbd3bda01fbb58` and records `installed=false`, `provider_verified=false`, `live_handoff_verified=false`, and `artifact_source_binding=unverified`. Bundle inventory SHA-256: `0c9df9443eacffb1daae10a127f3031c7d1fc7b07d5a06aa91de8decc0ee60e2`. All six staged gateway `.py` modules match the current source bytes. This comparison does not establish whole-artifact source provenance or live installation.
+
+
+## Authorized installation and live Azure verification
+
+On September 17, 2026, Andrew explicitly requested immediate installation after the shared-gateway restart had been identified as the remaining installation step. The installer verified the staged signature and complete inventory, backed up the installed signed app and private settings, prepared a verified incoming copy, stopped the previous menu app and its child gateway, and replaced `/Applications/Model Harbor.app`.
+
+The installed bundle matches stage `independent-gateway-deadline-review-20260917` exactly. The independent gateway is registered with the per-user service manager. Its retained runtime matches the installed resource inventory, with runtime ID `5da659334bfd7bbd5af5456e9dd7761ea7b9c94f7e9310d447506900c42b3ad5`. Authenticated runtime status reported independent mode. Saved Azure and OpenRouter credentials restored without copying them into this record.
+
+A live verification request for `harbor/azure/gpt-5.6-sol` completed in 2.11 seconds, and `providers.azure_ready` was true. The installed UI reported Azure Connected and Ready for the next request. This verifies that route at that time; it does not verify resumed reasoning history, all deployments, or OpenRouter inference. Saved Codex configuration has both request and stream retries set to zero. Reload by every already-running desktop task is unverified. Codex was not restarted.
+
+The local installation and rollback record is `~/Library/Application Support/Model Harbor/updates/20260917-170043/installation.json`. Installation and provider verification are true; interruption-free handoff remains false. The original stage manifest is unchanged. The prior application and settings remain available for rollback.
+
+Both final-head CI workflows passed at `85040f670909d03a55683c9927e01bed6a78ca74`: Checks run 35288496279 and Bifrost native run 35288496251. This deployment does not close the remaining desktop completion, promotion/rollback, composed Bifrost, or reasoning-history requirements.
+
+## Direct Azure reasoning-history candidate
+
+The isolated source reproduction dropped one reasoning item from a two-item request. Eight new tests now cover opaque input/output preservation, tool continuity, and explicit one-attempt rejection. All 335 Python tests pass with warnings treated as errors. The signed build and ten packaged lifecycle tests pass. The candidate is staged as `azure-history-preservation-20260917` and has not replaced the installed runtime.
+
+The bounded real-provider verifier is implemented, but its credential preflight timed out before sending an Azure request. Real continuation remains unverified. See [the history report](azure-history.md) for the exact scope and remaining gates.

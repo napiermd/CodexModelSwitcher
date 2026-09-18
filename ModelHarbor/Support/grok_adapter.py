@@ -222,6 +222,11 @@ def azure_request(source):
     source.pop('service_tier', None)
     if isinstance(source.get('reasoning'), dict) and source['reasoning'].get('effort') == 'none':
         source.pop('reasoning', None)
+    include = source.setdefault('include', [])
+    if not isinstance(include, list) or not all(isinstance(item, str) for item in include):
+        raise ValueError('Azure Responses include must be a list of strings.')
+    if 'reasoning.encrypted_content' not in include:
+        include.append('reasoning.encrypted_content')
     source['input'] = baseten_tool_images(source.get('input', []))
     return source
 
@@ -498,7 +503,9 @@ def routed_request(source, headers):
     else:
         upstream_headers = oauth_headers()
         base = OAUTH_BASE
-    return Translation(source, native_tools=route['provider'] == 'codex-subscription'), upstream_headers, base, route
+    translation = (AzureTranslation(source) if route['provider'] == 'azure' else
+                   Translation(source, native_tools=route['provider'] == 'codex-subscription'))
+    return translation, upstream_headers, base, route
 
 
 def baseten_tool_images(items):
@@ -870,12 +877,14 @@ class Translation:
             result.append(tool)
         return result
 
+    def history_items(self, source):
+        # xAI cannot decode Codex reasoning. Azure overrides this compatibility policy.
+        return [copy.deepcopy(item) for item in source if item.get('type') != 'reasoning']
+
     def input_items(self, source):
         if isinstance(source, str):
             return source
-        # Codex replays opaque reasoning blobs in a format xAI cannot decode.
-        # Conversation text, function calls, and tool results remain in the history.
-        result = [copy.deepcopy(item) for item in source if item.get('type') != 'reasoning']
+        result = self.history_items(source)
         for item in result:
             # Inline history is portable; provider-owned item IDs are not. Keep call_id links.
             if item.get('type', 'message') in ('message', 'function_call', 'custom_tool_call',
@@ -911,10 +920,34 @@ class Translation:
 
     def output(self, obj):
         if isinstance(obj, list):
-            return [self.output(x) for x in obj]
+            return [self.output_item(item) for item in obj]
         if not isinstance(obj, dict):
             return obj
-        result = {key: self.output(value) for key, value in obj.items()}
+        result = copy.deepcopy(obj)
+        kind = result.get('type', '')
+        if kind in ('response.output_item.added', 'response.output_item.done'):
+            if isinstance(result.get('item'), dict):
+                result['item'] = self.output_item(result['item'])
+        elif kind in ('response.created', 'response.in_progress', 'response.completed',
+                      'response.failed', 'response.incomplete'):
+            if isinstance(result.get('response'), dict):
+                result['response'] = self.output_response(result['response'])
+        elif result.get('object') == 'response' or (not kind and 'output' in result):
+            result = self.output_response(result)
+        elif kind == 'function_call':
+            result = self.output_item(result)
+        return result
+
+    def output_response(self, response):
+        result = copy.deepcopy(response)
+        if isinstance(result.get('output'), list):
+            result['output'] = [self.output_item(item) for item in result['output']]
+        return result
+
+    def output_item(self, item):
+        if not isinstance(item, dict):
+            return item
+        result = copy.deepcopy(item)
         if result.get('type') == 'function_call' and result.get('name') in self.groups:
             namespace, children = self.groups[result['name']]
             call = json.loads(result.get('arguments') or '{}')
@@ -947,15 +980,24 @@ class Translation:
             self.response_status = event.get('response', {}).get('status') or event['type'].split('.')[-1]
             self.usage = event.get('response', {}).get('usage')
         item = event.get('item', {})
-        if event.get('type') == 'response.output_item.added' and item.get('name') in self.groups:
+        if (event.get('type') == 'response.output_item.added' and
+                item.get('type') == 'function_call' and item.get('name') in self.groups):
             self.pending.add(item.get('id'))
             return b''
         if event.get('type', '').startswith('response.function_call_arguments.') and event.get('item_id') in self.pending:
             return b''
         obj = self.output(event)
+        if obj == event:
+            return block + b'\n\n'
         retained = [line for line in lines if not line.startswith('data:')]
         retained.append('data: ' + json.dumps(obj, separators=(',', ':')))
         return ('\n'.join(retained) + '\n\n').encode()
+
+
+class AzureTranslation(Translation):
+    def history_items(self, source):
+        # Ciphertext origin is unknown locally. Azure validates it; never repair a rejection by dropping history.
+        return copy.deepcopy(source)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

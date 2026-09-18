@@ -26,6 +26,7 @@ final class AppStore: ObservableObject {
     @Published var lastRequestedModel = ""
     @Published var azureReady = false
     @Published var providerCredentialsAvailable: [String: Bool] = [:]
+    @Published var apiConnections: [String: APIConnectionPresentation] = [:]
     @Published var connectingAzure = false
     @Published var openRouterReady = false
     @Published var connectingOpenRouter = false
@@ -72,6 +73,7 @@ final class AppStore: ObservableObject {
                     statusMessage = "The existing gateway is still serving tasks. Its runtime update requires coordinated maintenance."
                 }
                 await refreshConnectionStatus()
+                if mode != .bootstrapped { await checkGrokSignIn() }
                 if mode == .bootstrapped {
                     WarmUpController.shared.start(
                         isBusy: { [weak self] in
@@ -259,10 +261,17 @@ final class AppStore: ObservableObject {
         basetenState = (value["baseten_auth"] as? [String: Any])?["state"] as? String ?? "not_loaded"
         if let providers = value["providers"] as? [String: Any] {
             providerCredentialsAvailable = providers["credentials_available"] as? [String: Bool] ?? [:]
+            for id in ["azure", "openrouter"] {
+                apiConnections[id] = APIConnectionPresentation(
+                    credentialsAvailable: providerCredentialsAvailable[id] == true,
+                    proofs: providers["route_verification"] as? [[String: Any]] ?? [], provider: id,
+                    revision: value["configuration_revision"] as? String ?? "",
+                    bootID: bootID ?? "")
+            }
             openRouterReady = providers["openrouter_ready"] as? Bool ?? false
             azureReady = providers["azure_ready"] as? Bool ?? false
             providerActivity = (providers["activity"] as? [String: [String: Any]] ?? [:]).mapValues(ProviderActivity.init)
-            if !grokIsSignedIn {
+            if !grokIsSignedIn && grokAccount == "Sign-in not checked" {
                 grokAccount = providerActivity["grok-oauth"]?.verifiedConnection == true ? "Verified request activity" : "Sign-in not checked"
             }
         }
@@ -323,6 +332,20 @@ final class AppStore: ObservableObject {
             try save(candidate)
             return true
         } catch { grokIsSignedIn = false; grokAccount = "Sign in to load your models"; return false }
+    }
+
+    private func checkGrokSignIn() async {
+        grokAccount = "Checking sign-in…"
+        do {
+            let bytes = try await grokAdapter.accountStatus()
+            guard let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  value["models"] is [[String: Any]] else { throw AppError.missingModel }
+            grokAccount = value["email"] as? String ?? "Signed in"
+            grokIsSignedIn = true
+        } catch {
+            grokIsSignedIn = false
+            grokAccount = "Sign-in check failed. Check connection or sign in again."
+        }
     }
 
     func load(persist: Bool = true) {
@@ -614,8 +637,9 @@ final class AppStore: ObservableObject {
 
     func providerConnectionLabel(_ id: String) -> String {
         if proxyStatus != .active { return "Offline" }
+        if let connection = apiConnections[id] { return connection.label }
         if providerConnected(id) { return "Connected" }
-        if providerCredentialsAvailable[id] == true { return "Configured · verification needed" }
+        if providerCredentialsAvailable[id] == true { return "Configured" }
         if id == "codex-subscription" && codexConfigured { return "Configured" }
         if id == "grok-oauth" && grokAccount == "Sign-in not checked" { return "Sign-in not checked" }
         return "Not connected"
@@ -626,8 +650,7 @@ final class AppStore: ObservableObject {
         switch id {
         case "baseten": return basetenState == "ready"
         case "grok-oauth": return grokIsSignedIn || providerActivity[id]?.verifiedConnection == true
-        case "openrouter": return openRouterReady
-        case "azure": return azureReady
+        case "openrouter", "azure": return apiConnections[id]?.connected == true
         case "codex-subscription": return providerActivity[id]?.verifiedConnection ?? false
         default: return false
         }

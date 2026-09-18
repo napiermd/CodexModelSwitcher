@@ -207,6 +207,7 @@ struct ContentView: View {
             return connected ? "Direct API · Credential ready" : (store.basetenState == "needs_reconnect" ? "Direct API · Reconnect required" : "Direct API · Unlock once for this session")
         }
         if focusedProvider == "grok-oauth" && store.grokIsSignedIn { return "Browser sign-in · \(store.grokAccount)" }
+        if focusedProvider == "grok-oauth" { return "Grok browser sign-in · \(store.grokAccount)" }
         if focusedProvider == "azure" { return connected ? "Azure OpenAI · Key saved in Keychain" : "Your Azure resource and deployments" }
         if focusedProvider == "openrouter" { return connected ? "API key · Saved in Keychain" : "One connection, multiple model providers" }
         return "Uses the account signed in to Codex"
@@ -226,7 +227,7 @@ struct ContentView: View {
                 } else if connected {
                     Text("Ready for the next request").font(.caption).foregroundStyle(.secondary)
                 } else if configured && store.proxyStatus == .active {
-                    Text("Credentials available · connection check needed").font(.caption).foregroundStyle(.secondary)
+                    Text("Credentials loaded. Verify a model under Manage connection.").font(.caption).foregroundStyle(.secondary)
                 } else if focusedProvider == "grok-oauth" && store.grokAccount == "Sign-in not checked" && store.proxyStatus == .active {
                     Text("Sign-in status has not been checked in this session").font(.caption).foregroundStyle(.secondary)
                 } else {

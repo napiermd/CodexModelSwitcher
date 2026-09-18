@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @MainActor
 final class GrokAdapter {
@@ -6,13 +7,19 @@ final class GrokAdapter {
     private var candidateRuntimeID: String?
     private let serviceRequest: () async throws -> Data
     private let statusRequest: () async throws -> Data
+    private let controlRequest: (String, String, Data, GatewayIdentity?) async throws -> Data
     private(set) var preservesExistingGateway = false
     private(set) var requiresMaintenanceForRuntimeUpdate = false
 
     init(serviceRequest: (() async throws -> Data)? = nil,
-         statusRequest: (() async throws -> Data)? = nil) {
+         statusRequest: (() async throws -> Data)? = nil,
+         controlRequest: ((String, String, Data, GatewayIdentity?) async throws -> Data)? = nil) {
         self.serviceRequest = serviceRequest ?? Self.prepareService
-        self.statusRequest = statusRequest ?? { try await Self.ownerControl("GET", path: "/harbor/status") }
+        let control = controlRequest ?? { method, path, body, expected in
+            try await Self.ownerControl(method, path: path, body: body, expectedRuntime: expected)
+        }
+        self.controlRequest = control
+        self.statusRequest = statusRequest ?? { try await control("GET", "/harbor/status", Data(), nil) }
     }
     private static var bridgePort: Int {
         let port = Int(ProcessInfo.processInfo.environment["MODEL_HARBOR_PORT"] ?? "48118") ?? 48118
@@ -95,38 +102,87 @@ final class GrokAdapter {
         servicePrepared = false
     }
 
-    static func ownerControl(_ method: String, path: String, body: Data = Data()) async throws -> Data {
+    static func ownerControl(_ method: String, path: String, body: Data = Data(),
+                             expectedRuntime: GatewayIdentity? = nil) async throws -> Data {
         guard let script = Bundle.main.url(forResource: "gateway_control", withExtension: "py") else {
             throw ProviderError.message("The authenticated gateway control helper is missing from the app bundle.")
         }
-        let executable = try PythonRuntime.executable()
-        let environment = bridgeEnvironment
-        let input = try JSONSerialization.data(withJSONObject: [
-            "method": method, "path": path, "body_base64": body.base64EncodedString()
-        ])
-        return try await Task.detached {
-            let helper = Process()
-            helper.executableURL = executable
-            helper.arguments = ["-B", "-u", script.path]
-            helper.environment = environment
-            let stdin = Pipe(), stdout = Pipe()
-            helper.standardInput = stdin
-            helper.standardOutput = stdout
-            helper.standardError = FileHandle.nullDevice
-            try helper.run()
-            stdin.fileHandleForWriting.write(input)
-            try stdin.fileHandleForWriting.close()
-            let bytes = stdout.fileHandleForReading.readDataToEndOfFile()
-            helper.waitUntilExit()
-            let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-            guard helper.terminationStatus == 0,
-                  result?["ok"] as? Bool == true,
-                  let encoded = result?["body_base64"] as? String,
-                  let response = Data(base64Encoded: encoded) else {
-                throw ProviderError.message(result?["error"] as? String ?? "Harbor server authentication failed. The listener was left untouched.")
+        var command: [String: Any] = ["method": method, "path": path, "body_base64": body.base64EncodedString()]
+        if let expectedRuntime { command["expected_runtime"] = expectedRuntime.object }
+        let input = try JSONSerialization.data(withJSONObject: command)
+        let timeout: TimeInterval
+        switch path {
+        case "/harbor/usage": timeout = 125
+        case "/oauth/status": timeout = 65
+        case "/harbor/baseten/reconnect": timeout = 75
+        case "/harbor/providers/restore": timeout = 45
+        default: timeout = 20
+        }
+        let result = try await GatewayControlProcess.run(executable: PythonRuntime.executable(),
+            arguments: ["-B", "-u", script.path], environment: bridgeEnvironment, input: input, timeout: timeout)
+        guard result.status == 0,
+              let value = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+              value["ok"] as? Bool == true,
+              let encoded = value["body_base64"] as? String,
+              let response = Data(base64Encoded: encoded) else {
+            let value = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+            throw ProviderError.message(value?["error"] as? String ?? "The gateway did not confirm the control request. No request was replayed.")
+        }
+        if let expectedRuntime {
+            guard let runtime = value["runtime"],
+                  let bytes = try? JSONSerialization.data(withJSONObject: runtime),
+                  let identity = try? JSONDecoder().decode(GatewayIdentity.self, from: bytes),
+                  identity == expectedRuntime else {
+                throw ProviderError.message("The gateway identity changed. The operation was not confirmed.")
             }
-            return response
-        }.value
+        }
+        return response
+    }
+
+    func restoreSavedConnection(service: CodexService, modelID: String,
+                                readCredential: (String) async throws -> String?) async throws -> RestoredGatewayRoute {
+        guard ["azure", "openrouter"].contains(service.id),
+              service.models.contains(where: { $0.id == modelID }), !modelID.isEmpty else {
+            throw ProviderError.message("Choose an existing saved Azure deployment or OpenRouter model.")
+        }
+        let model = LiveRouting.modelID(for: SelectedModel(serviceID: service.id, modelID: modelID))
+        let bytes = try await connectionStatus()
+        let context: GatewayRestoreContext
+        do { context = try JSONDecoder().decode(GatewayRestoreContext.self, from: bytes) }
+        catch { throw ProviderError.message("The gateway did not provide a valid restoration context.") }
+        guard context.routing == "per-task", context.runtime.isIndependent,
+              context.runtime.runtimeID == candidateRuntimeID,
+              GatewayIdentity.isDigest(context.configurationRevision) else {
+            throw ProviderError.message("Gateway update pending or runtime identity unavailable. Finish coordinated maintenance before restoring saved connections.")
+        }
+        try Task.checkCancellation()
+        let endpoint = service.id == "azure" ? try AzureAPI.endpoint(service.baseURL).absoluteString : nil
+        guard let key = try await readCredential("provider:" + service.id), !key.isEmpty else {
+            throw ProviderError.message("No saved key is available for this provider. Use its connection setup to save one.")
+        }
+        try Task.checkCancellation()
+        var connection = ["key": key]
+        if let endpoint { connection["endpoint"] = endpoint }
+        let body = try JSONSerialization.data(withJSONObject: [
+            "expected_runtime": context.runtime.object,
+            "expected_configuration_revision": context.configurationRevision,
+            "connections": [service.id: connection], "required_models": [model]
+        ])
+        do {
+            let response = try await controlRequest("POST", "/harbor/providers/restore", body, context.runtime)
+            try Task.checkCancellation()
+            let receipt = try JSONDecoder().decode(GatewayRestoreReceipt.self, from: response)
+            guard receipt.runtime == context.runtime, GatewayIdentity.isDigest(receipt.configurationRevision),
+                  receipt.restored + receipt.alreadyPresent == [service.id],
+                  receipt.routes.count == 1, receipt.routes[0].model == model,
+                  receipt.routes[0].verified else {
+                throw ProviderError.message("The gateway returned an incomplete restoration receipt.")
+            }
+            return RestoredGatewayRoute(model: model, runtime: receipt.runtime,
+                configurationRevision: receipt.configurationRevision, restored: !receipt.restored.isEmpty)
+        } catch {
+            throw ProviderError.message("The gateway did not confirm restoration and verification. The restoration outcome is unknown; no request was replayed. " + error.localizedDescription)
+        }
     }
 
     func connectionStatus() async throws -> Data {
@@ -187,6 +243,132 @@ final class GrokAdapter {
                 throw NSError(domain: "ModelHarbor", code: 2, userInfo: [NSLocalizedDescriptionKey: "Grok sign-in did not finish. Try signing in again."])
             }
         }.value
+    }
+}
+
+struct GatewayIdentity: Codable, Equatable, Sendable {
+    let protocolVersion: Int
+    let runtimeID: String
+    let bootID: String
+    let mode: String
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version", runtimeID = "runtime_id", bootID = "boot_id", mode
+    }
+    var isIndependent: Bool {
+        protocolVersion == 1 && mode == "independent" && Self.isDigest(runtimeID) && UUID(uuidString: bootID) != nil
+    }
+    static func isDigest(_ value: String) -> Bool {
+        value.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    var object: [String: Any] {
+        ["protocol_version": protocolVersion, "runtime_id": runtimeID, "boot_id": bootID, "mode": mode]
+    }
+}
+
+private struct GatewayRestoreContext: Decodable {
+    let runtime: GatewayIdentity
+    let configurationRevision: String
+    let routing: String
+    enum CodingKeys: String, CodingKey { case runtime, configurationRevision = "configuration_revision", routing }
+}
+
+private struct GatewayRestoreReceipt: Decodable {
+    struct Route: Decodable { let model: String; let verified: Bool }
+    let runtime: GatewayIdentity
+    let configurationRevision: String
+    let restored: [String]
+    let alreadyPresent: [String]
+    let routes: [Route]
+    enum CodingKeys: String, CodingKey {
+        case runtime, configurationRevision = "configuration_revision", restored, alreadyPresent = "already_present", routes
+    }
+}
+
+struct RestoredGatewayRoute {
+    let model: String
+    let runtime: GatewayIdentity
+    let configurationRevision: String
+    let restored: Bool
+}
+
+final class GatewayControlProcess: @unchecked Sendable {
+    struct Result: Sendable { let output: Data; let status: Int32 }
+    private let process = Process()
+    private let inputPipe = Pipe(), outputPipe = Pipe()
+    private let lock = NSLock()
+    private var stopped: String?
+    private var finished = false
+
+    private init(executable: URL, arguments: [String], environment: [String: String]) {
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
+    }
+
+    static func run(executable: URL, arguments: [String], environment: [String: String],
+                    input: Data, timeout: TimeInterval) async throws -> Result {
+        let command = GatewayControlProcess(executable: executable, arguments: arguments, environment: environment)
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            return try await Task.detached { try command.execute(input: input, timeout: timeout) }.value
+        }, onCancel: { command.stop("The gateway control operation was cancelled.") })
+    }
+
+    private func stop(_ reason: String) {
+        lock.lock()
+        guard !finished, stopped == nil else { lock.unlock(); return }
+        stopped = reason
+        let running = process.isRunning
+        if running { process.terminate() }
+        lock.unlock()
+        if running {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) { [self] in
+                lock.lock()
+                if !finished && process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+                lock.unlock()
+            }
+        }
+    }
+
+    private func execute(input: Data, timeout: TimeInterval) throws -> Result {
+        let deadline = DispatchWorkItem { [weak self] in self?.stop("The gateway control operation timed out.") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
+        defer {
+            deadline.cancel()
+            lock.lock(); finished = true; lock.unlock()
+            try? inputPipe.fileHandleForWriting.close()
+            try? outputPipe.fileHandleForReading.close()
+        }
+        lock.lock()
+        if let stopped { lock.unlock(); throw ProviderError.message(stopped) }
+        do { try process.run() } catch { lock.unlock(); throw error }
+        lock.unlock()
+        do {
+            try inputPipe.fileHandleForWriting.write(contentsOf: input)
+            try inputPipe.fileHandleForWriting.close()
+            var output = Data()
+            while true {
+                let chunk = outputPipe.fileHandleForReading.availableData
+                if chunk.isEmpty { break }
+                guard output.count + chunk.count <= 4 * 1024 * 1024 else {
+                    stop("The gateway control response exceeded its limit.")
+                    break
+                }
+                output.append(chunk)
+            }
+            process.waitUntilExit()
+            lock.lock(); let reason = stopped; lock.unlock()
+            if let reason { throw ProviderError.message(reason) }
+            return Result(output: output, status: process.terminationStatus)
+        } catch {
+            stop("The gateway control connection failed.")
+            process.waitUntilExit()
+            throw error
+        }
     }
 }
 

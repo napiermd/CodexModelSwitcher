@@ -29,6 +29,8 @@ final class AppStore: ObservableObject {
     @Published var connectingAzure = false
     @Published var openRouterReady = false
     @Published var connectingOpenRouter = false
+    @Published private(set) var restoringSavedConnection = false
+    private var restoreConnectionTask: Task<Void, Never>?
     @Published var openRouterModels: [OpenRouterModel] = []
     @Published var usageSnapshots: [UsageSnapshot] = []
     @Published var usageRefreshing = false
@@ -630,6 +632,30 @@ final class AppStore: ObservableObject {
         default: return false
         }
     }
+
+    func restoreSavedConnection(providerID: String, modelID: String) {
+        guard !restoringSavedConnection,
+              let service = data.services.first(where: { $0.id == providerID }) else { return }
+        restoringSavedConnection = true
+        allowsAutomaticProviderRestoration = false
+        errorMessage = ""
+        statusMessage = "Restoring saved connection and verifying " + modelID + "…"
+        restoreConnectionTask = Task {
+            defer { restoringSavedConnection = false; restoreConnectionTask = nil }
+            do {
+                let result = try await grokAdapter.restoreSavedConnection(service: service, modelID: modelID) { account in
+                    try await CredentialStore.readForRestore(account)
+                }
+                statusMessage = "Saved connection " + (result.restored ? "restored" : "already present") + ". Verified " + result.model + "."
+                await refreshConnectionStatus()
+            } catch {
+                statusMessage = ""
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelSavedConnectionRestore() { restoreConnectionTask?.cancel() }
 
     func syncAzure() async {
         guard let service = data.services.first(where: { $0.id == "azure" }), !service.apiKey.isEmpty else { return }

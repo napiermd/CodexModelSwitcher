@@ -66,7 +66,7 @@ An older task created with the native OpenAI provider may report that a `harbor/
 
 ## Dock, menu bar, and settings
 
-The provider panel shows connection readiness, active requests, and completed responses. Codex shows **Configured** until Harbor verifies a completed response. An expired readiness check shows that another connection check is needed while preserving access to saved connection settings. The panel grows to fit its content and scrolls when it reaches the available screen height.
+The provider panel shows connection readiness, active requests, and completed responses. Codex shows **Configured** until Harbor verifies a completed response. An expired readiness check shows that another connection check is needed while preserving access to saved connection settings. After coordinated gateway maintenance, **Manage connection → Restore saved connection** verifies a selected saved Azure/OpenRouter model without rewriting your model choices. A pending gateway update must be completed first; restoring credentials does not activate an update. The panel grows to fit its content and scrolls when it reaches the available screen height.
 
 | Settings section | Controls |
 | --- | --- |

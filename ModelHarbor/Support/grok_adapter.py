@@ -32,6 +32,7 @@ BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
 AZURE_REQUEST_SECONDS = 180
 AZURE_VERIFY_SECONDS = 10
+RESTORE_SECONDS = 40
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
 CODEX_BASE = 'https://chatgpt.com/backend-api/codex'
 TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
@@ -63,7 +64,7 @@ _transport_module = importlib.util.module_from_spec(_transport_spec)
 _transport_spec.loader.exec_module(_transport_module)
 
 
-def configuration_revision():
+def configuration_revision(credentials=None):
     digest = hashlib.sha256()
     paths = [CONFIG_DIR / 'model-switcher.json'] + sorted((CONFIG_DIR / 'model-catalogs').glob('*.json'))
     for path in paths:
@@ -71,7 +72,7 @@ def configuration_revision():
         if path.is_file():
             digest.update(path.read_bytes())
     with ROUTE_LOCK:
-        private = json.dumps([AZURE_CONNECTION, OPENROUTER_KEY], sort_keys=True).encode()
+        private = json.dumps([AZURE_CONNECTION, OPENROUTER_KEY] if credentials is None else credentials, sort_keys=True).encode()
     try:
         secret = TOKEN_PATH.read_bytes()
     except OSError:
@@ -80,9 +81,9 @@ def configuration_revision():
     return digest.hexdigest()
 
 
-def prepared_routed_request(source, incoming_headers):
+def prepared_routed_request(source, incoming_headers, *, track_turn=True):
     before = configuration_revision()
-    translation, headers, base, route = routed_request(source, incoming_headers)
+    translation, headers, base, route = routed_request(source, incoming_headers, track_turn=track_turn)
     with ROUTE_LOCK:
         revision = configuration_revision()
         if route['provider'] == 'azure':
@@ -131,6 +132,165 @@ def request_binding(route, headers, base, request):
             pass
     private = json.dumps([route, base, credentials, request.get('reasoning')], sort_keys=True).encode()
     return hmac.new(TOKEN_PATH.read_bytes(), private, hashlib.sha256).hexdigest()
+
+
+class RestoreConflict(ValueError):
+    pass
+
+
+class RestoreUnavailable(ValueError):
+    pass
+
+
+def validate_restore(payload):
+    fields = {'expected_runtime', 'expected_configuration_revision', 'connections', 'required_models'}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError('Restore requires runtime identity, configuration revision, saved connections, and exact models.')
+    identity = payload['expected_runtime']
+    if not isinstance(identity, dict) or set(identity) != {'protocol_version', 'runtime_id', 'boot_id', 'mode'}:
+        raise ValueError('Restore requires an independent runtime identity.')
+    try:
+        _control_module.validate_runtime(identity)
+    except _control_module.ControlError:
+        raise ValueError('Restore requires a valid runtime identity.') from None
+    if identity['mode'] != 'independent':
+        raise ValueError('Restore requires an independent runtime identity.')
+    revision = payload['expected_configuration_revision']
+    if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
+        raise ValueError('Restore requires a configuration revision.')
+    connections, models = payload['connections'], payload['required_models']
+    if (not isinstance(connections, dict) or not connections
+            or not set(connections) <= {'azure', 'openrouter'}):
+        raise ValueError('Restore accepts saved Azure and OpenRouter connections only.')
+    if (not isinstance(models, list) or not 1 <= len(models) <= 8
+            or any(not isinstance(model, str) or len(model) > 512 for model in models)
+            or len(set(models)) != len(models)):
+        raise ValueError('Restore requires one to eight distinct exact saved models.')
+    saved = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
+    staged = {}
+    for provider, value in connections.items():
+        fields = {'key', 'endpoint'} if provider == 'azure' else {'key'}
+        if not isinstance(value, dict) or set(value) != fields:
+            raise ValueError('Restore accepts only saved connection credentials.')
+        key = value['key']
+        if not isinstance(key, str) or not 1 <= len(key) <= 4096 or any(c.isspace() for c in key):
+            raise ValueError('Restore requires a nonempty saved key without whitespace.')
+        staged[provider] = {'key': key}
+        if provider == 'azure':
+            endpoint = azure_endpoint(value['endpoint'])
+            service = next((s for s in saved['services'] if s['id'] == provider), None)
+            if service is None or azure_endpoint(service.get('baseURL')) != endpoint:
+                raise ValueError('The saved Azure endpoint does not match the current configuration.')
+            staged[provider]['endpoint'] = endpoint
+    prepared = []
+    for model in models:
+        if not model.startswith('harbor/'):
+            raise ValueError('Restore requires exact saved Harbor model identifiers.')
+        route = requested_route(model)
+        if route['provider'] not in staged:
+            raise ValueError('Every required model must belong to a supplied connection.')
+        source = {'model': route['model'], 'input': 'Reply with OK.', 'stream': False,
+                  'max_output_tokens': 64, 'store': False}
+        connection = staged[route['provider']]
+        if route['provider'] == 'azure':
+            translation = AzureTranslation(azure_request(source))
+            headers, base = {'api-key': connection['key'], 'User-Agent': 'ModelHarbor/1.0'}, connection['endpoint']
+        else:
+            source['provider'] = {'require_parameters': True}
+            translation = Translation(source)
+            headers, base = {'Authorization': 'Bearer ' + connection['key'], 'X-Title': 'Model Harbor'}, 'https://openrouter.ai/api/v1'
+        prepared.append((translation, headers, base, route))
+    if {item[3]['provider'] for item in prepared} != set(staged):
+        raise ValueError('Every restored provider requires at least one exact saved model check.')
+    return staged, prepared
+
+
+def restore_context(payload, staged, runtime):
+    if RUNTIME is not runtime or runtime is None:
+        raise RestoreConflict('The gateway changed. Refresh its status before restoring saved connections.')
+    state = runtime.status()
+    identity = {key: state[key] for key in ('protocol_version', 'runtime_id', 'boot_id', 'mode')}
+    if identity != payload['expected_runtime'] or configuration_revision() != payload['expected_configuration_revision']:
+        raise RestoreConflict('The gateway or configuration changed. Refresh its status before restoring saved connections.')
+    current = {'azure': AZURE_CONNECTION, 'openrouter': {'key': OPENROUTER_KEY} if OPENROUTER_KEY else None}
+    if any(current[provider] is not None and current[provider] != value for provider, value in staged.items()):
+        raise RestoreConflict('An existing connection differs from the saved connection. Restore will not replace it.')
+    missing = sorted(provider for provider in staged if current[provider] is None)
+    if missing:
+        try:
+            runtime.require_tracked_credential_restore()
+        except ValueError as error:
+            raise RestoreConflict(str(error)) from None
+    return identity, missing, sorted(set(staged) - set(missing))
+
+
+def probe_staged_connection(prepared, budget):
+    translation, headers, base, route = prepared
+    permit = None
+    try:
+        if route['provider'] == 'azure':
+            permit = AZURE_ADMISSION.acquire((base, route['model']), cancelled=budget.cancelled, timeout=budget.remaining())
+        budget.check()
+        request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(),
+                                         headers=dict(headers, **{'Content-Type': 'application/json'}))
+        opener = urllib.request.build_opener(NoRedirect, *budget.http_handlers())
+        with opener.open(request, timeout=budget.remaining()) as response:
+            body = bytearray()
+            while len(body) <= 1024 * 1024:
+                part = budget.io(response.read1, 4096)
+                if not part:
+                    break
+                body.extend(part)
+            if len(body) > 1024 * 1024 or getattr(response, 'length', 0):
+                raise RestoreUnavailable('A required route returned an incomplete response. No saved connections were published.')
+            try:
+                value = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                raise RestoreUnavailable('A required route returned an invalid response. No saved connections were published.') from None
+            if response.status != 200 or not isinstance(value, dict) or value.get('status') != 'completed':
+                raise RestoreUnavailable('A required route did not complete verification. No saved connections were published.')
+        budget.check()
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+        if status in (401, 403):
+            raise RestoreUnavailable('A saved connection was rejected by its provider. Check its saved credentials; none were published.') from None
+        raise RestoreUnavailable('A required provider is unavailable. No saved connections were published; no request was replayed.') from None
+    finally:
+        if permit is not None:
+            permit.release()
+
+
+def restore_connections(payload, budget):
+    global AZURE_CONNECTION, OPENROUTER_KEY
+    runtime = RUNTIME
+    if runtime is None:
+        raise RestoreConflict('Restore requires an authenticated independent gateway.')
+    with ROUTE_LOCK, runtime.lock:
+        staged, prepared = validate_restore(payload)
+        restore_context(payload, staged, runtime)
+    for request in prepared:
+        probe_budget = _transport_module.RequestBudget(min(AZURE_VERIFY_SECONDS, budget.remaining()), cancelled=budget.cancelled)
+        try:
+            probe_staged_connection(request, probe_budget)
+        finally:
+            probe_budget.finish()
+    with ROUTE_LOCK, runtime.lock:
+        budget.check()
+        identity, restored, already_present = restore_context(payload, staged, runtime)
+        azure = staged.get('azure', AZURE_CONNECTION)
+        router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
+        revision = configuration_revision([azure, router])
+        restore_context(payload, staged, runtime)
+        budget.check()
+        AZURE_CONNECTION, OPENROUTER_KEY = azure, router
+        for provider in restored:
+            READINESS.invalidate(provider)
+        for _, _, _, route in prepared:
+            READINESS.record(route, revision, 'verified')
+        return {'runtime': identity, 'configuration_revision': revision, 'restored': restored,
+                'already_present': already_present,
+                'routes': [{'model': model, 'verified': True} for model in payload['required_models']]}
 
 
 def provider_activity_start(route):
@@ -467,10 +627,10 @@ def codex_headers(headers):
     return result
 
 
-def routed_request(source, headers):
+def routed_request(source, headers, *, track_turn=True):
     if source.get('previous_response_id'):
         raise ValueError('Model Harbor needs full conversation history when switching providers.')
-    route = route_for_turn(source, headers)
+    route = route_for_turn(source, headers) if track_turn else requested_route(source.get('model'))
     source = copy.deepcopy(source)
     source['model'] = route['model']
     source['store'] = False
@@ -1169,6 +1329,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
         self.connection.settimeout(5)
 
+    def restore_saved_connections(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        reading_body = True
+        budget = _transport_module.RequestBudget(RESTORE_SECONDS,
+            cancelled=lambda: False if reading_body else self.client_disconnected())
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 32768 or self.headers.get('Content-Encoding', 'identity') != 'identity':
+                return self.error(400, 'Invalid saved connection restore request', budget=budget)
+            self.connection.settimeout(min(3, budget.remaining()))
+            budget.register(self.connection)
+            try:
+                raw = budget.io(self.rfile.read, length)
+            finally:
+                budget.unregister(self.connection)
+            reading_body = False
+            budget.check()
+            payload = json.loads(raw)
+            result = restore_connections(payload, budget)
+            body = json.dumps(result).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.finish_headers(budget)
+            self.write_output(body, budget)
+            return
+        except RestoreConflict as error:
+            status, message = 409, str(error)
+        except RestoreUnavailable as error:
+            status, message = 503, str(error)
+        except (_transport_module.RequestCancelled, _admission_module.AdmissionCancelled):
+            if self.client_disconnected():
+                self.close_connection = True
+                return
+            status, message = 503, 'Saved connection verification reached its deadline. Refresh gateway status before retrying.'
+        except (_transport_module.RequestDeadline, _admission_module.AdmissionFull, _admission_module.AdmissionTimeout,
+                OSError, urllib.error.URLError, TimeoutError):
+            status, message = 503, 'Saved connection verification could not complete. Refresh gateway status before retrying.'
+        except (ValueError, TypeError, KeyError, _control_module.ControlError):
+            status, message = 400, 'The restore request does not match valid saved connections and exact configured models.'
+        finally:
+            budget.finish()
+        reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected)
+        try:
+            self.error(status, message, budget=reporting)
+        except (_transport_module.RequestCancelled, _transport_module.RequestDeadline, OSError):
+            self.close_connection = True
+        finally:
+            reporting.finish()
+
     def verify_route(self):
         if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
             return self.error(401, 'Local authorization required')
@@ -1195,7 +1407,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         local_busy = False
         try:
             translation, headers, base, route, revision = prepared_routed_request({'model': payload['model'],
-                'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers)
+                'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers, track_turn=False)
             headers.update({'Content-Type': 'application/json'})
             request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(), headers=headers)
             deadline = time.monotonic() + AZURE_VERIFY_SECONDS
@@ -1350,6 +1562,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if self.headers.get('Origin') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
                 return self.error(409, _runtime_module.LIFECYCLE_GATE)
+            if self.path == '/harbor/providers/restore':
+                return self.restore_saved_connections()
             if self.path == '/harbor/verify':
                 return self.verify_route()
             if self.path in ('/harbor/providers/openrouter', '/harbor/providers/azure'):

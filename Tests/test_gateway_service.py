@@ -268,6 +268,30 @@ class GatewayServiceTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return server, observed
 
+    def test_restore_expected_runtime_is_checked_before_sending_credentials(self):
+        runtime = self.runtime('independent')
+        server, observed = self.start_server({'routing': 'per-task', 'providers': {}, 'runtime': runtime})
+        expected = dict(runtime, boot_id=str(uuid.uuid4()))
+        body = json.dumps({'expected_runtime': expected, 'connections': {'openrouter': {'key': 'never-send-key'}}}).encode()
+        with self.assertRaisesRegex(control.ControlError, 'No owner credentials'):
+            control.owner_request('POST', '/harbor/providers/restore', body, server.server_port, self.token,
+                                  expected_runtime=expected)
+        self.assertEqual([request['path'] for request in observed], ['/harbor/handshake'])
+        self.assertIsNone(observed[0]['token'])
+        self.assertNotIn(b'never-send-key', observed[0]['body'])
+
+    def test_restore_payload_uses_one_proven_socket_and_no_replay(self):
+        runtime = self.runtime('independent')
+        server, observed = self.start_server({'routing': 'per-task', 'providers': {}, 'runtime': runtime})
+        body = json.dumps({'expected_runtime': runtime, 'connections': {'openrouter': {'key': 'saved-key'}}}).encode()
+        control.owner_request('POST', '/harbor/providers/restore', body, server.server_port, self.token,
+                              expected_runtime=runtime)
+        self.assertEqual([request['path'] for request in observed], ['/harbor/handshake', '/harbor/providers/restore'])
+        self.assertEqual(observed[0]['peer'], observed[1]['peer'])
+        self.assertEqual(observed[1]['body'], body)
+        self.assertEqual(observed[1]['token'], 'synthetic-private-token')
+        self.assertLessEqual(control.COMMAND_TIMEOUTS[('POST', '/harbor/providers/restore')], 43)
+
     def test_authenticated_independent_and_proven_legacy_status(self):
         for mode in ('independent', 'legacy'):
             value = {'routing': 'per-task', 'providers': {}, 'runtime': self.runtime(mode)}

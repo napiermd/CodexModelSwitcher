@@ -253,18 +253,32 @@ struct ContentView: View {
             Button(store.isGrokLoginRunning ? "Signing in…" : (connected ? "Switch account…" : "Sign in to Grok")) { store.signInGrok() }.disabled(store.isGrokLoginRunning).buttonStyle(.bordered)
         case "azure":
             Menu(configured ? "Manage connection" : "Connect Azure OpenAI") {
-                Button(configured ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }
-                if configured { Button("Disconnect") { Task { await store.disconnectAzure() } } }
+                restoreSavedConnectionAction
+                Button(configured ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }.disabled(store.restoringSavedConnection)
+                if configured { Button("Disconnect") { Task { await store.disconnectAzure() } }.disabled(store.restoringSavedConnection) }
             }.fixedSize()
         case "openrouter":
-            if configured {
+            if configured || service?.models.isEmpty == false {
                 Menu("Manage connection") {
-                    Button("Choose models…") { beginOpenRouter() }
+                    restoreSavedConnectionAction
+                    Button("Choose models…") { beginOpenRouter() }.disabled(store.restoringSavedConnection)
                     Button("Open OpenRouter dashboard") { open(provider.dashboard) }
-                    Button("Disconnect") { Task { await store.disconnectOpenRouter() } }
+                    Button("Disconnect") { Task { await store.disconnectOpenRouter() } }.disabled(store.restoringSavedConnection)
                 }.fixedSize()
             } else { Button("Connect OpenRouter") { beginOpenRouter() }.buttonStyle(.bordered) }
         default: Button("Manage accounts…") { settingsTab = "Providers"; page = "settings" }.buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder private var restoreSavedConnectionAction: some View {
+        if store.restoringSavedConnection {
+            Button("Cancel connection restore") { store.cancelSavedConnectionRestore() }
+        } else if let service, !service.models.isEmpty {
+            Menu("Restore saved connection") {
+                ForEach(service.models) { model in
+                    Button("Verify " + model.id) { store.restoreSavedConnection(providerID: service.id, modelID: model.id) }
+                }
+            }.disabled(store.proxyStatus != .active)
         }
     }
 

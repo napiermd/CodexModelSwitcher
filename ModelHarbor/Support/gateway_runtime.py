@@ -154,6 +154,12 @@ class GatewayRuntime:
                 self.db.execute('UPDATE turns SET uncertain=1 WHERE id=(SELECT turn_id FROM requests WHERE id=?)', (request_id,))
             self.db.execute('DELETE FROM requests WHERE id=?', (request_id,))
 
+    def require_tracked_credential_restore(self):
+        with self.lock:
+            untracked = self.db.execute("SELECT COALESCE(SUM(value),0) FROM counters WHERE name='untracked'").fetchone()[0]
+            if untracked:
+                raise ValueError('Saved credentials cannot be restored after untracked admissions. Their original account binding is unavailable; existing ownership was preserved.')
+
     def status(self):
         with self.lock:
             return {'protocol_version': PROTOCOL_VERSION, 'runtime_id': self.runtime_id,

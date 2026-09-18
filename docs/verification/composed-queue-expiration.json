@@ -1,0 +1,123 @@
+{
+  "actions_run": 35301121482,
+  "source_head": "dbc1e6115f11e1c748289e8acd41c742671a160e",
+  "evidence_kind": "selected fields from downloaded reports; original report hashes retained",
+  "records": [
+    {
+      "architecture": "amd64",
+      "checkout_sha": "f33ce182d82111629e6f060ab8bcb63f0433add7",
+      "report_sha256": "85bf78eb0bef9daa529008a3df2e296ae9b18233a29f9b05a7e6148201940668",
+      "harbor_runtime_digest": "653756631b471200ce4fc94e3738ab20baa9defc5ff289e07347092afc07d647",
+      "case_count": 11,
+      "composed_synthetic_gate_passed": true,
+      "total_upstream_attempts": 34,
+      "queue_timeout_tested": true,
+      "queue_timeout": {
+        "case": "queue_timeout",
+        "passed": true,
+        "checks": {
+          "two_established_streams_and_waiters": true,
+          "queued_has_no_upstream_attempt": true,
+          "local_queue_timeout_response": true,
+          "production_queue_deadline": true,
+          "held_streams_open_after_timeout": true,
+          "timed_out_waiter_removed": true,
+          "timed_out_request_has_no_active_lease": true,
+          "timeout_does_not_make_turn_uncertain": true,
+          "response_affinity_9c759604247c49bdad45c55aca7fbdb6": true,
+          "response_affinity_632a396faf9642b096672970e451cc13": true,
+          "held_streams_completed": true,
+          "exact_attempt_counts": true,
+          "no_unexpected_upstream_requests": true,
+          "native_path": true,
+          "synthetic_auth": true,
+          "exact_deployment": true
+        },
+        "request_ids": [
+          "9c759604247c49bdad45c55aca7fbdb6",
+          "632a396faf9642b096672970e451cc13",
+          "048ec72ec7434d4b881a9160292c33d2"
+        ],
+        "upstream_attempts": {
+          "9c759604247c49bdad45c55aca7fbdb6": 1,
+          "632a396faf9642b096672970e451cc13": 1,
+          "048ec72ec7434d4b881a9160292c33d2": 0
+        },
+        "total_upstream_attempts": 2,
+        "http_statuses": [
+          503,
+          200,
+          200
+        ],
+        "queued_request_elapsed_ms": 30017.81,
+        "queue_observed_wait_ms": 29902.32
+      },
+      "gateway_cleanup": {
+        "process_exited": true,
+        "sentinel_unchanged": true,
+        "source_unchanged": true,
+        "logs_content_free": true
+      },
+      "cleanup_errors": [],
+      "live_azure_tested": false
+    },
+    {
+      "architecture": "arm64",
+      "checkout_sha": "f33ce182d82111629e6f060ab8bcb63f0433add7",
+      "report_sha256": "56ff4efefc845ebf0c25ee064140f2d320737c5b495e4d12724aa4ebc5ba9a0f",
+      "harbor_runtime_digest": "653756631b471200ce4fc94e3738ab20baa9defc5ff289e07347092afc07d647",
+      "case_count": 11,
+      "composed_synthetic_gate_passed": true,
+      "total_upstream_attempts": 34,
+      "queue_timeout_tested": true,
+      "queue_timeout": {
+        "case": "queue_timeout",
+        "passed": true,
+        "checks": {
+          "two_established_streams_and_waiters": true,
+          "queued_has_no_upstream_attempt": true,
+          "local_queue_timeout_response": true,
+          "production_queue_deadline": true,
+          "held_streams_open_after_timeout": true,
+          "timed_out_waiter_removed": true,
+          "timed_out_request_has_no_active_lease": true,
+          "timeout_does_not_make_turn_uncertain": true,
+          "response_affinity_0f46cdfc3b13412ead19e8e7cd9e8342": true,
+          "response_affinity_a5fdc200c0eb40f88f52e37d3bb6a612": true,
+          "held_streams_completed": true,
+          "exact_attempt_counts": true,
+          "no_unexpected_upstream_requests": true,
+          "native_path": true,
+          "synthetic_auth": true,
+          "exact_deployment": true
+        },
+        "request_ids": [
+          "0f46cdfc3b13412ead19e8e7cd9e8342",
+          "a5fdc200c0eb40f88f52e37d3bb6a612",
+          "bf8458f61d1d46f2bd842eb6c848d6dd"
+        ],
+        "upstream_attempts": {
+          "0f46cdfc3b13412ead19e8e7cd9e8342": 1,
+          "a5fdc200c0eb40f88f52e37d3bb6a612": 1,
+          "bf8458f61d1d46f2bd842eb6c848d6dd": 0
+        },
+        "total_upstream_attempts": 2,
+        "http_statuses": [
+          503,
+          200,
+          200
+        ],
+        "queued_request_elapsed_ms": 30018.87,
+        "queue_observed_wait_ms": 29902.15
+      },
+      "gateway_cleanup": {
+        "process_exited": true,
+        "sentinel_unchanged": true,
+        "source_unchanged": true,
+        "logs_content_free": true
+      },
+      "cleanup_errors": [],
+      "live_azure_tested": false
+    }
+  ]
+}

@@ -4,6 +4,8 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Fixed OpenRouter 404 errors on Fable 5.1 tool requests by using normal endpoint selection instead of requiring complete parameter declarations. The exact model and tool settings remain unchanged. Added HTTP regression coverage and an opt-in live tool-call and streamed-continuation check.
+
 - Task-repair batches now report loaded and invalid tasks individually and continue repairing other eligible tasks. Added a Codex 0.150.1 end-to-end check for the unsupported Harbor model error during remote compaction, followed by provider repair, successful compaction, and continuation. README and recovery docs distinguish this saved-provider mismatch from tool-choice validation failures.
 
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.

@@ -4,13 +4,26 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Fixed OpenRouter Fable 5.1 tool-request 404s by using normal endpoint selection in inference and saved-connection verification. Added a live synthetic tool round trip and HTTP regression coverage. See [verification](docs/verification/openrouter-tools.md).
 - Task-repair batches now report loaded and invalid tasks individually and continue repairing other eligible tasks. Added a Codex 0.150.1 end-to-end check for the unsupported Harbor model error during remote compaction, followed by provider repair, successful compaction, and continuation. README and recovery docs distinguish this saved-provider mismatch from tool-choice validation failures.
 
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
 - Tool-free Codex compaction requests now discard stale tool choices before provider routing, preventing long-running tasks from entering an unrecoverable retry loop at the context limit.
 - Azure routes now select themselves for Codex automatic review, so `--approve-for-me` does not depend on a missing Azure review model.
 
+### Update safety foundation
+
+- Stage signed artifacts with a content manifest, without changing the installed app or running gateway.
+- Prepare a per-user gateway service with retained Python resources and exclusive startup ownership. GUI quit no longer terminates this independent runtime.
+- Persist unfinished turn ownership through tool gaps; refuse duplicate dispatch, changed account bindings, and replay after uncertain delivery. Storage pressure retains existing owners.
+- Separate saved credentials from route verification tied to runtime, configuration, and deployment. Status polling does not trigger paid inference.
+- Exercise the production entrypoint and packaged runtime with isolated state and synthetic providers.
+- Keep live promotion, retirement, and rollback disabled until actual desktop completion signals are verified. The independent service and signed interface have separate local installation evidence; newer gateway code remains pending maintenance. See [installed interface verification](docs/verification/gui-attachment.md). No uninterrupted gateway replacement is claimed.
+
 ### Azure OpenAI
+
+- Remove stale tool choices from tool-free compaction requests across native and translated routes, while preserving opaque Azure history.
+- Pin each Azure catalog entry's automatic-review model to its own Harbor deployment route. This hardens routing without claiming that a missing override caused the reported failure.
 
 - Added direct Azure Responses routing with resource endpoint and exact deployment names, macOS Keychain storage, and a billable tool-call connection check.
 - Deployment options explicitly select image input, context limits, and the reasoning setting tested during setup. Azure requests do not use Baseten's queue.

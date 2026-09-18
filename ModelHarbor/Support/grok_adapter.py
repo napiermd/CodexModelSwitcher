@@ -1,5 +1,7 @@
 """Local Responses bridge for Codex subscriptions, Grok OAuth and Baseten."""
 import copy
+import base64
+import importlib.util
 import io
 import math
 import random
@@ -28,13 +30,16 @@ ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 MAX_BODY = 32 * 1024 * 1024
 BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
+AZURE_REQUEST_SECONDS = 180
+AZURE_VERIFY_SECONDS = 10
+RESTORE_SECONDS = 40
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
 CODEX_BASE = 'https://chatgpt.com/backend-api/codex'
 TOKEN_PATH = pathlib.Path(os.environ.get('MODEL_HARBOR_TOKEN_PATH', str(pathlib.Path.home() / '.codex/model-harbor-bridge-token')))
 AUTH_PATH = pathlib.Path.home() / '.grok/auth.json'
 AUTH_LOCK = threading.Lock()
 CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.Path.home() / '.codex')))
-ROUTE_LOCK = threading.Lock()
+ROUTE_LOCK = threading.RLock()
 TURN_ROUTES = OrderedDict()
 LAST_ROUTE = None
 TASK_REPAIRS = None
@@ -42,6 +47,290 @@ PROVIDER_ACTIVITY = {}
 OPENROUTER_KEY = ''
 AZURE_CONNECTION = None
 USAGE_COLLECTOR = None
+RUNTIME = None
+_runtime_spec = importlib.util.spec_from_file_location('harbor_gateway_runtime', pathlib.Path(__file__).with_name('gateway_runtime.py'))
+_runtime_module = importlib.util.module_from_spec(_runtime_spec)
+_runtime_spec.loader.exec_module(_runtime_module)
+READINESS = _runtime_module.RouteReadiness()
+_control_spec = importlib.util.spec_from_file_location('harbor_gateway_control', pathlib.Path(__file__).with_name('gateway_control.py'))
+_control_module = importlib.util.module_from_spec(_control_spec)
+_control_spec.loader.exec_module(_control_module)
+_admission_spec = importlib.util.spec_from_file_location('harbor_azure_admission', pathlib.Path(__file__).with_name('azure_admission.py'))
+_admission_module = importlib.util.module_from_spec(_admission_spec)
+_admission_spec.loader.exec_module(_admission_module)
+AZURE_ADMISSION = _admission_module.AdmissionQueue()
+_transport_spec = importlib.util.spec_from_file_location('harbor_azure_transport', pathlib.Path(__file__).with_name('azure_transport.py'))
+_transport_module = importlib.util.module_from_spec(_transport_spec)
+_transport_spec.loader.exec_module(_transport_module)
+
+
+def configuration_revision(credentials=None):
+    digest = hashlib.sha256()
+    paths = [CONFIG_DIR / 'model-switcher.json'] + sorted((CONFIG_DIR / 'model-catalogs').glob('*.json'))
+    for path in paths:
+        digest.update(path.name.encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    with ROUTE_LOCK:
+        private = json.dumps([AZURE_CONNECTION, OPENROUTER_KEY] if credentials is None else credentials, sort_keys=True).encode()
+    try:
+        secret = TOKEN_PATH.read_bytes()
+    except OSError:
+        secret = READINESS.boot_id.encode()
+    digest.update(hmac.digest(secret, private, 'sha256'))
+    return digest.hexdigest()
+
+
+def prepared_routed_request(source, incoming_headers, *, track_turn=True):
+    before = configuration_revision()
+    translation, headers, base, route = routed_request(source, incoming_headers, track_turn=track_turn)
+    with ROUTE_LOCK:
+        revision = configuration_revision()
+        if route['provider'] == 'azure':
+            matches = bool(AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']
+                           and base == AZURE_CONNECTION['endpoint'])
+        elif route['provider'] == 'openrouter':
+            matches = bool(OPENROUTER_KEY and headers.get('Authorization') == 'Bearer ' + OPENROUTER_KEY)
+        else:
+            matches = False
+        if not matches or before != revision:
+            revision = None
+    return translation, headers, base, route, revision
+
+
+def record_readiness(route, revision, result):
+    with ROUTE_LOCK:
+        if revision is None or configuration_revision() != revision:
+            return False
+        READINESS.record(route, revision, result)
+        return True
+
+
+def reject_provider_credentials(route, headers):
+    global OPENROUTER_KEY, AZURE_CONNECTION
+    with ROUTE_LOCK:
+        if route['provider'] == 'openrouter' and headers.get('Authorization') == 'Bearer ' + OPENROUTER_KEY:
+            OPENROUTER_KEY = ''
+            READINESS.invalidate('openrouter')
+        elif route['provider'] == 'azure' and AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
+            AZURE_CONNECTION = None
+            READINESS.invalidate('azure')
+
+
+def request_binding(route, headers, base, request):
+    credentials = {k.lower(): v for k, v in headers.items()
+                   if k.lower() in ('authorization', 'api-key', 'chatgpt-account-id')}
+    if route['provider'] in ('codex-subscription', 'grok-oauth'):
+        # Bind the authenticated account, allowing that account's normal token refresh.
+        token = credentials.get('authorization', '').removeprefix('Bearer ')
+        try:
+            part = token.split('.')[1]
+            claims = json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))
+            if isinstance(claims, dict) and isinstance(claims.get('sub'), str) and claims['sub']:
+                credentials['authorization'] = [claims.get('iss'), claims['sub']]
+        except (ValueError, IndexError, KeyError):
+            pass
+    private = json.dumps([route, base, credentials, request.get('reasoning')], sort_keys=True).encode()
+    return hmac.new(TOKEN_PATH.read_bytes(), private, hashlib.sha256).hexdigest()
+
+
+class MaintenanceBlocked(ValueError):
+    pass
+
+
+def require_inference_admission():
+    with ROUTE_LOCK:
+        if RUNTIME is not None and RUNTIME.maintenance_state(configuration_revision())['blocked']:
+            raise MaintenanceBlocked('Harbor inference is paused for coordinated maintenance. Restore and verify the exact saved connections, then explicitly commit maintenance.')
+
+
+def commit_maintenance(payload):
+    fields = {'expected_runtime', 'expected_configuration_revision', 'maintenance_id'}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError('Maintenance commit requires runtime identity, configuration revision, and maintenance identifier.')
+    _control_module.validate_runtime(payload['expected_runtime'])
+    runtime = RUNTIME
+    if runtime is None:
+        raise _runtime_module.MaintenanceError('Maintenance commit requires an independent gateway.')
+    with ROUTE_LOCK, runtime.lock:
+        state = runtime.status()
+        identity = {key: state[key] for key in ('protocol_version', 'runtime_id', 'boot_id', 'mode')}
+        revision = configuration_revision()
+        if identity != payload['expected_runtime'] or revision != payload['expected_configuration_revision']:
+            raise _runtime_module.MaintenanceError('The gateway or configuration changed. Refresh status before committing maintenance.')
+        verified = ['harbor/' + p['provider'] + '/' + p['model'] for p in READINESS.snapshot(revision)
+                    if p['verified'] and p['boot_id'] == runtime.boot_id and p['configuration_revision'] == revision]
+        maintenance = runtime.commit_maintenance(payload['maintenance_id'], revision, verified)
+        return {'runtime': identity, 'configuration_revision': revision, 'maintenance': maintenance}
+
+
+class RestoreConflict(ValueError):
+    pass
+
+
+class RestoreUnavailable(ValueError):
+    pass
+
+
+def validate_restore(payload):
+    fields = {'expected_runtime', 'expected_configuration_revision', 'connections', 'required_models'}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError('Restore requires runtime identity, configuration revision, saved connections, and exact models.')
+    identity = payload['expected_runtime']
+    if not isinstance(identity, dict) or set(identity) != {'protocol_version', 'runtime_id', 'boot_id', 'mode'}:
+        raise ValueError('Restore requires an independent runtime identity.')
+    try:
+        _control_module.validate_runtime(identity)
+    except _control_module.ControlError:
+        raise ValueError('Restore requires a valid runtime identity.') from None
+    if identity['mode'] != 'independent':
+        raise ValueError('Restore requires an independent runtime identity.')
+    revision = payload['expected_configuration_revision']
+    if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
+        raise ValueError('Restore requires a configuration revision.')
+    connections, models = payload['connections'], payload['required_models']
+    if (not isinstance(connections, dict) or not connections
+            or not set(connections) <= {'azure', 'openrouter'}):
+        raise ValueError('Restore accepts saved Azure and OpenRouter connections only.')
+    if (not isinstance(models, list) or not 1 <= len(models) <= 8
+            or any(not isinstance(model, str) or len(model) > 512 for model in models)
+            or len(set(models)) != len(models)):
+        raise ValueError('Restore requires one to eight distinct exact saved models.')
+    saved = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
+    staged = {}
+    for provider, value in connections.items():
+        fields = {'key', 'endpoint'} if provider == 'azure' else {'key'}
+        if not isinstance(value, dict) or set(value) != fields:
+            raise ValueError('Restore accepts only saved connection credentials.')
+        key = value['key']
+        if not isinstance(key, str) or not 1 <= len(key) <= 4096 or any(c.isspace() for c in key):
+            raise ValueError('Restore requires a nonempty saved key without whitespace.')
+        staged[provider] = {'key': key}
+        if provider == 'azure':
+            endpoint = azure_endpoint(value['endpoint'])
+            service = next((s for s in saved['services'] if s['id'] == provider), None)
+            if service is None or azure_endpoint(service.get('baseURL')) != endpoint:
+                raise ValueError('The saved Azure endpoint does not match the current configuration.')
+            staged[provider]['endpoint'] = endpoint
+    prepared = []
+    for model in models:
+        if not model.startswith('harbor/'):
+            raise ValueError('Restore requires exact saved Harbor model identifiers.')
+        route = requested_route(model)
+        if route['provider'] not in staged:
+            raise ValueError('Every required model must belong to a supplied connection.')
+        source = {'model': route['model'], 'input': 'Reply with OK.', 'stream': False,
+                  'max_output_tokens': 64, 'store': False}
+        connection = staged[route['provider']]
+        if route['provider'] == 'azure':
+            translation = AzureTranslation(azure_request(source))
+            headers, base = {'api-key': connection['key'], 'User-Agent': 'ModelHarbor/1.0'}, connection['endpoint']
+        else:
+            source['provider'] = {'require_parameters': False}
+            translation = Translation(source)
+            headers, base = {'Authorization': 'Bearer ' + connection['key'], 'X-Title': 'Model Harbor'}, 'https://openrouter.ai/api/v1'
+        prepared.append((translation, headers, base, route))
+    if {item[3]['provider'] for item in prepared} != set(staged):
+        raise ValueError('Every restored provider requires at least one exact saved model check.')
+    return staged, prepared
+
+
+def restore_context(payload, staged, runtime):
+    if RUNTIME is not runtime or runtime is None:
+        raise RestoreConflict('The gateway changed. Refresh its status before restoring saved connections.')
+    state = runtime.status()
+    identity = {key: state[key] for key in ('protocol_version', 'runtime_id', 'boot_id', 'mode')}
+    if identity != payload['expected_runtime'] or configuration_revision() != payload['expected_configuration_revision']:
+        raise RestoreConflict('The gateway or configuration changed. Refresh its status before restoring saved connections.')
+    current = {'azure': AZURE_CONNECTION, 'openrouter': {'key': OPENROUTER_KEY} if OPENROUTER_KEY else None}
+    if any(current[provider] is not None and current[provider] != value for provider, value in staged.items()):
+        raise RestoreConflict('An existing connection differs from the saved connection. Restore will not replace it.')
+    missing = sorted(provider for provider in staged if current[provider] is None)
+    marker = runtime.maintenance_record()
+    if marker is not None:
+        azure = staged.get('azure', AZURE_CONNECTION)
+        router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
+        if (set(payload['required_models']) != set(marker['required_models'])
+                or configuration_revision([azure, router]) != marker['configuration_revision']):
+            raise RestoreConflict('Maintenance restoration requires the exact previous connections and required models. Nothing was replaced.')
+    if missing and marker is None:
+        try:
+            runtime.require_tracked_credential_restore()
+        except ValueError as error:
+            raise RestoreConflict(str(error)) from None
+    return identity, missing, sorted(set(staged) - set(missing))
+
+
+def probe_staged_connection(prepared, budget):
+    translation, headers, base, route = prepared
+    permit = None
+    try:
+        if route['provider'] == 'azure':
+            permit = AZURE_ADMISSION.acquire((base, route['model']), cancelled=budget.cancelled, timeout=budget.remaining())
+        budget.check()
+        request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(),
+                                         headers=dict(headers, **{'Content-Type': 'application/json'}))
+        opener = urllib.request.build_opener(NoRedirect, *budget.http_handlers())
+        with opener.open(request, timeout=budget.remaining()) as response:
+            body = bytearray()
+            while len(body) <= 1024 * 1024:
+                part = budget.io(response.read1, 4096)
+                if not part:
+                    break
+                body.extend(part)
+            if len(body) > 1024 * 1024 or getattr(response, 'length', 0):
+                raise RestoreUnavailable('A required route returned an incomplete response. No saved connections were published.')
+            try:
+                value = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                raise RestoreUnavailable('A required route returned an invalid response. No saved connections were published.') from None
+            if response.status != 200 or not isinstance(value, dict) or value.get('status') != 'completed':
+                raise RestoreUnavailable('A required route did not complete verification. No saved connections were published.')
+        budget.check()
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+        if status in (401, 403):
+            raise RestoreUnavailable('A saved connection was rejected by its provider. Check its saved credentials; none were published.') from None
+        raise RestoreUnavailable('A required provider is unavailable. No saved connections were published; no request was replayed.') from None
+    finally:
+        if permit is not None:
+            permit.release()
+
+
+def restore_connections(payload, budget):
+    global AZURE_CONNECTION, OPENROUTER_KEY
+    runtime = RUNTIME
+    if runtime is None:
+        raise RestoreConflict('Restore requires an authenticated independent gateway.')
+    with ROUTE_LOCK, runtime.lock:
+        staged, prepared = validate_restore(payload)
+        restore_context(payload, staged, runtime)
+        maintenance = runtime.maintenance_record()
+    for request in prepared:
+        probe_budget = _transport_module.RequestBudget(min(AZURE_VERIFY_SECONDS, budget.remaining()), cancelled=budget.cancelled)
+        try:
+            probe_staged_connection(request, probe_budget)
+        finally:
+            probe_budget.finish()
+    with ROUTE_LOCK, runtime.lock:
+        budget.check()
+        identity, restored, already_present = restore_context(payload, staged, runtime)
+        if runtime.maintenance_record() != maintenance:
+            raise RestoreConflict('The maintenance marker changed during verification. Nothing was replaced.')
+        azure = staged.get('azure', AZURE_CONNECTION)
+        router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
+        revision = configuration_revision([azure, router])
+        restore_context(payload, staged, runtime)
+        budget.check()
+        AZURE_CONNECTION, OPENROUTER_KEY = azure, router
+        for provider in restored:
+            READINESS.invalidate(provider)
+        for _, _, _, route in prepared:
+            READINESS.record(route, revision, 'verified')
+        return {'runtime': identity, 'configuration_revision': revision, 'restored': restored,
+                'already_present': already_present,
+                'routes': [{'model': model, 'verified': True} for model in payload['required_models']]}
 
 
 def provider_activity_start(route):
@@ -79,7 +368,12 @@ def provider_activity_finish(route, status, http_status=None):
 
 def provider_status():
     with ROUTE_LOCK:
-        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY), 'openrouter_ready': bool(OPENROUTER_KEY), 'azure_ready': bool(AZURE_CONNECTION)}
+        records = READINESS.snapshot(configuration_revision())
+        return {'activity': copy.deepcopy(PROVIDER_ACTIVITY),
+                'credentials_available': {'openrouter': bool(OPENROUTER_KEY), 'azure': bool(AZURE_CONNECTION)},
+                'route_verification': records,
+                'openrouter_ready': bool(OPENROUTER_KEY) and any(r['verified'] and r['provider'] == 'openrouter' for r in records),
+                'azure_ready': bool(AZURE_CONNECTION) and any(r['verified'] and r['provider'] == 'azure' for r in records)}
 
 
 def openrouter_headers():
@@ -128,6 +422,11 @@ def azure_request(source):
     source.pop('service_tier', None)
     if isinstance(source.get('reasoning'), dict) and source['reasoning'].get('effort') == 'none':
         source.pop('reasoning', None)
+    include = source.setdefault('include', [])
+    if not isinstance(include, list) or not all(isinstance(item, str) for item in include):
+        raise ValueError('Azure Responses include must be a list of strings.')
+    if 'reasoning.encrypted_content' not in include:
+        include.append('reasoning.encrypted_content')
     source['input'] = baseten_tool_images(source.get('input', []))
     return source
 
@@ -231,27 +530,19 @@ def requested_route(model_id):
 
 
 def route_for_turn(source, headers):
-    # Codex sends a canonical turn ID across inference/tool-result requests.
-    metadata = source.get('client_metadata') or {}
-    nested = metadata.get('x-codex-turn-metadata') or headers.get('x-codex-turn-metadata', '{}')
-    if isinstance(nested, str):
-        try:
-            nested = json.loads(nested)
-        except ValueError:
-            nested = {}
-    turn_id = nested.get('turn_id') or metadata.get('turn_id')
-    thread_id = nested.get('thread_id') or metadata.get('thread_id') or metadata.get('session_id', '')
-    key = (str(thread_id), str(turn_id)) if turn_id else None
+    key = _runtime_module.turn_key(source, headers)
+    if RUNTIME is not None:
+        with ROUTE_LOCK, RUNTIME.lock:
+            require_inference_admission()
+            return RUNTIME.pin(key, lambda: requested_route(source.get('model')))
     with ROUTE_LOCK:
         if key in TURN_ROUTES:
-            TURN_ROUTES.move_to_end(key)
             return dict(TURN_ROUTES[key])
         route = requested_route(source.get('model'))
         if key:
+            if len(TURN_ROUTES) >= 100000:
+                raise ValueError('Unfinished turn journal is full; existing owners are retained')
             TURN_ROUTES[key] = route
-            # Bound idle history; active turns are touched on every tool-result request.
-            if len(TURN_ROUTES) > 4096:
-                TURN_ROUTES.popitem(last=False)
         return dict(route)
 
 
@@ -260,7 +551,7 @@ class BasetenCredentialError(ValueError):
 
 
 class BasetenCredentials:
-    """One helper unlock per app session or explicit reconnect, shared by threads."""
+    """One helper unlock per gateway session or explicit reconnect, shared by threads."""
     def __init__(self):
         self.lock = threading.Lock()
         self.signature = None
@@ -378,10 +669,10 @@ def codex_headers(headers):
     return result
 
 
-def routed_request(source, headers):
+def routed_request(source, headers, *, track_turn=True):
     if source.get('previous_response_id'):
         raise ValueError('Model Harbor needs full conversation history when switching providers.')
-    route = route_for_turn(source, headers)
+    route = route_for_turn(source, headers) if track_turn else requested_route(source.get('model'))
     source = copy.deepcopy(source)
     source['model'] = route['model']
     source['store'] = False
@@ -400,8 +691,13 @@ def routed_request(source, headers):
     elif route['provider'] == 'openrouter':
         upstream_headers = openrouter_headers()
         base = 'https://openrouter.ai/api/v1'
-        # Request routing must fail instead of silently switching to a different model.
-        source['provider'] = {'require_parameters': True}
+        # Endpoint parameter declarations are incomplete for Responses tools.
+        # Keep the requested parameters and exact model; allow normal endpoint
+        # selection instead of excluding every tool-capable Fable 5.1 endpoint.
+        source['provider'] = {'require_parameters': False}
+        # Bound the reservation when Codex omits an output budget. OpenRouter
+        # otherwise reserves the model maximum, including concurrent requests.
+        source.setdefault('max_output_tokens', 32768)
         reasoning = source.get('reasoning')
         if isinstance(reasoning, dict) and reasoning.get('effort') == 'none':
             source.pop('reasoning', None)
@@ -414,7 +710,9 @@ def routed_request(source, headers):
     else:
         upstream_headers = oauth_headers()
         base = OAUTH_BASE
-    return Translation(source, native_tools=route['provider'] == 'codex-subscription'), upstream_headers, base, route
+    translation = (AzureTranslation(source) if route['provider'] == 'azure' else
+                   Translation(source, native_tools=route['provider'] == 'codex-subscription'))
+    return translation, upstream_headers, base, route
 
 
 def baseten_tool_images(items):
@@ -791,12 +1089,14 @@ class Translation:
             result.append(tool)
         return result
 
+    def history_items(self, source):
+        # xAI cannot decode Codex reasoning. Azure overrides this compatibility policy.
+        return [copy.deepcopy(item) for item in source if item.get('type') != 'reasoning']
+
     def input_items(self, source):
         if isinstance(source, str):
             return source
-        # Codex replays opaque reasoning blobs in a format xAI cannot decode.
-        # Conversation text, function calls, and tool results remain in the history.
-        result = [copy.deepcopy(item) for item in source if item.get('type') != 'reasoning']
+        result = self.history_items(source)
         for item in result:
             # Inline history is portable; provider-owned item IDs are not. Keep call_id links.
             if item.get('type', 'message') in ('message', 'function_call', 'custom_tool_call',
@@ -832,10 +1132,34 @@ class Translation:
 
     def output(self, obj):
         if isinstance(obj, list):
-            return [self.output(x) for x in obj]
+            return [self.output_item(item) for item in obj]
         if not isinstance(obj, dict):
             return obj
-        result = {key: self.output(value) for key, value in obj.items()}
+        result = copy.deepcopy(obj)
+        kind = result.get('type', '')
+        if kind in ('response.output_item.added', 'response.output_item.done'):
+            if isinstance(result.get('item'), dict):
+                result['item'] = self.output_item(result['item'])
+        elif kind in ('response.created', 'response.in_progress', 'response.completed',
+                      'response.failed', 'response.incomplete'):
+            if isinstance(result.get('response'), dict):
+                result['response'] = self.output_response(result['response'])
+        elif result.get('object') == 'response' or (not kind and 'output' in result):
+            result = self.output_response(result)
+        elif kind == 'function_call':
+            result = self.output_item(result)
+        return result
+
+    def output_response(self, response):
+        result = copy.deepcopy(response)
+        if isinstance(result.get('output'), list):
+            result['output'] = [self.output_item(item) for item in result['output']]
+        return result
+
+    def output_item(self, item):
+        if not isinstance(item, dict):
+            return item
+        result = copy.deepcopy(item)
         if result.get('type') == 'function_call' and result.get('name') in self.groups:
             namespace, children = self.groups[result['name']]
             call = json.loads(result.get('arguments') or '{}')
@@ -868,15 +1192,24 @@ class Translation:
             self.response_status = event.get('response', {}).get('status') or event['type'].split('.')[-1]
             self.usage = event.get('response', {}).get('usage')
         item = event.get('item', {})
-        if event.get('type') == 'response.output_item.added' and item.get('name') in self.groups:
+        if (event.get('type') == 'response.output_item.added' and
+                item.get('type') == 'function_call' and item.get('name') in self.groups):
             self.pending.add(item.get('id'))
             return b''
         if event.get('type', '').startswith('response.function_call_arguments.') and event.get('item_id') in self.pending:
             return b''
         obj = self.output(event)
+        if obj == event:
+            return block + b'\n\n'
         retained = [line for line in lines if not line.startswith('data:')]
         retained.append('data: ' + json.dumps(obj, separators=(',', ':')))
         return ('\n'.join(retained) + '\n\n').encode()
+
+
+class AzureTranslation(Translation):
+    def history_items(self, source):
+        # Ciphertext origin is unknown locally. Azure validates it; never repair a rejection by dropping history.
+        return copy.deepcopy(source)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -894,7 +1227,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def error(self, code, message, headers=None, provider_body=None):
+    def error(self, code, message, headers=None, provider_body=None, budget=None):
         body = json.dumps({'error': message}).encode() if provider_body is None else provider_body
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
@@ -902,9 +1235,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for name, value in provider_response_headers(headers or {}).items():
             self.send_header(name, value)
         self.send_header('Connection', 'close')
-        self.end_headers()
-        self.wfile.write(body)
         self.close_connection = True
+        self.finish_headers(budget)
+        self.write_output(body, budget)
 
     def begin_event_stream(self, route):
         self.send_response(200)
@@ -917,16 +1250,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-    def stream_failure(self, status, message):
+    def stream_failure(self, status, message, budget=None):
         code = 'rate_limit_exceeded' if status == 429 else ('invalid_request_error' if status == 400 else 'server_error')
         event = {'type': 'response.failed', 'response': {'id': 'resp_harbor_' + secrets.token_hex(12),
                  'object': 'response', 'status': 'failed', 'output': [],
                  'error': {'code': code, 'message': message}}}
         try:
-            self.wfile.write(('event: response.failed\ndata: ' + json.dumps(event) + '\n\n').encode())
-            self.wfile.flush()
+            self.write_output(('event: response.failed\ndata: ' + json.dumps(event) + '\n\n').encode(), budget)
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
             self.close_connection = True
+
+    def finish_headers(self, budget=None):
+        if budget is None:
+            return self.end_headers()
+        self.connection.settimeout(budget.remaining())
+        budget.io(self.end_headers)
+
+    def write_output(self, value, budget=None, *, terminal=False):
+        if budget is None:
+            self.wfile.write(value)
+            self.wfile.flush()
+            return
+        self.connection.settimeout(budget.remaining())
+        if terminal:
+            # A client may close immediately after receiving the terminal frame.
+            # Successful write/flush is the delivery boundary, not a later read.
+            self.wfile.write(value)
+            self.wfile.flush()
+            budget.finish()
+            return
+        budget.io(self.wfile.write, value)
+        self.connection.settimeout(budget.remaining())
+        budget.io(self.wfile.flush)
+
+    @staticmethod
+    def response_lines(upstream, budget=None):
+        iterator = iter(upstream)
+        while True:
+            try:
+                yield next(iterator) if budget is None else budget.io(next, iterator)
+            except StopIteration:
+                return
 
     def do_GET(self):
         global USAGE_COLLECTOR
@@ -951,7 +1315,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.dumps({'routing': 'per-task', 'last_request': LAST_ROUTE, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
-                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None}).encode()
+                               'azure_traffic': AZURE_ADMISSION.snapshot(),
+                               'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None,
+                               'runtime': RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id},
+                               'configuration_revision': configuration_revision(),
+                               'maintenance': RUNTIME.maintenance_state(configuration_revision()) if RUNTIME else None}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -989,20 +1357,307 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return False
 
     def client_disconnected(self):
-        readable, _, _ = select.select([self.connection], [], [], 0)
-        return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+        except (ConnectionResetError, ConnectionAbortedError):
+            return True
+
+    def server_proof(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
+            return self.error(400, 'Browser origins and transfer-encoded requests are not supported')
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= 256:
+            return self.error(400, 'Invalid gateway handshake')
+        value = json.loads(self.rfile.read(length))
+        if (not isinstance(value, dict) or set(value) != {'nonce'}
+                or not isinstance(value['nonce'], str) or not re.fullmatch('[a-f0-9]{64}', value['nonce'])):
+            return self.error(400, 'Invalid gateway handshake')
+        state = RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id}
+        runtime = {key: state[key] for key in ('mode', 'protocol_version', 'boot_id', 'runtime_id') if key in state}
+        binding = _control_module.connection_binding(self.connection, server=True)
+        proof = _control_module.proof_digest(_control_module.read_proof_secret(TOKEN_PATH), value['nonce'], runtime, binding)
+        body = json.dumps({'runtime': runtime, 'connection': binding, 'proof': proof}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.connection.settimeout(5)
+
+    def commit_saved_maintenance(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        budget = _transport_module.RequestBudget(4)
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 2048 or self.headers.get('Content-Encoding', 'identity') != 'identity':
+                return self.error(400, 'Invalid maintenance commit request', budget=budget)
+            budget.register(self.connection)
+            try:
+                payload = json.loads(budget.io(self.rfile.read, length))
+            finally:
+                budget.unregister(self.connection)
+            budget.check()
+            value = commit_maintenance(payload)
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.finish_headers(budget)
+            self.write_output(body, budget)
+        except _runtime_module.MaintenanceError as error:
+            self.error(409, str(error), budget=budget)
+        except (ValueError, TypeError, KeyError, _control_module.ControlError):
+            self.error(400, 'Invalid maintenance commit context', budget=budget)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+            self.close_connection = True
+        finally:
+            budget.finish()
+
+    def restore_saved_connections(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        reading_body = True
+        budget = _transport_module.RequestBudget(RESTORE_SECONDS,
+            cancelled=lambda: False if reading_body else self.client_disconnected())
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 32768 or self.headers.get('Content-Encoding', 'identity') != 'identity':
+                return self.error(400, 'Invalid saved connection restore request', budget=budget)
+            self.connection.settimeout(min(3, budget.remaining()))
+            budget.register(self.connection)
+            try:
+                raw = budget.io(self.rfile.read, length)
+            finally:
+                budget.unregister(self.connection)
+            reading_body = False
+            budget.check()
+            payload = json.loads(raw)
+            result = restore_connections(payload, budget)
+            body = json.dumps(result).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.finish_headers(budget)
+            self.write_output(body, budget)
+            return
+        except (RestoreConflict, _runtime_module.MaintenanceError) as error:
+            status, message = 409, str(error)
+        except RestoreUnavailable as error:
+            status, message = 503, str(error)
+        except (_transport_module.RequestCancelled, _admission_module.AdmissionCancelled):
+            if self.client_disconnected():
+                self.close_connection = True
+                return
+            status, message = 503, 'Saved connection verification reached its deadline. Refresh gateway status before retrying.'
+        except (_transport_module.RequestDeadline, _admission_module.AdmissionFull, _admission_module.AdmissionTimeout,
+                OSError, urllib.error.URLError, TimeoutError):
+            status, message = 503, 'Saved connection verification could not complete. Refresh gateway status before retrying.'
+        except (ValueError, TypeError, KeyError, _control_module.ControlError):
+            status, message = 400, 'The restore request does not match valid saved connections and exact configured models.'
+        finally:
+            budget.finish()
+        reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected)
+        try:
+            self.error(status, message, budget=reporting)
+        except (_transport_module.RequestCancelled, _transport_module.RequestDeadline, OSError):
+            self.close_connection = True
+        finally:
+            reporting.finish()
+
+    def verify_route(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        length = int(self.headers.get('Content-Length', '0'))
+        if not 0 < length <= 2048:
+            return self.error(400, 'Verification requires one model identifier')
+        payload = json.loads(self.rfile.read(length))
+        if not isinstance(payload, dict) or set(payload) != {'model'}:
+            return self.error(400, 'Verification accepts only a model identifier')
+        route = requested_route(payload['model'])
+        if route['provider'] not in ('azure', 'openrouter'):
+            return self.error(400, 'Explicit probes currently support Azure and OpenRouter. Other routes require a completed request.')
+        budget = _transport_module.RequestBudget(AZURE_VERIFY_SECONDS, cancelled=self.client_disconnected)
+        try:
+            return self.verify_prepared_route(payload, route, budget)
+        finally:
+            if budget is not None:
+                budget.finish()
+
+    def verify_prepared_route(self, payload, route, budget):
+        revision = None
+        result = 'unavailable'
+        azure_permit = None
+        local_busy = False
+        try:
+            translation, headers, base, route, revision = prepared_routed_request({'model': payload['model'],
+                'input': 'Reply with OK.', 'stream': False, 'max_output_tokens': 64}, self.headers, track_turn=False)
+            headers.update({'Content-Type': 'application/json'})
+            request = urllib.request.Request(base + '/responses', data=json.dumps(translation.request).encode(), headers=headers)
+            deadline = time.monotonic() + AZURE_VERIFY_SECONDS
+            if route['provider'] == 'azure':
+                azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
+                    cancelled=budget.cancelled, timeout=budget.remaining())
+                budget.check()
+            opener = urllib.request.build_opener(NoRedirect, *(budget.http_handlers() if budget else ()))
+            with opener.open(request, timeout=budget.remaining() if budget else min(2, deadline - time.monotonic())) as response:
+                if budget:
+                    budget.check()
+                body = bytearray()
+                while time.monotonic() < deadline and len(body) <= 1024 * 1024:
+                    part = response.read1(4096) if budget is None else budget.io(response.read1, 4096)
+                    if not part:
+                        break
+                    body.extend(part)
+                else:
+                    raise TimeoutError('Verification deadline or response limit exceeded')
+                if budget:
+                    budget.check()
+                if getattr(response, 'length', 0):
+                    raise ValueError('Verification response ended before its declared length')
+                value = json.loads(body)
+                result = 'verified' if response.status == 200 and value.get('status') == 'completed' else 'invalid_response'
+            if budget:
+                budget.check()
+        except (_admission_module.AdmissionCancelled, _transport_module.RequestCancelled):
+            if budget and budget.stop_reason == 'deadline':
+                result = 'busy'
+                local_busy = True
+            else:
+                self.close_connection = True
+                return
+        except _transport_module.RequestDeadline:
+            local_busy = not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
+        except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout):
+            result = 'busy'
+            local_busy = True
+        except urllib.error.HTTPError as error:
+            result = 'auth_failed' if error.code in (401, 403) else 'unavailable'
+            error.close()
+        except (ValueError, OSError, urllib.error.URLError, TimeoutError):
+            if budget:
+                budget.cancelled()
+                if budget.stop_reason == 'cancelled':
+                    self.close_connection = True
+                    return
+                local_busy = budget.stop_reason == 'deadline' and not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
+        finally:
+            if azure_permit is not None:
+                azure_permit.release()
+        if budget and budget.cancelled():
+            if budget.stop_reason == 'cancelled':
+                self.close_connection = True
+                return
+            local_busy = not budget.dispatch_possible
+            result = 'busy' if local_busy else 'unavailable'
+        if local_busy:
+            with ROUTE_LOCK:
+                current = revision is not None and configuration_revision() == revision
+        else:
+            current = record_readiness(route, revision, result)
+        body = json.dumps({'result': result if current else 'configuration_changed', 'verified': result == 'verified' and current,
+                           'boot_id': READINESS.boot_id, 'configuration_revision': revision}).encode()
+        self.send_response(200 if result == 'verified' and current else 503)
+        if local_busy:
+            self.send_header('Retry-After', '1')
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected) if budget and budget.stop_reason == 'deadline' else budget
+        try:
+            self.finish_headers(reporting)
+            self.write_output(body, reporting)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+            self.close_connection = True
+        finally:
+            if reporting is not None and reporting is not budget:
+                reporting.finish()
 
     def do_POST(self):
         global LAST_ROUTE, OPENROUTER_KEY, AZURE_CONNECTION
         started = False
+        streaming_response = False
+        headers_complete = False
         activity_started = False
         activity_status = 'failed'
         activity_http_status = None
         route = None
         pacer = None
         acquired = False
+        request_lease = None
+        azure_permit = None
+        azure_budget = None
+        azure_outcome_known = False
+        maintenance_not_dispatched = False
+        revision = None
         last_heartbeat = float("-inf")
+
+        def azure_stopped():
+            nonlocal activity_status, activity_http_status
+            global LAST_ROUTE
+            if azure_budget is None:
+                return False
+            try:
+                azure_budget.check()
+                return False
+            except (_transport_module.RequestCancelled, _transport_module.RequestDeadline) as error:
+                cancelled = isinstance(error, _transport_module.RequestCancelled)
+                activity_status = 'cancelled' if cancelled else 'failed'
+                activity_http_status = None if cancelled else 504
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='cancelled' if cancelled else 'timeout')
+                self.close_connection = True
+                if not cancelled:
+                    # Reporting has a separate short bound; it cannot restart provider work.
+                    reporting = _transport_module.RequestBudget(.25, cancelled=self.client_disconnected)
+                    try:
+                        message = 'Azure request exceeded its total deadline; no automatic replay was attempted.'
+                        if started and headers_complete and streaming_response:
+                            self.stream_failure(504, message, budget=reporting)
+                        elif not started:
+                            self.error(504, message, budget=reporting)
+                    except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+                        pass
+                    finally:
+                        reporting.finish()
+                return True
+
+        def report_error(code, message, response_headers=None):
+            nonlocal started
+            try:
+                if started:
+                    if headers_complete and streaming_response:
+                        self.stream_failure(code, message, budget=azure_budget)
+                    else:
+                        self.close_connection = True
+                else:
+                    started = True
+                    self.error(code, message, headers=response_headers, budget=azure_budget)
+            except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+                azure_stopped()
+            except OSError:
+                self.close_connection = True
+
         try:
+            if self.path == '/harbor/handshake':
+                return self.server_proof()
+            if self.path in ('/harbor/runtime/promote', '/harbor/runtime/retire', '/harbor/runtime/rollback', '/harbor/runtime/shutdown'):
+                if self.headers.get('Origin') or not self.local_authorized():
+                    return self.error(401, 'Local authorization required')
+                return self.error(409, _runtime_module.LIFECYCLE_GATE)
+            if self.path == '/harbor/maintenance/commit':
+                return self.commit_saved_maintenance()
+            if self.path == '/harbor/providers/restore':
+                return self.restore_saved_connections()
+            if self.path == '/harbor/verify':
+                return self.verify_route()
             if self.path in ('/harbor/providers/openrouter', '/harbor/providers/azure'):
                 if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
@@ -1016,8 +1671,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 endpoint = azure_endpoint(value.get('endpoint')) if self.path.endswith('/azure') and key else None
                 with ROUTE_LOCK:
                     if self.path.endswith('/azure'):
-                        AZURE_CONNECTION = {'key': key, 'endpoint': endpoint} if key else None
+                        connection = {'key': key, 'endpoint': endpoint} if key else None
+                        if connection != AZURE_CONNECTION:
+                            READINESS.invalidate('azure')
+                        AZURE_CONNECTION = connection
                     else:
+                        if OPENROUTER_KEY != key:
+                            READINESS.invalidate('openrouter')
                         OPENROUTER_KEY = key
                 body = b'{"configured":true}'
                 self.send_response(200)
@@ -1066,6 +1726,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.error(401, 'A provider credential is required')
             if (oauth or routed) and not self.local_authorized():
                 return self.error(401, 'Local authorization required')
+            require_inference_admission()
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY:
                 return self.error(413, 'Request body exceeds the adapter limit')
@@ -1081,12 +1742,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             source = json.loads(raw)
             route = None
             if routed:
-                translation, headers, base, route = routed_request(source, self.headers)
+                translation, headers, base, route, revision = prepared_routed_request(source, self.headers)
             else:
                 translation = Translation(source)
                 headers = oauth_headers() if oauth else {'Authorization': authorization}
                 base = OAUTH_BASE if oauth else 'https://api.x.ai/v1'
+            if route and route['provider'] == 'azure':
+                azure_budget = _transport_module.RequestBudget(AZURE_REQUEST_SECONDS, cancelled=self.client_disconnected)
             if route:
+                if RUNTIME is not None:
+                    with ROUTE_LOCK, RUNTIME.lock:
+                        require_inference_admission()
+                        request_lease = RUNTIME.begin(_runtime_module.turn_key(source, self.headers),
+                            request_binding(route, headers, base, translation.request))
                 provider_activity_start(route)
                 activity_started = True
                 with ROUTE_LOCK:
@@ -1096,16 +1764,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             request = urllib.request.Request(base + '/responses',
                 data=json.dumps(translation.request, separators=(',', ':')).encode(),
                 headers=headers)
-            opener = urllib.request.build_opener(NoRedirect)
+            opener = urllib.request.build_opener(NoRedirect, *(azure_budget.http_handlers() if azure_budget else ()))
             def waiting(seconds):
                 global LAST_ROUTE
-                nonlocal started, last_heartbeat
+                nonlocal started, streaming_response, headers_complete, last_heartbeat
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=math.ceil(seconds))
                 if translation.request.get('stream') and time.monotonic() - last_heartbeat >= 10:
                     if not started:
                         self.begin_event_stream(route)
                         started = True
+                        streaming_response = True
+                        headers_complete = True
                     self.wfile.write(b': Model Harbor is waiting for provider capacity\n\n')
                     self.wfile.flush()
                     last_heartbeat = time.monotonic()
@@ -1114,15 +1784,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 deadline = pacer.clock() + BASETEN_WAIT_SECONDS
                 pacer.enter(deadline, self.client_disconnected, waiting)
                 acquired = True
+                require_inference_admission()
                 upstream_response = open_baseten(opener, request, pacer, estimated_tokens(translation.request),
                                                  deadline, self.client_disconnected, waiting)
+            elif route and route['provider'] == 'azure':
+                azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
+                    cancelled=azure_budget.cancelled, timeout=azure_budget.remaining())
+                azure_budget.check()
+                require_inference_admission()
+                upstream_response = opener.open(request, timeout=azure_budget.remaining())
             else:
+                require_inference_admission()
                 upstream_response = opener.open(request, timeout=180)
             with upstream_response as upstream:
+                if azure_budget:
+                    azure_budget.check()
                 if route:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='streaming')
                 content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
+                streaming_response = 'text/event-stream' in content_type
+                response = azure_budget.io(json.load, upstream) if azure_budget and not streaming_response else None
                 if not started:
                     self.send_response(upstream.status)
                     self.send_header('Content-Type', content_type)
@@ -1133,12 +1815,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         self.send_header('X-Model-Harbor-Provider', route['provider'])
                         self.send_header('X-Model-Harbor-Model', route['model'])
                     self.send_header('Connection', 'close')
-                    self.end_headers()
-                    self.close_connection = True
                     started = True
+                    self.close_connection = True
+                    self.finish_headers(azure_budget)
+                    headers_complete = True
                 if 'text/event-stream' in content_type:
                     block = []
-                    for line in upstream:
+                    for line in self.response_lines(upstream, azure_budget):
                         if line.strip():
                             block.append(line.rstrip(b'\r\n'))
                         elif block:
@@ -1146,8 +1829,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             if route and translation.response_status:
                                 with ROUTE_LOCK:
                                     LAST_ROUTE = dict(route, state=translation.response_status)
-                            self.wfile.write(event)
-                            self.wfile.flush()
+                            self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
                             block = []
                             if translation.response_status:
                                 break
@@ -1156,52 +1838,93 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if route and translation.response_status:
                             with ROUTE_LOCK:
                                 LAST_ROUTE = dict(route, state=translation.response_status)
-                        self.wfile.write(event)
+                        self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
                 else:
-                    response = json.load(upstream)
+                    if response is None:
+                        response = json.load(upstream)
                     translation.response_status = response.get('status')
                     translation.usage = response.get('usage')
                     if route:
                         with ROUTE_LOCK:
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
-                    self.wfile.write(json.dumps(translation.output(response)).encode())
+                    self.write_output(json.dumps(translation.output(response)).encode(), azure_budget,
+                                      terminal=translation.response_status == 'completed')
+                azure_outcome_known = translation.response_status == 'completed'
                 activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
+                if route and revision and route['provider'] in ('azure', 'openrouter'):
+                    record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
                 if route and not translation.response_status:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
+            if azure_budget and not azure_outcome_known:
+                azure_budget.check()
         except urllib.error.HTTPError as error:
-            activity_http_status = error.code
-            if route and route['provider'] == 'openrouter' and error.code in (401, 403):
-                with ROUTE_LOCK:
-                    OPENROUTER_KEY = ''
-            if route and route['provider'] == 'azure' and error.code in (401, 403):
-                with ROUTE_LOCK:
-                    if AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
-                        AZURE_CONNECTION = None
-            if route:
-                with ROUTE_LOCK:
-                    LAST_ROUTE = dict(route, state='failed', http_status=error.code)
-            if route and route['provider'] == 'baseten' and error.code in (401, 403):
-                BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
-            # Provider errors contain schema diagnostics, never request headers.
             try:
-                body = error.read(65536)
+                activity_http_status = error.code
+                if route and revision and route['provider'] in ('azure', 'openrouter'):
+                    record_readiness(route, revision, 'auth_failed' if error.code in (401, 403) else 'unavailable')
+                if route and error.code in (401, 403):
+                    reject_provider_credentials(route, headers)
+                if route:
+                    with ROUTE_LOCK:
+                        LAST_ROUTE = dict(route, state='failed', http_status=error.code)
+                if route and route['provider'] == 'baseten' and error.code in (401, 403):
+                    BASETEN_CREDENTIALS.reject(headers.get('Authorization', ''))
+                # Provider errors contain schema diagnostics, never request headers.
+                try:
+                    body = error.read(65536) if azure_budget is None else azure_budget.io(error.read, 65537)
+                    if azure_budget and (len(body) > 65536 or getattr(error.fp, 'length', 0)):
+                        report_error(502, 'Azure returned an incomplete or oversized error response; delivery is uncertain.')
+                        return
+                finally:
+                    error.close()
+                response_headers = provider_response_headers(error.headers)
+                if pacer and error.code in (429, 529):
+                    response_headers['retry-after'] = str(max(1, math.ceil(pacer.cooldown - pacer.clock())))
+                try:
+                    provider_error = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    provider_error = {'error': body.decode('utf-8', errors='replace')}
+                    body = json.dumps(provider_error).encode()
+                if started:
+                    detail = provider_error.get('error', provider_error) if isinstance(provider_error, dict) else provider_error
+                    message = detail.get('message', str(detail)) if isinstance(detail, dict) else str(detail)
+                    self.stream_failure(error.code, message)
+                else:
+                    if azure_budget:
+                        started = True
+                    self.error(error.code, None, headers=response_headers, provider_body=body, budget=azure_budget)
+                if azure_budget:
+                    azure_outcome_known = True
+            except Exception:
+                if azure_budget is None:
+                    raise
+                if not azure_stopped():
+                    self.close_connection = True
             finally:
                 error.close()
-            response_headers = provider_response_headers(error.headers)
-            if pacer and error.code in (429, 529):
-                response_headers['retry-after'] = str(max(1, math.ceil(pacer.cooldown - pacer.clock())))
-            try:
-                provider_error = json.loads(body)
-            except (ValueError, UnicodeDecodeError):
-                provider_error = {'error': body.decode('utf-8', errors='replace')}
-                body = json.dumps(provider_error).encode()
-            if started:
-                detail = provider_error.get('error', provider_error) if isinstance(provider_error, dict) else provider_error
-                message = detail.get('message', str(detail)) if isinstance(detail, dict) else str(detail)
-                self.stream_failure(error.code, message)
-            else:
-                self.error(error.code, None, headers=response_headers, provider_body=body)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+            azure_stopped()
+        except _admission_module.AdmissionCancelled:
+            if azure_stopped():
+                return
+            activity_status = 'cancelled'
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='cancelled')
+            self.close_connection = True
+        except (_admission_module.AdmissionFull, _admission_module.AdmissionTimeout) as error:
+            if azure_stopped():
+                return
+            activity_http_status = 503
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=1)
+            report_error(503, str(error), {'Retry-After': '1'})
+        except MaintenanceBlocked as error:
+            maintenance_not_dispatched = True
+            activity_http_status = 503
+            report_error(503, str(error), {'Retry-After': '1'})
         except PacingTimeout as error:
             activity_http_status = 503
             if pacer:
@@ -1214,20 +1937,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self.error(503, str(error), headers={'Retry-After': str(error.retry_after)})
         except ValueError as error:
-            if started:
-                self.stream_failure(400, str(error))
-            else:
-                self.error(400, str(error))
+            if azure_stopped():
+                return
+            report_error(400, str(error))
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
+            if azure_stopped():
+                return
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='disconnected')
             self.close_connection = True
         except Exception as error:
+            if azure_stopped():
+                return
             if not started:
-                self.error(502, 'Adapter failed: ' + type(error).__name__)
+                report_error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if azure_budget is not None:
+                azure_budget.finish()
+            if azure_permit is not None:
+                azure_permit.release()
+            if request_lease is not None:
+                # A completed response can still request tools. Keep the turn owner.
+                known = (azure_outcome_known or not azure_budget.dispatch_possible) if azure_budget is not None else (activity_status == 'completed' or activity_http_status is not None and not started)
+                RUNTIME.finish(request_lease, known or maintenance_not_dispatched)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:
@@ -1235,17 +1969,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pacer.leave()
 
 
+class GatewayHTTPServer(http.server.ThreadingHTTPServer):
+    # Avoid reverse DNS during startup, including isolated test environments.
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
+
+
+def main():
+    global RUNTIME, TASK_REPAIRS
+    independent = os.environ.get('MODEL_HARBOR_INDEPENDENT') == '1'
+    if independent:
+        directory = os.environ.get('MODEL_HARBOR_STATE_DIR')
+        runtime_id = os.environ.get('MODEL_HARBOR_RUNTIME_DIGEST', '')
+        if not directory or not re.fullmatch('[a-f0-9]{64}', runtime_id):
+            raise ValueError('Independent gateway requires a state directory and retained artifact digest')
+        from gateway_service import inventory, runtime_digest
+        if runtime_digest(inventory(pathlib.Path(__file__).parent)) != runtime_id:
+            raise ValueError('Runtime payload does not match its retained artifact digest')
+        RUNTIME = _runtime_module.GatewayRuntime(directory, runtime_id, READINESS.boot_id)
+    server = None
+    try:
+        # Bind before starting any repair monitor or modifying provider state.
+        server = GatewayHTTPServer(ADDRESS, Handler)
+        server.daemon_threads = False
+        ensure_bridge_token()
+        _control_module.ensure_proof_secret(TOKEN_PATH)
+        from task_repair import RepairMonitor
+        TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
+        TASK_REPAIRS.start()
+        if not independent:
+            parent_pid = os.getppid()
+            def watch_parent():
+                while os.getppid() == parent_pid:
+                    time.sleep(2)
+                server.shutdown()
+            threading.Thread(target=watch_parent, daemon=True).start()
+        server.serve_forever()
+    finally:
+        if server:
+            server.server_close()
+        if RUNTIME:
+            RUNTIME.close()
+
+
 if __name__ == '__main__':
-    ensure_bridge_token()
-    from task_repair import RepairMonitor
-    TASK_REPAIRS = RepairMonitor(CONFIG_DIR)
-    TASK_REPAIRS.start()
-    server = http.server.ThreadingHTTPServer(ADDRESS, Handler)
-    server.daemon_threads = True
-    parent_pid = os.getppid()
-    def watch_parent():
-        while os.getppid() == parent_pid:
-            time.sleep(2)
-        server.shutdown()
-    threading.Thread(target=watch_parent, daemon=True).start()
-    server.serve_forever()
+    main()

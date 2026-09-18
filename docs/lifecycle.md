@@ -17,7 +17,7 @@ The menu-bar icon remains available even when the main window is closed, so you 
 Closing the Model Harbor window does **not** stop the bridge. The local Responses bridge keeps running, provider connections stay active, and task models remain routed.
 
 - **Close the window** to put Harbor back in the menu bar.
-- **Quit Harbor** explicitly from the menu-bar menu, the Dock menu, or **Settings → Advanced**.
+- **Quit Harbor** explicitly from the menu-bar menu, the Dock menu, or **Settings → Advanced**. With the new independent service, this stops the UI and its polling; inference continues. Older GUI-owned installations must keep the app running until a [coordinated migration](runtime-service.md).
 
 In the menu-bar popup, open **Settings** and use the footer’s **Open Model Harbor** action to reopen the main window. The same action is available from the Dock icon when Harbor is shown in the Dock.
 

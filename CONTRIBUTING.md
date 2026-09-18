@@ -30,11 +30,19 @@ For UI changes, check light/dark macOS appearance and keyboard access. Use injec
 
 With the Codex CLI on PATH, run `python3 scripts/verify-task-repair.py`. It creates a synthetic task with a mismatched provider in a temporary Codex home and demonstrates both inference and remote-compaction failures against a local mock endpoint. It archives the task to release its writer lock, repairs the saved provider, and resumes the same task without restarting Codex. It verifies paginated conversation bytes survive repair, then checks that compaction uses Harbor's normal Responses route with the same model and that another turn completes. It uses synthetic keys and makes no real inference requests. Verified with Codex CLI 0.150.1; protocol changes may require updating this optional check.
 
+## Installing updates
+
+Read [Protect tasks during Harbor updates](docs/safe-updates.md) before touching a running installation. Builds stay staged during active work; zero active HTTP requests does not mean a task has finished. The app currently owns the shared gateway, so an app restart affects routed tasks.
+
+After building, run `python3 scripts/stage-update.py --app "build/Build/Products/Debug/Model Harbor.app"` to create a verified copy and manifest under `build/staged-updates/`. This does not launch or install it. The manifest identifies the copied bytes and labels the checkout revision as contextual, not verified build provenance. See the [audit and execution plan](docs/update-safety-audit.md) for remaining runtime work.
+
 ## Live verification
 
 `python3 scripts/verify-live-switch.py --live --installed` explicitly opts into provider usage with synthetic tasks and the running installed app. It requires configured accounts and may request one Baseten unlock if the session is not already unlocked. `--without-baseten` avoids requesting a Baseten credential. Omit `--installed` to exercise the source bridge.
 
 Do not run live account verification in a pull-request workflow. Report the exact models, checks, and limitations you verified. An automated test pass does not establish provider entitlement or every tool's compatibility.
+
+`python3 scripts/verify-openrouter-tools.py --live` exercises a synthetic Fable 5.1 tool call and streamed tool-result continuation through the source bridge using the saved OpenRouter credential. Add `--installed` to test the running gateway. Both consume OpenRouter credit; neither reads or resumes real tasks. The check includes Codex's `tool_choice: auto` and `parallel_tool_calls: false`, which a text-only connection probe would miss.
 
 ## Pull requests
 

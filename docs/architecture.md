@@ -89,7 +89,7 @@ Treat the entire Codex directory as private. Metadata can still contain account 
 
 ## Window lifecycle, startup, and warm-up
 
-`AppDelegate` owns a retained main window. `WindowLifecycleController` hides that window on close and changes macOS activation policy to keep Harbor in the Dock or only the menu bar. The SwiftUI menu-bar scene stays available. Explicit application termination stops the bridge.
+`AppDelegate` owns a retained main window. `WindowLifecycleController` hides that window on close and changes macOS activation policy to keep Harbor in the Dock or only the menu bar. The SwiftUI menu-bar scene stays available. In the independent runtime, application termination stops UI polling and warm-up, while the retained gateway continues serving. The existing GUI-owned installation must be migrated during coordinated maintenance before this behavior applies. See [runtime ownership](runtime-service.md).
 
 `LifecyclePreferences` persists presentation and close choices in user defaults. `LoginItemController` reads `SMAppService.mainApp` for OS registration status and registers only after an explicit user toggle. The open-application AppleEvent distinguishes login launches from manual launches so startup can stay quiet.
 
@@ -128,7 +128,7 @@ See [lifecycle behavior](lifecycle.md) and [usage sources](USAGE.md). Usage refr
 
 OpenRouter setup validates a key with `GET https://openrouter.ai/api/v1/key` and fetches `GET /models`. The app stores that key in Keychain and sends its working copy only to the owner-authenticated loopback configuration endpoint. The bridge routes explicit `harbor/openrouter/<model>` requests to `https://openrouter.ai/api/v1/responses`, using only the OpenRouter credential. It rejects unknown model IDs. Upstream authentication failures clear the in-memory credential. Disconnect removes the saved key and keeps catalog choices for reconnecting.
 
-The public model catalog declares tools, reasoning, input modalities, and context capacity. These declarations determine available choices; they do not substitute for model-specific live verification. OpenRouter's official Responses schema is maintained in [its TypeScript SDK](https://github.com/OpenRouterTeam/typescript-sdk/blob/main/src/models/responsesrequest.ts).
+The public model catalog declares tools, reasoning, input modalities, and context capacity. These declarations determine available choices; they do not substitute for model-specific live verification. Harbor uses OpenRouter's normal endpoint selection with `require_parameters: false`, preserving the exact model ID and supplied tool settings. Strict parameter filtering rejects every Fable 5.1 endpoint when a Responses tool request includes `tool_choice: auto` or `parallel_tool_calls: false`, even though normal routing completes those requests. Endpoint providers may ignore parameters they do not support; Harbor does not promise that every tool constraint is enforced. OpenRouter's official Responses schema is maintained in [its TypeScript SDK](https://github.com/OpenRouterTeam/typescript-sdk/blob/main/src/models/responsesrequest.ts).
 
 ## Azure OpenAI
 

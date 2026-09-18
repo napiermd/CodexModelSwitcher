@@ -1,0 +1,491 @@
+{
+  "run_id": 35277669718,
+  "repository": "napiermd/model-harbor",
+  "head_sha": "30b5ef067a1a5ec25b1926350b91540ec9fbf7eb",
+  "live_azure_tested": false,
+  "scope": "Three independent complete synthetic contract matrices per native Linux container architecture",
+  "architectures": {
+    "amd64": {
+      "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+      "checkout_sha": "eccf50640b32aa01fd809af6811ada00514f1b90",
+      "artifact_name": "bifrost-native-contract-amd64",
+      "samples": [
+        {
+          "sample": 1,
+          "report_sha256": "d1765fdcd79ac9a71a856f9affe4e0fefe223974f20b2c07bc0ea316f769afd8",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.19,
+              "first_output_ms": 2.16,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 501.01
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3005.41,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 56.35,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        },
+        {
+          "sample": 2,
+          "report_sha256": "76f7799ad41c21a836db3e0617db262f56408b7870c10684f3671e8f36528272",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.28,
+              "first_output_ms": 2.24,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 500.73
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3005.98,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 57.02,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        },
+        {
+          "sample": 3,
+          "report_sha256": "0535faff1e5595a5230422c260f46a2b4c44f8f7f4f6bc873c4c49e5f32f1dcb",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.28,
+              "first_output_ms": 2.25,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 501.04
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3005.7,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 56.77,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        }
+      ]
+    },
+    "arm64": {
+      "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "checkout_sha": "eccf50640b32aa01fd809af6811ada00514f1b90",
+      "artifact_name": "bifrost-native-contract-arm64",
+      "samples": [
+        {
+          "sample": 1,
+          "report_sha256": "c7509c4d2bcb06771ae51a8ffffa113e27a2b98266fee77381e578d6d2807650",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.31,
+              "first_output_ms": 2.25,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 500.68
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3002.52,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 52.58,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        },
+        {
+          "sample": 2,
+          "report_sha256": "d7381d003d537f703e1d78888a072215cd29adde461247d201345b8670286e2f",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.17,
+              "first_output_ms": 2.11,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 500.58
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3002.32,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 52.83,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        },
+        {
+          "sample": 3,
+          "report_sha256": "cbe053d5532da8e74e9f771f08fb3072101d20f03913406e6a7f1ae525ffc81c",
+          "cases": 24,
+          "all_synthetic_gates_passed": true,
+          "cleanup_errors": [],
+          "selected_observations": {
+            "cancel": {
+              "case": "cancel",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "nonempty_output_received": true,
+                "no_terminal_success": true,
+                "no_replay_after_cancel": true,
+                "upstream_cancel_within_two_seconds": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 200,
+              "elapsed_ms": 2.35,
+              "first_output_ms": 2.28,
+              "response_event_types": [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta"
+              ],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null,
+              "no_replay_observation_seconds": 2,
+              "upstream_disconnect_after_cancel_ms": 500.98
+            },
+            "stall": {
+              "case": "stall",
+              "passed": true,
+              "checks": {
+                "upstream_reached": true,
+                "bounded_attempts": true,
+                "bounded_deadline": true,
+                "timeout_surfaces": true
+              },
+              "upstream_attempts": 1,
+              "http_status": 504,
+              "elapsed_ms": 3003.09,
+              "first_output_ms": null,
+              "response_event_types": [],
+              "error_type": null,
+              "input_changed_paths": [],
+              "retry_gap_ms": null
+            },
+            "concurrent_workers": {
+              "case": "concurrent_workers",
+              "passed": true,
+              "checks": {
+                "three_upstream_requests": true,
+                "three_simultaneous_upstream_requests": true,
+                "bounded_deadline": true,
+                "worker_0_own_response": true,
+                "worker_0_one_attempt": true,
+                "worker_1_own_response": true,
+                "worker_1_one_attempt": true,
+                "worker_2_own_response": true,
+                "worker_2_one_attempt": true
+              },
+              "upstream_attempts": 3,
+              "elapsed_ms": 53.26,
+              "http_statuses": [
+                200,
+                200,
+                200
+              ],
+              "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

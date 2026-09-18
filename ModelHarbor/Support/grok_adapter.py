@@ -66,6 +66,11 @@ _stream_spec.loader.exec_module(_stream_module)
 _transport_spec = importlib.util.spec_from_file_location('harbor_azure_transport', pathlib.Path(__file__).with_name('azure_transport.py'))
 _transport_module = importlib.util.module_from_spec(_transport_spec)
 _transport_spec.loader.exec_module(_transport_module)
+_metrics_spec = importlib.util.spec_from_file_location('harbor_request_metrics', pathlib.Path(__file__).with_name('request_metrics.py'))
+_metrics_module = importlib.util.module_from_spec(_metrics_spec)
+_metrics_spec.loader.exec_module(_metrics_module)
+REQUEST_METRICS = _metrics_module.Recorder()
+REQUEST_METRICS_ENABLED = os.environ.get('MODEL_HARBOR_REQUEST_METRICS') == '1'
 
 
 _CATALOG_VERSION = None
@@ -121,7 +126,11 @@ def inspect_catalog(directory, current_version):
 
 def configuration_revision(credentials=None):
     digest = hashlib.sha256()
-    paths = [CONFIG_DIR / 'model-switcher.json'] + sorted((CONFIG_DIR / 'model-catalogs').glob('*.json'))
+    # The merged catalog is a Codex picker publication, not gateway routing
+    # state. Refreshing its metadata must not invalidate active turn bindings.
+    catalogs = [path for path in (CONFIG_DIR / 'model-catalogs').glob('*.json')
+                if path.name != 'model-harbor.json']
+    paths = [CONFIG_DIR / 'model-switcher.json'] + sorted(catalogs)
     for path in paths:
         digest.update(path.name.encode())
         if path.is_file():
@@ -1389,7 +1398,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/harbor/status':
             if self.headers.get('Origin') or not self.local_authorized():
                 return self.error(401, 'Local authorization required')
-            body = json.dumps({'routing': 'per-task', 'recent_failures': list(RECENT_FAILURES), 'catalog': catalog_diagnostics(), 'last_request': LAST_ROUTE, 'providers': provider_status(),
+            body = json.dumps({'routing': 'per-task', 'recent_failures': list(RECENT_FAILURES), 'catalog': catalog_diagnostics(), 'last_request': LAST_ROUTE,
+                               'request_metrics': {'enabled': REQUEST_METRICS_ENABLED, 'records': REQUEST_METRICS.snapshot()}, 'providers': provider_status(),
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
                                'azure_traffic': AZURE_ADMISSION.snapshot(),
@@ -1730,6 +1740,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         azure_outcome_known = False
         maintenance_not_dispatched = False
         revision = None
+        metrics_handle = None
         request_started_at = time.monotonic()
         failure_kind = None
         last_heartbeat = float("-inf")
@@ -1899,8 +1910,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     LAST_ROUTE = dict(route, state='started')
             headers.update({'Content-Type': 'application/json',
                             'Accept': 'text/event-stream' if translation.request.get('stream') else 'application/json'})
+            upstream_body = json.dumps(translation.request, separators=(',', ':')).encode()
+            if REQUEST_METRICS_ENABLED:
+                metrics_handle = REQUEST_METRICS.begin(source, translation.request, route, upstream_body)
             request = urllib.request.Request(base + '/responses',
-                data=json.dumps(translation.request, separators=(',', ':')).encode(),
+                data=upstream_body,
                 headers=headers)
             opener = urllib.request.build_opener(NoRedirect, *(azure_budget.http_handlers() if azure_budget else ()))
             def waiting(seconds):
@@ -2132,6 +2146,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         'at': time.time()})
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
+            if metrics_handle is not None:
+                metric_state = ('completed' if activity_status == 'completed' else
+                                'cancelled' if activity_status == 'cancelled' else
+                                'disconnected' if failure_kind == 'connection_interrupted' else
+                                'failed' if activity_http_status is not None or failure_kind else 'incomplete')
+                REQUEST_METRICS.finish(metrics_handle, metric_state, translation.usage)
             if acquired:
                 pacer.finish(translation.usage)
                 pacer.leave()

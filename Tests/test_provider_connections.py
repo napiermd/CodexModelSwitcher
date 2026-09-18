@@ -24,7 +24,7 @@ class ProviderConnectionsTests(unittest.TestCase):
         token = self.root / 'token'
         token.write_text('synthetic-owner-token')
         (self.root / 'model-switcher.json').write_text(json.dumps({'services': [{'id': 'openrouter', 'models': [{'id': 'fixture/coder'}]}]}))
-        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {}), ('READINESS', bridge._runtime_module.RouteReadiness())]:
+        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {}), ('READINESS', bridge._runtime_module.RouteReadiness()), ('REQUEST_METRICS', bridge._metrics_module.Recorder()), ('REQUEST_METRICS_ENABLED', True)]:
             patcher = patch.object(bridge, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -240,6 +240,14 @@ class ProviderConnectionsTests(unittest.TestCase):
         self.assertEqual((status, body['status']), (200, 'completed'))
         activity = bridge.provider_status()['activity']['openrouter']
         self.assertEqual((activity['completed'], activity['active'], activity['failed']), (1, 0, 0))
+        metric = bridge.REQUEST_METRICS.snapshot()[-1]
+        self.assertEqual(metric['state'], 'completed')
+        self.assertEqual(metric['wire_bytes'], len(opener.return_value.open.call_args.args[0].data))
+        self.assertEqual(metric['provider'], 'openrouter')
+        status, reported = self.request('GET', '/harbor/status')
+        self.assertEqual(status, 200)
+        self.assertTrue(reported['request_metrics']['enabled'])
+        self.assertEqual(reported['request_metrics']['records'][-1], metric)
 
     def test_router_auth_rejection_clears_cached_key(self):
         bridge.OPENROUTER_KEY = 'synthetic-router-key'

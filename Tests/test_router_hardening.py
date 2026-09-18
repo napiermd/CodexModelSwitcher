@@ -81,6 +81,25 @@ class LifecycleTests(unittest.TestCase):
             self.assertIn('native_client_version_mismatch', report['warnings'])
             self.assertIn('published_sources_changed', report['warnings'])
 
+    def test_merged_catalog_refresh_does_not_change_gateway_binding_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            catalogs = root / 'model-catalogs'
+            catalogs.mkdir()
+            (root / 'model-switcher.json').write_text('{"services":[]}')
+            source = catalogs / 'azure.json'
+            source.write_text('{"models":[]}')
+            merged = catalogs / 'model-harbor.json'
+            merged.write_text('{"models":[]}')
+            token = root / 'token'
+            token.write_text('synthetic-token')
+            with patch.object(bridge, 'CONFIG_DIR', root), patch.object(bridge, 'TOKEN_PATH', token):
+                before = bridge.configuration_revision([None, ''])
+                merged.write_text('{"models":[],"harbor_sources":[]}')
+                self.assertEqual(bridge.configuration_revision([None, '']), before)
+                source.write_text('{"models":[{"slug":"changed"}]}')
+                self.assertNotEqual(bridge.configuration_revision([None, '']), before)
+
 
 class NativeImagesTests(unittest.TestCase):
     setUp = connections.ProviderConnectionsTests.setUp

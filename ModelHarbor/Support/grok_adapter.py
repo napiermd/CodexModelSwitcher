@@ -226,7 +226,7 @@ def validate_restore(payload):
             translation = AzureTranslation(azure_request(source))
             headers, base = {'api-key': connection['key'], 'User-Agent': 'ModelHarbor/1.0'}, connection['endpoint']
         else:
-            source['provider'] = {'require_parameters': True}
+            source['provider'] = {'require_parameters': False}
             translation = Translation(source)
             headers, base = {'Authorization': 'Bearer ' + connection['key'], 'X-Title': 'Model Harbor'}, 'https://openrouter.ai/api/v1'
         prepared.append((translation, headers, base, route))
@@ -691,8 +691,13 @@ def routed_request(source, headers, *, track_turn=True):
     elif route['provider'] == 'openrouter':
         upstream_headers = openrouter_headers()
         base = 'https://openrouter.ai/api/v1'
-        # Request routing must fail instead of silently switching to a different model.
-        source['provider'] = {'require_parameters': True}
+        # Endpoint parameter declarations are incomplete for Responses tools.
+        # Keep the requested parameters and exact model; allow normal endpoint
+        # selection instead of excluding every tool-capable Fable 5.1 endpoint.
+        source['provider'] = {'require_parameters': False}
+        # Bound the reservation when Codex omits an output budget. OpenRouter
+        # otherwise reserves the model maximum, including concurrent requests.
+        source.setdefault('max_output_tokens', 32768)
         reasoning = source.get('reasoning')
         if isinstance(reasoning, dict) and reasoning.get('effort') == 'none':
             source.pop('reasoning', None)
@@ -1258,12 +1263,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.connection.settimeout(budget.remaining())
         budget.io(self.end_headers)
 
-    def write_output(self, value, budget=None):
+    def write_output(self, value, budget=None, *, terminal=False):
         if budget is None:
             self.wfile.write(value)
             self.wfile.flush()
             return
         self.connection.settimeout(budget.remaining())
+        if terminal:
+            # A client may close immediately after receiving the terminal frame.
+            # Successful write/flush is the delivery boundary, not a later read.
+            self.wfile.write(value)
+            self.wfile.flush()
+            budget.finish()
+            return
         budget.io(self.wfile.write, value)
         self.connection.settimeout(budget.remaining())
         budget.io(self.wfile.flush)
@@ -1814,7 +1826,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             if route and translation.response_status:
                                 with ROUTE_LOCK:
                                     LAST_ROUTE = dict(route, state=translation.response_status)
-                            self.write_output(event, azure_budget)
+                            self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
                             block = []
                             if translation.response_status:
                                 break
@@ -1823,7 +1835,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if route and translation.response_status:
                             with ROUTE_LOCK:
                                 LAST_ROUTE = dict(route, state=translation.response_status)
-                        self.write_output(event, azure_budget)
+                        self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
                 else:
                     if response is None:
                         response = json.load(upstream)
@@ -1832,16 +1844,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if route:
                         with ROUTE_LOCK:
                             LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
-                    self.write_output(json.dumps(translation.output(response)).encode(), azure_budget)
+                    self.write_output(json.dumps(translation.output(response)).encode(), azure_budget,
+                                      terminal=translation.response_status == 'completed')
+                azure_outcome_known = translation.response_status == 'completed'
                 activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
                 if route and revision and route['provider'] in ('azure', 'openrouter'):
                     record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
                 if route and not translation.response_status:
                     with ROUTE_LOCK:
                         LAST_ROUTE = dict(route, state='finished')
-            if azure_budget:
+            if azure_budget and not azure_outcome_known:
                 azure_budget.check()
-                azure_outcome_known = activity_status == 'completed'
         except urllib.error.HTTPError as error:
             try:
                 activity_http_status = error.code

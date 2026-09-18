@@ -120,6 +120,54 @@ class AzureHandlerAdmissionTests(unittest.TestCase):
         self.assertEqual(bridge.AZURE_ADMISSION.snapshot()['active'], 0)
         self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
 
+    def test_terminal_disconnect_during_upstream_close_allows_same_turn_continuation(self):
+        closing = threading.Event()
+        release = threading.Event()
+        original_budget = bridge._transport_module.RequestBudget
+        def dispatched_budget(*args, **kwargs):
+            budget = original_budget(*args, **kwargs)
+            budget.mark_dispatch_possible()
+            return budget
+
+        class Stream:
+            status = 200
+            headers = {'Content-Type': 'text/event-stream'}
+            def __enter__(self): return self
+            def __exit__(self, *_):
+                closing.set()
+                if not release.wait(2):
+                    raise TimeoutError('Client did not close')
+            def __iter__(self):
+                yield b'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n'
+                yield b'\n'
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            budget_patch = patch.object(bridge._transport_module, 'RequestBudget', side_effect=dispatched_budget)
+            budget_patch.start()
+            self.addCleanup(budget_patch.stop)
+            opener.return_value.open.return_value = Stream()
+            client = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=2)
+            client.request('POST', '/harbor/v1/responses', json.dumps(self.source('compact-close', True)),
+                           {'Authorization': 'Bearer synthetic-owner-token'})
+            held_socket = client.sock.dup()
+            response = client.getresponse()
+            try:
+                self.assertIn(b'response.completed', response.readline())
+                while response.readline().strip():
+                    pass
+                self.assertTrue(closing.wait(1))
+                held_socket.shutdown(socket.SHUT_RDWR)
+                held_socket.close()
+                response.close()
+                client.close()
+            finally:
+                release.set()
+            self.wait_for(lambda: self.runtime.status()['active_requests'] == 0)
+            self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+            opener.return_value.open.return_value = self.completed()
+            self.assertEqual(self.inference('compact-close')[0], 200)
+            self.assertEqual(opener.return_value.open.call_count, 2)
+
     def test_queue_overflow_and_timeout_do_not_dispatch_or_poison_turn(self):
         for max_waiting in (0, 1):
             with self.subTest(max_waiting=max_waiting):

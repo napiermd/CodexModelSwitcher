@@ -1,5 +1,28 @@
 import Foundation
 
+struct APIConnectionPresentation {
+    let credentialsAvailable: Bool
+    let proofs: [[String: Any]]
+    let provider: String
+    let revision: String
+    let bootID: String
+
+    private var current: [[String: Any]] {
+        proofs.filter { $0["provider"] as? String == provider
+            && $0["configuration_revision"] as? String == revision
+            && $0["boot_id"] as? String == bootID }
+    }
+    var connected: Bool {
+        credentialsAvailable && current.contains { $0["result"] as? String == "verified" }
+            && !current.contains { $0["result"] as? String == "auth_failed" }
+    }
+    var label: String {
+        if current.contains(where: { $0["result"] as? String == "auth_failed" }) { return "Reconnect required" }
+        if connected { return "Connected" }
+        return credentialsAvailable ? "Configured" : "Not connected"
+    }
+}
+
 struct ProviderDefinition: Identifiable {
     let id: String
     let name: String

@@ -312,6 +312,21 @@ class TurnIdentityTests(unittest.TestCase):
         self.assertNotIn('thread-a', expected)
         self.assertNotIn('turn-a', expected)
 
+    def test_previous_model_compaction_does_not_pin_selected_model(self):
+        metadata = {'thread_id': 'thread-a', 'turn_id': 'turn-a'}
+        normal = {'model': 'harbor/azure/new', 'client_metadata': metadata}
+        compact = {'model': 'harbor/openrouter/old', 'client_metadata': {
+            'x-codex-turn-metadata': json.dumps(dict(metadata, request_kind='compaction',
+                                                    compaction={'phase': 'pre_turn'}))}}
+        self.assertNotEqual(turn_key(normal, {}), turn_key(compact, {}))
+        with tempfile.TemporaryDirectory() as root:
+            runtime = GatewayRuntime(Path(root) / 'state', 'runtime', 'boot')
+            try:
+                runtime.pin(turn_key(compact, {}), lambda: OTHER_ROUTE)
+                self.assertEqual(runtime.pin(turn_key(normal, {}), lambda: ROUTE), ROUTE)
+            finally:
+                runtime.close()
+
     def test_task_and_turn_both_participate_in_identity(self):
         keys = {turn_key({'client_metadata': {'thread_id': task, 'turn_id': turn}}, {})
                 for task, turn in [('task-a', 'turn-a'), ('task-b', 'turn-a'), ('task-a', 'turn-b')]}

@@ -76,15 +76,63 @@ class ProviderConnectionsTests(unittest.TestCase):
         self.assertEqual(headers['Authorization'], 'Bearer synthetic-router-key')
         self.assertEqual(route, {'provider': 'openrouter', 'model': 'fixture/coder'})
         self.assertEqual(translation.request['model'], 'fixture/coder')
-        self.assertTrue(translation.request['provider']['require_parameters'])
+        self.assertFalse(translation.request['provider']['require_parameters'])
         self.assertEqual(translation.request['reasoning']['effort'], 'high')
         with self.assertRaises(ValueError):
             bridge.requested_route('harbor/openrouter/unknown/model')
+
+    def test_openrouter_bounds_only_an_omitted_output_allowance(self):
+        bridge.OPENROUTER_KEY = 'synthetic-router-key'
+        for supplied, expected in ((None, 32768), (512, 512), (64000, 64000)):
+            source = {'model': 'harbor/openrouter/fixture/coder', 'input': []}
+            if supplied is not None:
+                source['max_output_tokens'] = supplied
+            translated, _, _, _ = bridge.routed_request(source, {})
+            self.assertEqual(translated.request['max_output_tokens'], expected)
 
     def test_unconnected_router_fails_without_fallback(self):
         with patch.object(bridge, 'oauth_headers', side_effect=AssertionError('Wrong provider')):
             with self.assertRaisesRegex(ValueError, 'Connect OpenRouter'):
                 bridge.routed_request({'model': 'harbor/openrouter/fixture/coder', 'input': []}, {})
+
+    def test_openrouter_keeps_tool_settings_without_strict_endpoint_filter(self):
+        bridge.OPENROUTER_KEY = 'synthetic-router-key'
+        source = {'model': 'harbor/openrouter/fixture/coder', 'input': [],
+                  'tools': [{'type': 'function', 'name': 'check',
+                             'parameters': {'type': 'object', 'properties': {}}}],
+                  'tool_choice': 'auto', 'parallel_tool_calls': False}
+        translation, _, _, _ = bridge.routed_request(source, {})
+        self.assertEqual(translation.request['tool_choice'], 'auto')
+        self.assertEqual(translation.request['tools'], source['tools'])
+        self.assertEqual(translation.request['provider'], {'require_parameters': False})
+        self.assertFalse(translation.request['parallel_tool_calls'])
+        self.assertEqual(source['tool_choice'], 'auto')
+        for choice in ('required', 'none', {'type': 'function', 'name': 'check'}):
+            with self.subTest(choice=choice):
+                source['tool_choice'] = choice
+                translated, _, _, _ = bridge.routed_request(source, {})
+                self.assertEqual(translated.request['tool_choice'], choice)
+
+    def test_tool_request_reaches_openrouter_without_strict_endpoint_filter(self):
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+        bridge.OPENROUTER_KEY = 'synthetic-router-key'
+        def upstream(request, **kwargs):
+            body = json.loads(request.data)
+            self.assertEqual(body['model'], 'fixture/coder')
+            self.assertEqual(body['provider'], {'require_parameters': False})
+            self.assertEqual(body['tool_choice'], 'auto')
+            self.assertEqual(body['tools'][0]['name'], 'check')
+            return Response(b'{"status":"completed","output":[]}')
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = upstream
+            status, body = self.request(path='/harbor/v1/responses', body={
+                'model': 'harbor/openrouter/fixture/coder', 'input': [], 'stream': False,
+                'tool_choice': 'auto', 'tools': [{'type': 'function', 'name': 'check',
+                'parameters': {'type': 'object', 'properties': {}}}]},
+                headers={'Authorization': 'Bearer synthetic-owner-token'})
+        self.assertEqual((status, body['status']), (200, 'completed'))
 
     def test_concurrent_provider_activity_counts_success_and_incomplete_separately(self):
         a = {'provider': 'baseten', 'model': 'a'}

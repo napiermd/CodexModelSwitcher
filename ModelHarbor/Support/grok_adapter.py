@@ -134,6 +134,36 @@ def request_binding(route, headers, base, request):
     return hmac.new(TOKEN_PATH.read_bytes(), private, hashlib.sha256).hexdigest()
 
 
+class MaintenanceBlocked(ValueError):
+    pass
+
+
+def require_inference_admission():
+    with ROUTE_LOCK:
+        if RUNTIME is not None and RUNTIME.maintenance_state(configuration_revision())['blocked']:
+            raise MaintenanceBlocked('Harbor inference is paused for coordinated maintenance. Restore and verify the exact saved connections, then explicitly commit maintenance.')
+
+
+def commit_maintenance(payload):
+    fields = {'expected_runtime', 'expected_configuration_revision', 'maintenance_id'}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError('Maintenance commit requires runtime identity, configuration revision, and maintenance identifier.')
+    _control_module.validate_runtime(payload['expected_runtime'])
+    runtime = RUNTIME
+    if runtime is None:
+        raise _runtime_module.MaintenanceError('Maintenance commit requires an independent gateway.')
+    with ROUTE_LOCK, runtime.lock:
+        state = runtime.status()
+        identity = {key: state[key] for key in ('protocol_version', 'runtime_id', 'boot_id', 'mode')}
+        revision = configuration_revision()
+        if identity != payload['expected_runtime'] or revision != payload['expected_configuration_revision']:
+            raise _runtime_module.MaintenanceError('The gateway or configuration changed. Refresh status before committing maintenance.')
+        verified = ['harbor/' + p['provider'] + '/' + p['model'] for p in READINESS.snapshot(revision)
+                    if p['verified'] and p['boot_id'] == runtime.boot_id and p['configuration_revision'] == revision]
+        maintenance = runtime.commit_maintenance(payload['maintenance_id'], revision, verified)
+        return {'runtime': identity, 'configuration_revision': revision, 'maintenance': maintenance}
+
+
 class RestoreConflict(ValueError):
     pass
 
@@ -216,7 +246,14 @@ def restore_context(payload, staged, runtime):
     if any(current[provider] is not None and current[provider] != value for provider, value in staged.items()):
         raise RestoreConflict('An existing connection differs from the saved connection. Restore will not replace it.')
     missing = sorted(provider for provider in staged if current[provider] is None)
-    if missing:
+    marker = runtime.maintenance_record()
+    if marker is not None:
+        azure = staged.get('azure', AZURE_CONNECTION)
+        router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
+        if (set(payload['required_models']) != set(marker['required_models'])
+                or configuration_revision([azure, router]) != marker['configuration_revision']):
+            raise RestoreConflict('Maintenance restoration requires the exact previous connections and required models. Nothing was replaced.')
+    if missing and marker is None:
         try:
             runtime.require_tracked_credential_restore()
         except ValueError as error:
@@ -269,6 +306,7 @@ def restore_connections(payload, budget):
     with ROUTE_LOCK, runtime.lock:
         staged, prepared = validate_restore(payload)
         restore_context(payload, staged, runtime)
+        maintenance = runtime.maintenance_record()
     for request in prepared:
         probe_budget = _transport_module.RequestBudget(min(AZURE_VERIFY_SECONDS, budget.remaining()), cancelled=budget.cancelled)
         try:
@@ -278,6 +316,8 @@ def restore_connections(payload, budget):
     with ROUTE_LOCK, runtime.lock:
         budget.check()
         identity, restored, already_present = restore_context(payload, staged, runtime)
+        if runtime.maintenance_record() != maintenance:
+            raise RestoreConflict('The maintenance marker changed during verification. Nothing was replaced.')
         azure = staged.get('azure', AZURE_CONNECTION)
         router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
         revision = configuration_revision([azure, router])
@@ -492,7 +532,9 @@ def requested_route(model_id):
 def route_for_turn(source, headers):
     key = _runtime_module.turn_key(source, headers)
     if RUNTIME is not None:
-        return RUNTIME.pin(key, lambda: requested_route(source.get('model')))
+        with ROUTE_LOCK, RUNTIME.lock:
+            require_inference_admission()
+            return RUNTIME.pin(key, lambda: requested_route(source.get('model')))
     with ROUTE_LOCK:
         if key in TURN_ROUTES:
             return dict(TURN_ROUTES[key])
@@ -1261,7 +1303,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                'azure_traffic': AZURE_ADMISSION.snapshot(),
                                'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None,
                                'runtime': RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id},
-                               'configuration_revision': configuration_revision()}).encode()
+                               'configuration_revision': configuration_revision(),
+                               'maintenance': RUNTIME.maintenance_state(configuration_revision()) if RUNTIME else None}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -1329,6 +1372,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
         self.connection.settimeout(5)
 
+    def commit_saved_maintenance(self):
+        if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
+            return self.error(401, 'Local authorization required')
+        budget = _transport_module.RequestBudget(4)
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 2048 or self.headers.get('Content-Encoding', 'identity') != 'identity':
+                return self.error(400, 'Invalid maintenance commit request', budget=budget)
+            budget.register(self.connection)
+            try:
+                payload = json.loads(budget.io(self.rfile.read, length))
+            finally:
+                budget.unregister(self.connection)
+            budget.check()
+            value = commit_maintenance(payload)
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.finish_headers(budget)
+            self.write_output(body, budget)
+        except _runtime_module.MaintenanceError as error:
+            self.error(409, str(error), budget=budget)
+        except (ValueError, TypeError, KeyError, _control_module.ControlError):
+            self.error(400, 'Invalid maintenance commit context', budget=budget)
+        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled, OSError):
+            self.close_connection = True
+        finally:
+            budget.finish()
+
     def restore_saved_connections(self):
         if self.headers.get('Origin') or self.headers.get('Transfer-Encoding') or not self.local_authorized():
             return self.error(401, 'Local authorization required')
@@ -1357,7 +1431,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.finish_headers(budget)
             self.write_output(body, budget)
             return
-        except RestoreConflict as error:
+        except (RestoreConflict, _runtime_module.MaintenanceError) as error:
             status, message = 409, str(error)
         except RestoreUnavailable as error:
             status, message = 503, str(error)
@@ -1506,6 +1580,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         azure_permit = None
         azure_budget = None
         azure_outcome_known = False
+        maintenance_not_dispatched = False
         revision = None
         last_heartbeat = float("-inf")
 
@@ -1562,6 +1637,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if self.headers.get('Origin') or not self.local_authorized():
                     return self.error(401, 'Local authorization required')
                 return self.error(409, _runtime_module.LIFECYCLE_GATE)
+            if self.path == '/harbor/maintenance/commit':
+                return self.commit_saved_maintenance()
             if self.path == '/harbor/providers/restore':
                 return self.restore_saved_connections()
             if self.path == '/harbor/verify':
@@ -1634,6 +1711,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.error(401, 'A provider credential is required')
             if (oauth or routed) and not self.local_authorized():
                 return self.error(401, 'Local authorization required')
+            require_inference_admission()
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY:
                 return self.error(413, 'Request body exceeds the adapter limit')
@@ -1658,8 +1736,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 azure_budget = _transport_module.RequestBudget(AZURE_REQUEST_SECONDS, cancelled=self.client_disconnected)
             if route:
                 if RUNTIME is not None:
-                    request_lease = RUNTIME.begin(_runtime_module.turn_key(source, self.headers),
-                        request_binding(route, headers, base, translation.request))
+                    with ROUTE_LOCK, RUNTIME.lock:
+                        require_inference_admission()
+                        request_lease = RUNTIME.begin(_runtime_module.turn_key(source, self.headers),
+                            request_binding(route, headers, base, translation.request))
                 provider_activity_start(route)
                 activity_started = True
                 with ROUTE_LOCK:
@@ -1689,14 +1769,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 deadline = pacer.clock() + BASETEN_WAIT_SECONDS
                 pacer.enter(deadline, self.client_disconnected, waiting)
                 acquired = True
+                require_inference_admission()
                 upstream_response = open_baseten(opener, request, pacer, estimated_tokens(translation.request),
                                                  deadline, self.client_disconnected, waiting)
             elif route and route['provider'] == 'azure':
                 azure_permit = AZURE_ADMISSION.acquire((base, route['model']),
                     cancelled=azure_budget.cancelled, timeout=azure_budget.remaining())
                 azure_budget.check()
+                require_inference_admission()
                 upstream_response = opener.open(request, timeout=azure_budget.remaining())
             else:
+                require_inference_admission()
                 upstream_response = opener.open(request, timeout=180)
             with upstream_response as upstream:
                 if azure_budget:
@@ -1822,6 +1905,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=1)
             report_error(503, str(error), {'Retry-After': '1'})
+        except MaintenanceBlocked as error:
+            maintenance_not_dispatched = True
+            activity_http_status = 503
+            report_error(503, str(error), {'Retry-After': '1'})
         except PacingTimeout as error:
             activity_http_status = 503
             if pacer:
@@ -1858,7 +1945,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if request_lease is not None:
                 # A completed response can still request tools. Keep the turn owner.
                 known = (azure_outcome_known or not azure_budget.dispatch_possible) if azure_budget is not None else (activity_status == 'completed' or activity_http_status is not None and not started)
-                RUNTIME.finish(request_lease, known)
+                RUNTIME.finish(request_lease, known or maintenance_not_dispatched)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
             if acquired:

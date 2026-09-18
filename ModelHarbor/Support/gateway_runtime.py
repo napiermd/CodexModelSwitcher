@@ -6,12 +6,19 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import stat
+import re
+import tempfile
 import threading
 import time
 import uuid
 
 PROTOCOL_VERSION = 1
 LIFECYCLE_GATE = 'Desktop turn completion is not verified. Stage updates for coordinated maintenance.'
+
+
+class MaintenanceError(ValueError):
+    pass
 
 
 def turn_key(source, headers):
@@ -153,6 +160,82 @@ class GatewayRuntime:
             if not delivered:
                 self.db.execute('UPDATE turns SET uncertain=1 WHERE id=(SELECT turn_id FROM requests WHERE id=?)', (request_id,))
             self.db.execute('DELETE FROM requests WHERE id=?', (request_id,))
+
+    def maintenance_record(self):
+        path = self.directory / 'maintenance.json'
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise MaintenanceError('The maintenance marker is unavailable or unsafe. Inference remains paused.') from None
+        try:
+            with os.fdopen(descriptor) as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise ValueError('unsafe marker')
+                raw = handle.read(16385)
+            if len(raw) > 16384:
+                raise ValueError('oversized marker')
+            value = json.loads(raw)
+            fields = {'schema', 'id', 'from_runtime', 'to_runtime', 'configuration_revision', 'required_models', 'phase'}
+            if not isinstance(value, dict) or not fields <= set(value) or not set(value) <= fields | {'boot_id'}:
+                raise ValueError('marker fields')
+            if type(value['schema']) is not int or value['schema'] != 1 or value['phase'] not in ('prepared', 'committed'):
+                raise ValueError('marker version or phase')
+            uuid.UUID(value['id'])
+            for field in ('from_runtime', 'to_runtime', 'configuration_revision'):
+                if not isinstance(value[field], str) or not re.fullmatch('[a-f0-9]{64}', value[field]):
+                    raise ValueError('marker digest')
+            models = value['required_models']
+            if (not isinstance(models, list) or not 1 <= len(models) <= 8
+                    or any(not isinstance(model, str) or len(model) > 512
+                           or not re.fullmatch(r'harbor/(azure|openrouter)/[^\s]+', model) for model in models)
+                    or len(set(models)) != len(models)):
+                raise ValueError('marker models')
+            if value['phase'] == 'committed' or 'boot_id' in value:
+                uuid.UUID(value['boot_id'])
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            raise MaintenanceError('The maintenance marker is invalid or unsafe. Inference remains paused.') from None
+        return value if value['to_runtime'] == self.runtime_id else None
+
+    def maintenance_state(self, revision):
+        try:
+            marker = self.maintenance_record()
+        except MaintenanceError:
+            return {'id': None, 'blocked': True, 'phase': 'invalid'}
+        if marker is None:
+            return {'id': None, 'blocked': False, 'phase': None}
+        opened = (marker['phase'] == 'committed' and marker.get('boot_id') == self.boot_id
+                  and marker['configuration_revision'] == revision)
+        return {'id': marker['id'], 'blocked': not opened, 'phase': marker['phase']}
+
+    def commit_maintenance(self, maintenance_id, revision, verified_models):
+        with self.lock:
+            marker = self.maintenance_record()
+            if (marker is None or marker['id'] != maintenance_id or marker['configuration_revision'] != revision
+                    or not set(marker['required_models']) <= set(verified_models)):
+                raise MaintenanceError('The maintenance context or required route proofs do not match. Maintenance was not committed.')
+            if self.db.execute('SELECT 1 FROM requests WHERE finished=0 LIMIT 1').fetchone():
+                raise MaintenanceError('Requests are still active. Maintenance cannot be committed.')
+            committed = dict(marker, phase='committed', boot_id=self.boot_id)
+            descriptor, temporary = tempfile.mkstemp(prefix='.maintenance-', dir=self.directory)
+            try:
+                with os.fdopen(descriptor, 'w') as handle:
+                    json.dump(committed, handle, sort_keys=True)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if self.maintenance_record() != marker:
+                    raise MaintenanceError('The maintenance marker changed. Maintenance was not committed.')
+                os.replace(temporary, self.directory / 'maintenance.json')
+                directory = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            return self.maintenance_state(revision)
 
     def require_tracked_credential_restore(self):
         with self.lock:

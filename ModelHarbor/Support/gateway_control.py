@@ -26,6 +26,7 @@ COMMAND_TIMEOUTS = {
     ('POST', '/harbor/verify'): 15,
     ('POST', '/harbor/providers/azure'): 5,
     ('POST', '/harbor/providers/restore'): 43,
+    ('POST', '/harbor/maintenance/commit'): 5,
     ('POST', '/harbor/providers/openrouter'): 5,
     ('POST', '/harbor/baseten/reconnect'): 70,
     ('POST', '/harbor/repairs/enable'): 5,
@@ -153,13 +154,13 @@ def owner_request(method, path, body, port, token_path, expected_runtime=None):
         raise ControlError('Unsupported gateway control command.')
     if not isinstance(body, bytes) or len(body) > 32768:
         raise ControlError('The gateway control payload is invalid.')
-    if path == '/harbor/providers/restore':
+    if path in ('/harbor/providers/restore', '/harbor/maintenance/commit'):
         try:
             declared_runtime = json.loads(body)['expected_runtime']
         except (ValueError, TypeError, KeyError):
-            raise ControlError('Restore requires the expected gateway identity.') from None
+            raise ControlError('This control requires the expected gateway identity.') from None
         if expected_runtime is not None and expected_runtime != declared_runtime:
-            raise ControlError('The restore command contains conflicting gateway identities.')
+            raise ControlError('The control command contains conflicting gateway identities.')
         expected_runtime = declared_runtime
     if expected_runtime is not None:
         validate_runtime(expected_runtime)

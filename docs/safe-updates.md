@@ -1,6 +1,6 @@
 # Protect tasks during Harbor updates
 
-Status: the signed independent gateway was installed on September 17, 2026 after an explicit request for immediate installation. Azure GPT-5.6 Sol passed a live verification request. Automatic promotion, retirement, and rollback remain disabled until actual desktop lifecycle integration is verified. The installation was a maintenance restart; it does not establish interruption-free gateway replacement.
+Status: the updated signed app and backend were activated on September 17, 2026 through the explicit maintenance controller. The controller paused local Codex processes for 6.84 seconds, transferred their existing runtime ownership without changing route/account bindings, verified Azure and OpenRouter on the new boot, and resumed the same processes. Codex subscription requests then completed through the new gateway. See the [maintenance verification record](verification/coordinated-maintenance.md). Automatic rolling promotion remains disabled.
 
 See the [audit, file map, Linear issues, and execution checklist](update-safety-audit.md).
 
@@ -17,7 +17,7 @@ At the time of that update, the shared bridge was a child of the menu app (`Grok
 1. Build, inspect, and test a candidate without replacing the installed app.
 2. Run candidates on a separate port with isolated state and synthetic conversations. Preserve the working runtime, provider credentials, model selections, and conversation files.
 3. Leave the candidate staged while users are working. An active-request count of zero is never an installation gate.
-4. If installation requires a restart, coordinate a maintenance window after affected tasks have been paused or completed. Do not restart the shared bridge as a background part of an unrelated repair.
+4. For an explicitly requested gateway update, use the coordinated controller below. It verifies and pauses every local Codex issuer before replacing the gateway. A failed pause or raced request leaves the old gateway in place. Do not restart the shared bridge as a background part of an unrelated repair.
 5. Verify credentials and the intended provider route after installation. A successful health response establishes process health only. A readiness field must be true, and an end-to-end provider probe must succeed.
 6. Record the source version, checks, installation state, and rollback artifact. Do not store credentials or conversation content in the record.
 
@@ -46,6 +46,30 @@ Each stage contains `Model Harbor.app` and `manifest.json`. The manifest records
 **Source provenance is contextual:** staging an existing bundle does not prove it came from the current commit. The manifest therefore records `artifact_source_binding: unverified`, even for a clean checkout. Do not describe that commit as the app's verified build source. Hashes identify the artifact that was actually copied. Stages are never overwritten by this command, but their owner can still modify files afterward; reverify integrity before any future installation.
 
 This is a macOS release-preparation command, not an updater. It provides no live promotion path. The runtime work and its required gates are tracked in the audit linked above.
+
+## Activate a staged backend during explicit maintenance
+
+After the verified signed app has been installed, run from the matching source checkout:
+
+```sh
+python3 -B scripts/gateway-maintenance.py --activate
+```
+
+This macOS command briefly pauses all local Codex executable processes, the Codex desktop interface, and an open Harbor interface. It does not quit Codex or edit its conversations, model selections, or shared configuration. Use it only for an explicitly requested maintenance update; it is not an unattended rolling updater.
+
+The controller reads saved Azure/OpenRouter keys into memory, starts an isolated candidate, and verifies the exact saved configuration and required routes. It then waits for a transport-free instant, positively confirms the process pause by PID, executable, start time, and stopped state, and checks that no new issuer appeared. Zero HTTP requests alone never authorizes replacement.
+
+Under the exclusive gateway journal lease, it changes only the runtime owner on the captured turn rows. Route and account bindings, uncertain-delivery flags, request records, and counters remain intact. The candidate rejects inference until the same credentials reproduce the original configuration revision and its required live route probes pass. A durable commit receipt precedes removal of the temporary admission gate and resumption of the paused processes.
+
+An independent watchdog holds credentials only in memory and can recover if the controller exits or exceeds the 150-second pause budget. Rollback restores the previous service and verifies its configuration before resuming clients. PID identity checks prevent accidentally resuming a reused process. A failure to verify recovery leaves a private recovery-required record rather than sending tasks to an unverified gateway.
+
+Records and retained binaries live in `~/Library/Application Support/Model Harbor/`. To retry a failed recovery, use the exact private transaction path printed by the command:
+
+```sh
+python3 -B scripts/gateway-maintenance.py --recover /absolute/path/to/maintenance.json
+```
+
+Current scope is same-account Azure, OpenRouter, and Codex-subscription ownership. Other providers, changed binding algorithms, raced requests, pre-stopped clients, or incomplete route coverage abort before service replacement. This procedure preserves ongoing turns by pausing their request issuers; it does not infer that those turns have finished. Existing uncertain deliveries remain uncertain and are never replayed.
 
 ## Required runtime design
 

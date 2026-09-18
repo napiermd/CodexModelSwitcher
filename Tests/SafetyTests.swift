@@ -49,6 +49,27 @@ final class SafetyTests: XCTestCase {
         XCTAssertFalse(candidate.inputsAreUnchanged())
     }
 
+    func testCatalogPublicationRollsBackWhenSourceChangesDuringWrite() throws {
+        let source = URL(fileURLWithPath: "/synthetic/source.json")
+        let destination = URL(fileURLWithPath: "/synthetic/catalog.json")
+        let previous = Data("previous".utf8)
+        let candidate = LiveRouting.CatalogCandidate(data: Data("candidate".utf8),
+                                                     inputs: [source: Data("source".utf8)])
+        var checks = 0
+        var writes: [Data] = []
+        XCTAssertThrowsError(try writer.publishCatalog(candidate, previous: previous, destination: destination,
+            inputsAreUnchanged: {
+                checks += 1
+                return checks == 1
+            }, write: { data, url in
+                XCTAssertEqual(url, destination)
+                writes.append(data)
+            }, remove: { _ in
+                XCTFail("An existing catalog must be restored, not removed")
+            }))
+        XCTAssertEqual(writes, [candidate.data, previous])
+    }
+
     func testCatalogRejectsInvalidLimitsWithoutPublishingFallback() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -13,6 +13,7 @@ import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -32,16 +33,28 @@ def validate_payload(payload, requested_tokens):
 
 
 def verification_request(endpoint, deployment, key, payload):
-    if not endpoint.startswith('https://') or not endpoint.rstrip('/').endswith('/openai/v1'):
-        raise ValueError('Use an HTTPS Azure endpoint ending in /openai/v1.')
+    endpoint = azure_endpoint(endpoint)
     if not deployment or any(character.isspace() for character in deployment):
         raise ValueError('Supply one exact deployment name.')
     body = dict(payload)
     body.pop('harbor_synthetic_input_tokens', None)
     body['model'] = deployment
     data = json.dumps(body, separators=(',', ':')).encode()
-    return urllib.request.Request(endpoint.rstrip('/') + '/responses', data=data,
+    return urllib.request.Request(endpoint + '/responses', data=data,
         headers={'api-key': key, 'Content-Type': 'application/json', 'Accept': 'application/json'}, method='POST')
+
+
+def azure_endpoint(value):
+    if not isinstance(value, str):
+        raise ValueError('Use a direct HTTPS Azure OpenAI resource endpoint.')
+    parts = urllib.parse.urlsplit(value.strip())
+    hostname = (parts.hostname or '').lower()
+    suffixes = ('.openai.azure.com', '.services.ai.azure.com')
+    if (parts.scheme != 'https' or not any(hostname.endswith(suffix) and hostname != suffix[1:] for suffix in suffixes)
+            or parts.username is not None or parts.password is not None or parts.port is not None
+            or parts.query or parts.fragment or parts.path.rstrip('/') != '/openai/v1'):
+        raise ValueError('Use a direct HTTPS Azure OpenAI resource endpoint ending in /openai/v1.')
+    return 'https://' + hostname + '/openai/v1'
 
 
 def run(endpoint, deployment, key, payload, requested_tokens, opener=None):

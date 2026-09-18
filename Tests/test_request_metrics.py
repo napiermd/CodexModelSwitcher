@@ -51,6 +51,15 @@ class RequestMetricsTests(unittest.TestCase):
         self.assertEqual(result['usage'], {'input_tokens': 100, 'cached_input_tokens': 80,
                                            'output_tokens': 5, 'total_tokens': 105})
 
+    def test_usage_normalizes_nested_responses_cached_tokens(self):
+        recorder = metrics.Recorder()
+        handle = recorder.begin({'input': []}, {'input': []}, {}, b'{}')
+        recorder.finish(handle, 'completed', {'input_tokens': 100,
+            'input_tokens_details': {'cached_tokens': 80}, 'output_tokens': 5, 'total_tokens': 105})
+        self.assertEqual(recorder.snapshot()[0]['usage'],
+                         {'input_tokens': 100, 'cached_input_tokens': 80,
+                          'output_tokens': 5, 'total_tokens': 105})
+
     def test_bounded_concurrent_records_stay_isolated(self):
         recorder = metrics.Recorder(limit=4)
         def record(index):

@@ -103,6 +103,10 @@ class Recorder:
                 fields = ('input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens')
                 record['usage'] = {key: usage[key] for key in fields
                                    if type(usage.get(key)) is int and usage[key] >= 0}
+                details = usage.get('input_tokens_details')
+                nested_cached = details.get('cached_tokens') if isinstance(details, dict) else None
+                if 'cached_input_tokens' not in record['usage'] and type(nested_cached) is int and nested_cached >= 0:
+                    record['usage']['cached_input_tokens'] = nested_cached
 
     def snapshot(self):
         with self._lock:

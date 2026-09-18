@@ -68,8 +68,9 @@ Each Linear issue contains its implementation map, acceptance criteria, risks an
 - The audit, request-metrics and capacity suites pass: 32 tests.
 - The isolated compatibility suite passes: 13 tests. The router-hardening regression suite passes: 9 tests.
 - Real rollout audit at one checkpoint: 43 compactions, no malformed records. The task was still appending; totals are not a permanent task-wide count.
-- The full Python suite passes: 476 tests in 126.143 seconds. The full Swift suite passes: 107 tests with no failures.
+- The final full Python suite passes: 478 tests in 126.941 seconds. The final full Swift suite passes: 108 tests with no failures.
 - The Xcode app build succeeds. Strict deep signature verification passes for the built app.
+- Independent review found three material gaps. The final patch restricts the credential-bearing capacity probe to direct Azure resource hosts, rolls catalog publication back if a source changes during the write, and normalizes the Responses API's nested cached-token field. The added regressions pass: 11 focused Python tests and 23 Swift safety tests.
 
 ## Execution checklist
 

@@ -14,14 +14,35 @@ struct CodexConfigWriter {
 
     func updateCatalog(in data: AppData) throws {
         try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lock = try ConfigLock(directory: AppPaths.codexDirectory)
+        defer { withExtendedLifetime(lock) {} }
         let candidate = try LiveRouting.catalogCandidate(in: data)
-        if (try? Data(contentsOf: LiveRouting.catalogURL)) != candidate.data {
-            guard candidate.inputsAreUnchanged() else {
-                throw NSError(domain: "ModelHarbor.Catalog", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "A model catalog changed while Harbor was reconciling it. Try again."])
-            }
-            try privateWrite(candidate.data, to: LiveRouting.catalogURL)
+        let previous = try? Data(contentsOf: LiveRouting.catalogURL)
+        guard candidate.inputsAreUnchanged() else { throw catalogSourceRace() }
+        if previous != candidate.data {
+            try publishCatalog(candidate, previous: previous, destination: LiveRouting.catalogURL,
+                inputsAreUnchanged: { candidate.inputsAreUnchanged() },
+                write: { try privateWrite($0, to: $1) },
+                remove: { try FileManager.default.removeItem(at: $0) })
         }
+    }
+
+    func publishCatalog(_ candidate: LiveRouting.CatalogCandidate, previous: Data?, destination: URL,
+                        inputsAreUnchanged: () -> Bool,
+                        write: (Data, URL) throws -> Void,
+                        remove: (URL) throws -> Void) throws {
+        guard inputsAreUnchanged() else { throw catalogSourceRace() }
+        try write(candidate.data, destination)
+        guard inputsAreUnchanged() else {
+            if let previous { try write(previous, destination) }
+            else { try remove(destination) }
+            throw catalogSourceRace()
+        }
+    }
+
+    private func catalogSourceRace() -> NSError {
+        NSError(domain: "ModelHarbor.Catalog", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "A model catalog changed while Harbor was reconciling it. Try again."])
     }
 
     func applySelection(_ selected: SelectedModel, in data: AppData) throws {

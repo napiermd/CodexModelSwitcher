@@ -61,3 +61,17 @@ class ContextCapacityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 capacity.run('https://fixture.openai.azure.com/openai/v1', 'd', 'k', payload, 300000, opener)
             self.assertEqual(opener.requests, [])
+
+    def test_non_azure_or_ambiguous_endpoint_is_rejected_before_key_dispatch(self):
+        for endpoint in [
+            'https://evil.example/openai/v1',
+            'https://fixture.openai.azure.com.evil.example/openai/v1',
+            'http://fixture.openai.azure.com/openai/v1',
+            'https://user:pass@fixture.openai.azure.com/openai/v1',
+            'https://fixture.openai.azure.com:443/openai/v1',
+            'https://fixture.openai.azure.com/openai/v1?redirect=evil',
+        ]:
+            opener = Opener({})
+            with self.assertRaises(ValueError):
+                capacity.run(endpoint, 'd', 'PRIVATE-key', self.payload(), 300000, opener)
+            self.assertEqual(opener.requests, [])

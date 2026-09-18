@@ -5,6 +5,7 @@ import http.server
 import importlib.util
 import io
 import json
+import stat
 from pathlib import Path
 import sys
 import tempfile
@@ -172,6 +173,19 @@ class ComposedTests(unittest.TestCase):
                 self.assertEqual(opener.call_count, 1)
             finally:
                 pilot.urllib.request.OpenerDirector.open = original
+
+    def test_export_is_readable_across_container_uids_without_changing_source_inventory(self):
+        fixture = composed.prepare_fixture(self.temporary())
+        source = Path(__file__).resolve().parents[1] / 'ModelHarbor/Support'
+        service = composed.load_module('fixture_service', source / 'gateway_service.py')
+        expected = service.inventory(source)
+        manifest = json.loads((fixture / 'source.json').read_text())
+        self.assertEqual(manifest, {'runtime_id': service.runtime_digest(expected), 'files': expected})
+        self.assertEqual(service.inventory(fixture / 'Support'), expected)
+        for path in (fixture, *(fixture.rglob('*'))):
+            required = 0o005 if path.is_dir() else 0o004
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode) & required, required, str(path))
+        self.assertFalse((fixture / 'state').exists())
 
     def test_staged_inventory_rejects_tampering_before_launch(self):
         fixture = composed.prepare_fixture(self.temporary())

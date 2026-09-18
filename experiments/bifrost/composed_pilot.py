@@ -69,7 +69,12 @@ def prepare_fixture(root, source=None):
     state.mkdir(mode=0o700)
     retained, digest = service.retain_runtime(source, state)
     entries = service.inventory(retained)
-    shutil.copytree(retained, fixture / 'Support')
+    exported = fixture / 'Support'
+    shutil.copytree(retained, exported)
+    # The synthetic export crosses container UIDs with capabilities dropped.
+    # Directory traversal is public; the exact Python file inventory stays intact.
+    for directory in (fixture, exported, *(path for path in exported.rglob('*') if path.is_dir())):
+        directory.chmod(0o755)
     if service.inventory(fixture / 'Support') != entries or service.inventory(source) != entries:
         raise ValueError('Source changed while preparing the composed fixture')
     shutil.rmtree(state)

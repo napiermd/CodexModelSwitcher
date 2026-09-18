@@ -615,6 +615,7 @@ final class AppStore: ObservableObject {
         if providerConnected(id) { return "Connected" }
         if providerCredentialsAvailable[id] == true { return "Configured · verification needed" }
         if id == "codex-subscription" && codexConfigured { return "Configured" }
+        if id == "grok-oauth" && grokAccount == "Sign-in not checked" { return "Sign-in not checked" }
         return "Not connected"
     }
 

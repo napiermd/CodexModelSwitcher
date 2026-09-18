@@ -227,6 +227,8 @@ struct ContentView: View {
                     Text("Ready for the next request").font(.caption).foregroundStyle(.secondary)
                 } else if configured && store.proxyStatus == .active {
                     Text("Credentials available · connection check needed").font(.caption).foregroundStyle(.secondary)
+                } else if focusedProvider == "grok-oauth" && store.grokAccount == "Sign-in not checked" && store.proxyStatus == .active {
+                    Text("Sign-in status has not been checked in this session").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text("No connection established").font(.caption).foregroundStyle(.secondary)
                 }

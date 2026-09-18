@@ -69,3 +69,7 @@ All `/harbor/runtime/{promote,retire,rollback,shutdown}` controls currently refu
 ## Azure request lifetime
 
 The candidate shares a single monotonic deadline across Azure admission, transport, and response delivery. It preserves uncertainty after possible dispatch and disables additional retries in generated Codex configuration. See [Azure request deadlines and retry ownership](azure-request-policy.md) for bounds, evidence, and remaining desktop gates.
+
+## Installed interface verification
+
+The September 17 interface-only update preserved the live gateway identity, configuration revision, and shared Codex files. See [the verification record](verification/gui-attachment.md) for observations and limits.

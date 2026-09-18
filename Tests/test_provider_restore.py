@@ -74,7 +74,7 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual([r.full_url for r in observed], [self.endpoint + '/responses', 'https://openrouter.ai/api/v1/responses'])
         self.assertEqual([json.loads(r.data)['model'] for r in observed], ['coding-prod', 'fixture/coder'])
         self.assertEqual(json.loads(observed[0].data)['reasoning'], {'effort': 'high'})
-        self.assertEqual(json.loads(observed[1].data)['provider'], {'require_parameters': True})
+        self.assertEqual(json.loads(observed[1].data)['provider'], {'require_parameters': False})
         self.assertEqual(observed[0].get_header('Api-key'), 'synthetic-azure-key')
         self.assertEqual(observed[1].get_header('Authorization'), 'Bearer synthetic-router-key')
         self.assertEqual({p: p.read_bytes() for p in before}, before)

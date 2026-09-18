@@ -42,6 +42,8 @@ After building, run `python3 scripts/stage-update.py --app "build/Build/Products
 
 Do not run live account verification in a pull-request workflow. Report the exact models, checks, and limitations you verified. An automated test pass does not establish provider entitlement or every tool's compatibility.
 
+`python3 scripts/verify-openrouter-tools.py --live` exercises a synthetic Fable 5.1 tool call and streamed tool-result continuation through the source bridge using the saved OpenRouter credential. Add `--installed` to test the running gateway. Both consume OpenRouter credit; neither reads or resumes real tasks. The check includes Codex's `tool_choice: auto` and `parallel_tool_calls: false`, which a text-only connection probe would miss.
+
 ## Pull requests
 
 Explain the problem, the resulting behavior, and how you checked it. Include screenshots for visual changes and update docs when behavior changes. Keep unrelated refactors separate. Do not remove the upstream authorship notices.

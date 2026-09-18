@@ -4,6 +4,8 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Fixed OpenRouter Fable 5.1 tool-request 404s by using normal endpoint selection in inference and saved-connection verification. Added a live synthetic tool round trip and HTTP regression coverage. See [verification](docs/verification/openrouter-tools.md).
+
 - Azure setup can discover ready deployments using the resource key, explains missing fields, and shows elapsed progress with cancellation and bounded network timeouts. Saved deployment options are restored when editing.
 
 ### Update safety foundation

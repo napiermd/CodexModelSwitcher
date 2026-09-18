@@ -60,7 +60,7 @@ Closing the window keeps Harbor serving tasks. The new independent gateway survi
 3. Search and select the models you want in Codex, then choose **Save connection**. The API key is stored in macOS Keychain; the local bridge holds its working copy in memory.
 4. Reopen Codex once to discover the newly added model names. Select an explicit OpenRouter model in a Harbor task.
 
-Requests use your OpenRouter account and billing. Model availability, reasoning support, and inference compatibility depend on the selected model and provider. Catalog discovery is not a live inference check of every model. Harbor requests support for the parameters it sends and keeps the chosen model ID fixed.
+Requests use your OpenRouter account and billing. Model availability, reasoning support, and inference compatibility depend on the selected model and provider. Catalog discovery is not a live inference check of every model. Harbor keeps the chosen model ID fixed and uses normal OpenRouter endpoint selection. Providers may ignore unsupported parameters.
 
 Use **Manage connection → Choose models** to update the list, or **Disconnect** to remove the saved key while keeping model choices for reconnecting. An authentication rejection clears the bridge's working credential and changes its connection state.
 
@@ -137,6 +137,7 @@ An `env_key` may be used instead of a helper. A Finder-launched app does not nor
 | --- | --- |
 | No Harbor models in Codex | Choose a new-task default, then reopen Codex to load its catalog. |
 | No subscription models | Sign in to Codex, run it once, and reopen Harbor so it can read the catalog. |
+| OpenRouter returns 404 with "No endpoints found that can handle the requested parameters" | Update the running Harbor gateway. Older versions unconditionally required strict parameter support, which excludes Fable 5.1 endpoints for ordinary tool requests. A GitHub merge or interface-only update does not update a retained gateway. |
 | Browser says signed in, but Harbor does not | Confirm the official Grok CLI can list your models. Account access is controlled by xAI. |
 | Baseten returns 429 or 529 | Harbor now paces requests across tasks and waits before retrying. Cached tokens count toward the token limit. A local queue timeout is identified separately. Persistent upstream 429s may need a higher token allowance; persistent 529s mean provider capacity is unavailable. See [pacing and recovery](architecture.md#baseten-pacing-and-overload-recovery). |
 | Baseten is missing | Check both its provider section and the catalog's exact filename. |

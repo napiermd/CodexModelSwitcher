@@ -226,7 +226,7 @@ def validate_restore(payload):
             translation = AzureTranslation(azure_request(source))
             headers, base = {'api-key': connection['key'], 'User-Agent': 'ModelHarbor/1.0'}, connection['endpoint']
         else:
-            source['provider'] = {'require_parameters': True}
+            source['provider'] = {'require_parameters': False}
             translation = Translation(source)
             headers, base = {'Authorization': 'Bearer ' + connection['key'], 'X-Title': 'Model Harbor'}, 'https://openrouter.ai/api/v1'
         prepared.append((translation, headers, base, route))
@@ -691,8 +691,10 @@ def routed_request(source, headers, *, track_turn=True):
     elif route['provider'] == 'openrouter':
         upstream_headers = openrouter_headers()
         base = 'https://openrouter.ai/api/v1'
-        # Request routing must fail instead of silently switching to a different model.
-        source['provider'] = {'require_parameters': True}
+        # Endpoint parameter declarations are incomplete for Responses tools.
+        # Keep the requested parameters and exact model; allow normal endpoint
+        # selection instead of excluding every tool-capable Fable 5.1 endpoint.
+        source['provider'] = {'require_parameters': False}
         reasoning = source.get('reasoning')
         if isinstance(reasoning, dict) and reasoning.get('effort') == 'none':
             source.pop('reasoning', None)

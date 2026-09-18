@@ -54,7 +54,7 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                             return
                     else:
                         self.send_response(200)
-                        self.send_header('Content-Type', 'text/event-stream' if owner.mode in ('stream', 'backpressure') else 'application/json')
+                        self.send_header('Content-Type', 'text/event-stream' if owner.mode in ('stream', 'stream-eof', 'backpressure') else 'application/json')
                         if owner.mode == 'verify-truncated':
                             self.send_header('Content-Length', '100')
                         self.end_headers()
@@ -66,10 +66,13 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                             frame = b'data: ' + json.dumps(event).encode() + b'\n\n'
                             for _ in range(32):
                                 self.wfile.write(frame)
-                        if owner.mode == 'stream':
+                        if owner.mode in ('stream', 'stream-eof'):
                             event = {'type': 'response.output_text.delta', 'item_id': 'msg_fixture',
                                      'output_index': 0, 'content_index': 0, 'delta': 'partial-marker'}
                             self.wfile.write(b'data: ' + json.dumps(event).encode() + b'\n\n')
+                            if owner.mode == 'stream-eof':
+                                self.wfile.flush()
+                                return
                     self.wfile.flush()
                     self.connection.settimeout(.02)
                     while not owner.end.is_set():
@@ -153,6 +156,19 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
         self.finished()
         self.assertEqual(self.runtime.status()['uncertain_turns'], 1)
         self.assertEqual(self.inference('stream-stall', stream=True)[0], 400)
+        self.assertEqual(self.attempts, 1)
+
+    def test_partial_stream_eof_reports_failure_and_preserves_uncertain_delivery(self):
+        self.mode = 'stream-eof'
+        status, body = self.inference('stream-eof', stream=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(body.count(b'partial-marker'), 1)
+        self.assertIn(b'response.failed', body)
+        self.assertIn(b'ended before a terminal response event', body)
+        self.assertNotIn(b'response.completed', body)
+        self.finished()
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 1)
+        self.assertEqual(self.inference('stream-eof', stream=True)[0], 400)
         self.assertEqual(self.attempts, 1)
 
     def test_error_body_stall_is_not_a_known_delivered_outcome(self):

@@ -2,9 +2,11 @@ import Foundation
 
 struct AzureDeployment {
     let name: String
+    var modelName: String? = nil
     var effort = "none"
     var context = 128000
     var vision = false
+    var contextIsAutomatic: Bool? = nil
 
     func validate() throws {
         guard name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#, options: .regularExpression) != nil else {
@@ -16,7 +18,15 @@ struct AzureDeployment {
     }
 
     var catalogEntry: [String: Any] {
-        ["slug": name, "display_name": name,
+        catalogEntry(readNativeMetadata: Self.readNativeMetadata)
+    }
+
+    static func readNativeMetadata() throws -> Data {
+        try Data(contentsOf: AppPaths.codexDirectory.appendingPathComponent("models_cache.json"))
+    }
+
+    func catalogEntry(readNativeMetadata: () throws -> Data) -> [String: Any] {
+        var entry: [String: Any] = ["slug": name, "display_name": name,
          "base_instructions": "You are a coding assistant. Follow instructions, use tools, and verify your work.",
          "default_reasoning_level": effort,
          "supported_reasoning_levels": [["effort": effort, "description": effort == "none" ? "Deployment default" : effort.capitalized]],
@@ -24,6 +34,32 @@ struct AzureDeployment {
          "input_modalities": vision ? ["text", "image"] : ["text"], "support_verbosity": false,
          "use_responses_lite": false, "supports_websockets": false,
          "truncation_policy": ["mode": "tokens", "limit": 10000], "experimental_supported_tools": []]
+        entry["harbor_model_name"] = modelName
+        entry["harbor_context_mode"] = (contextIsAutomatic ?? (context == 128000)) ? "automatic" : "manual"
+        return Self.resolvingContext(in: entry, readNativeMetadata: readNativeMetadata)
+    }
+
+    static func resolvingContext(in entry: [String: Any],
+                                 readNativeMetadata: () throws -> Data = readNativeMetadata) -> [String: Any] {
+        let mode = entry["harbor_context_mode"] as? String
+        let legacyDefault = mode == nil && entry["context_window"] as? Int == 128000
+            && entry["max_context_window"] as? Int == 128000
+        guard mode == "automatic" || legacyDefault else { return entry }
+        guard let bytes = try? readNativeMetadata(),
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let models = object["models"] as? [[String: Any]] else { return entry }
+        let identities = [entry["slug"] as? String, entry["harbor_model_name"] as? String].compactMap { $0 }
+        guard let native = identities.lazy.compactMap({ identity in
+            models.first { $0["slug"] as? String == identity }
+        }).first else { return entry }
+        var result = entry
+        for key in ["context_window", "max_context_window"] {
+            if let limit = native[key] as? Int, limit >= 4096, limit <= 1_048_576 {
+                result[key] = limit
+            }
+        }
+        result["harbor_context_mode"] = "automatic"
+        return result
     }
 }
 

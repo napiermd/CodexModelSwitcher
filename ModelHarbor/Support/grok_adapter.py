@@ -496,7 +496,7 @@ def oauth_models():
                        'supported_reasoning_levels': [{'effort': e['value'], 'description': e.get('description', e['value'])} for e in entry.get('reasoning_efforts', [])],
                        'shell_type': 'shell_command', 'visibility': 'list', 'supported_in_api': True,
                        'priority': len(models), 'context_window': entry.get('context_window', 128000),
-                       'max_context_window': entry.get('context_window', 128000), 'input_modalities': ['text', 'image'],
+                       'max_context_window': entry.get('max_context_window', entry.get('context_window', 128000)), 'input_modalities': ['text', 'image'],
                        'support_verbosity': False, 'truncation_policy': {'mode': 'tokens', 'limit': 10000},
                        'supports_parallel_tool_calls': False, 'experimental_supported_tools': []})
     if not models:
@@ -1839,6 +1839,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             with ROUTE_LOCK:
                                 LAST_ROUTE = dict(route, state=translation.response_status)
                         self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
+                    if not translation.response_status:
+                        report_error(502, 'The upstream stream ended before a terminal response event. Model Harbor did not retry the partial response.')
+                        translation.response_status = 'failed'
+                        if route:
+                            with ROUTE_LOCK:
+                                LAST_ROUTE = dict(route, state='failed')
                 else:
                     if response is None:
                         response = json.load(upstream)
@@ -1940,18 +1946,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if azure_stopped():
                 return
             report_error(400, str(error))
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+        except socket.timeout:
+            if azure_stopped():
+                return
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='failed', http_status=504)
+            activity_http_status = 504
+            report_error(504, 'The upstream response timed out. Model Harbor did not retry the partial response.')
+            self.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
             if azure_stopped():
                 return
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='disconnected')
+            report_error(502, 'The response connection was interrupted.')
             self.close_connection = True
         except Exception as error:
             if azure_stopped():
                 return
-            if not started:
-                report_error(502, 'Adapter failed: ' + type(error).__name__)
+            report_error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
             if azure_budget is not None:

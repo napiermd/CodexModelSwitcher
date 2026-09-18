@@ -10,6 +10,21 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 class TranslationTests(unittest.TestCase):
+    def test_oauth_catalog_preserves_distinct_context_limits(self):
+        import io
+        from unittest.mock import patch
+        data = {'data': [{'id': 'fixture', 'api_backend': 'responses',
+                          'context_window': 272000, 'max_context_window': 872000},
+                         {'id': 'legacy', 'api_backend': 'responses', 'context_window': 64000}]}
+        with patch.object(module, 'oauth_headers', return_value={}), \
+             patch.object(module, 'session', return_value={}), \
+             patch.object(module.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = io.BytesIO(json.dumps(data).encode())
+            entries = module.oauth_models()['models']
+        self.assertEqual(entries[0]['context_window'], 272000)
+        self.assertEqual(entries[0]['max_context_window'], 872000)
+        self.assertEqual(entries[1]['max_context_window'], 64000)
+
     def translation(self, count=1):
         return module.Translation({'model':'grok-4.20-0309-reasoning','reasoning':{'effort':'high'},'tools':[
             {'type':'namespace','name':'mcp__fixture','tools':[

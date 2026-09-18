@@ -63,6 +63,59 @@ class ProviderConnectionsTests(unittest.TestCase):
         self.assertEqual(self.request(body={'key': ''})[0], 200)
         self.assertFalse(bridge.provider_status()['openrouter_ready'])
 
+    def test_partial_stream_failures_are_explicit_and_never_retried(self):
+        import socket
+        self.request(body={'key': 'synthetic-key'})
+        prefix = b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n'
+        for failure in [None, socket.timeout(), OSError('private upstream detail')]:
+            with self.subTest(failure=type(failure).__name__):
+                class Response(io.BytesIO):
+                    status = 200
+                    headers = {'Content-Type': 'text/event-stream'}
+                    def __next__(self):
+                        line = self.readline()
+                        if not line and failure:
+                            raise failure
+                        if not line:
+                            raise StopIteration
+                        return line
+                with patch.object(bridge.urllib.request, 'build_opener') as opener:
+                    opener.return_value.open.return_value = Response(prefix)
+                    conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
+                    try:
+                        conn.request('POST', '/harbor/v1/responses', body=json.dumps({
+                            'model': 'harbor/openrouter/fixture/coder', 'stream': True, 'input': []}),
+                            headers={'Authorization': 'Bearer synthetic-owner-token'})
+                        response = conn.getresponse()
+                        payload = response.read()
+                    finally:
+                        conn.close()
+                    self.assertEqual(response.status, 200)
+                    self.assertIn(b'"delta":"partial"', payload)
+                    self.assertIn(b'response.failed', payload)
+                    self.assertNotIn(b'response.completed', payload)
+                    self.assertNotIn(b'private upstream detail', payload)
+                    self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_terminal_event_without_trailing_blank_line_is_preserved(self):
+        self.request(body={'key': 'synthetic-key'})
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'text/event-stream'}
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(
+                b'data: {"type":"response.completed","response":{"status":"completed","output":[]}}')
+            conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=4)
+            try:
+                conn.request('POST', '/harbor/v1/responses', body=json.dumps({
+                    'model': 'harbor/openrouter/fixture/coder', 'stream': True}),
+                    headers={'Authorization': 'Bearer synthetic-owner-token'})
+                payload = conn.getresponse().read()
+            finally:
+                conn.close()
+        self.assertIn(b'response.completed', payload)
+        self.assertNotIn(b'response.failed', payload)
+
     def test_malformed_or_header_injecting_keys_are_rejected(self):
         for key in [None, 123, 'bad\r\nAuthorization: injected', 'x' * 4097]:
             self.assertEqual(self.request(body={'key': key})[0], 400)

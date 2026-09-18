@@ -32,7 +32,7 @@ def main():
             saved = json.loads((home / 'model-switcher.json').read_text())
             azure = next(s for s in saved['services'] if s['id'] == 'azure')
             key = subprocess.run(['security', 'find-generic-password', '-s', 'dev.napier.ModelHarbor',
-                                  '-a', 'provider:azure', '-w'], capture_output=True, text=True, check=True).stdout.strip()
+                                  '-a', 'provider:azure', '-w'], capture_output=True, text=True, check=True, timeout=45).stdout.strip()
             bridge.CONFIG_DIR = root
             bridge.TOKEN_PATH = root / 'token'
             bridge.TOKEN_PATH.write_text(token)
@@ -42,7 +42,7 @@ def main():
             bridge.AZURE_CONNECTION = {'key': key, 'endpoint': azure['baseURL']}
             bridge.OPENROUTER_KEY = subprocess.run(['security', 'find-generic-password', '-s',
                 'dev.napier.ModelHarbor', '-a', 'provider:openrouter', '-w'],
-                capture_output=True, text=True, check=True).stdout.strip()
+                capture_output=True, text=True, check=True, timeout=45).stdout.strip()
             runtime = bridge._runtime_module.GatewayRuntime(root / 'runtime', 'candidate', 'proof')
             bridge.RUNTIME = runtime
             server = bridge.GatewayHTTPServer(('127.0.0.1', 0), bridge.Handler)

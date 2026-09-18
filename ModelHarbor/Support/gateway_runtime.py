@@ -41,7 +41,19 @@ def turn_key(source, headers):
     task = nested.get('thread_id', metadata.get('thread_id', metadata.get('session_id')))
     if turn is None or task is None:
         return None
-    return hashlib.sha256(json.dumps([task, turn], separators=(',', ':')).encode()).hexdigest()
+    identity = [task, turn]
+    kind = nested.get('request_kind', metadata.get('request_kind'))
+    compaction = nested.get('compaction', metadata.get('compaction', {}))
+    if isinstance(compaction, str):
+        try:
+            compaction = json.loads(compaction)
+        except ValueError:
+            raise ValueError('Invalid compaction metadata') from None
+    if kind == 'compaction' and isinstance(compaction, dict) and compaction.get('phase') == 'pre_turn':
+        # Codex can summarize with the previous model before using the selected
+        # model in this same turn. That summary must not pin the next model.
+        identity += ['pre_turn_compaction', source.get('model')]
+    return hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
 
 
 class RouteReadiness:

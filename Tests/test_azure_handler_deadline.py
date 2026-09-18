@@ -254,11 +254,11 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
         self.mode = 'backpressure'
         writing = threading.Event()
         original_write = bridge.Handler.write_output
-        def small_buffer(handler, value, budget=None):
+        def small_buffer(handler, value, budget=None, **kwargs):
             if len(value) > 512 * 1024:
                 handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
                 writing.set()
-            return original_write(handler, value, budget)
+            return original_write(handler, value, budget, **kwargs)
         client = socket.socket()
         client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
         client.settimeout(2)

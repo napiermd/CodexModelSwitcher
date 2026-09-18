@@ -81,6 +81,15 @@ class ProviderConnectionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.requested_route('harbor/openrouter/unknown/model')
 
+    def test_openrouter_bounds_only_an_omitted_output_allowance(self):
+        bridge.OPENROUTER_KEY = 'synthetic-router-key'
+        for supplied, expected in ((None, 32768), (512, 512), (64000, 64000)):
+            source = {'model': 'harbor/openrouter/fixture/coder', 'input': []}
+            if supplied is not None:
+                source['max_output_tokens'] = supplied
+            translated, _, _, _ = bridge.routed_request(source, {})
+            self.assertEqual(translated.request['max_output_tokens'], expected)
+
     def test_unconnected_router_fails_without_fallback(self):
         with patch.object(bridge, 'oauth_headers', side_effect=AssertionError('Wrong provider')):
             with self.assertRaisesRegex(ValueError, 'Connect OpenRouter'):

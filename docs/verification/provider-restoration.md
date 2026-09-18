@@ -49,3 +49,12 @@ Independent review removed an overly broad tracked-turn restriction: completed H
 The 45-second control-helper ceiling starts after credential acquisition. Credential authentication has its own 45-second ceiling and Cancel invalidates that authentication operation. Server restoration has a 40-second total budget, including request-body reads; each route probe has at most 10 seconds. A late credential result is discarded.
 
 These checks use synthetic credentials and isolated local upstreams. This unit does not establish live gateway handoff, real saved-key restoration, or real Azure history continuation. The installed retained runtime must still be updated during coordinated maintenance before the new restore endpoint can be used.
+
+
+## Installed interface check
+
+The signed interface from source `1dadfa59e7a08c815ba6c60e7f6e9ba492b6d0b1` was copied to `/Applications/Model Harbor.app` and reopened after retaining a verified rollback copy. Its bundled Python inventory is `1d706153c82d1f03871eccfb915712309702862ca0466c919ca5bf7007b251cb`. Staging records source-to-artifact binding as unverified; these hashes identify the inspected artifacts.
+
+Actual UI inspection showed **Manage connection → Restore saved connection → Verify gpt-5.6-sol**. Selecting it reported the expected pending-runtime refusal before a Keychain prompt. This exercised refusal, not a successful restoration of real credentials.
+
+Authenticated checks before GUI exit, after replacement, and after reopen/inspection retained the same gateway boot (`e6c8bcaa-f55a-4d34-9154-9d889031b9ad`) and runtime digest (`5da659334bfd7bbd5af5456e9dd7761ea7b9c94f7e9310d447506900c42b3ad5`). Configuration revision and hashes of shared configuration, authentication, provider metadata, bridge token, and catalogs were unchanged. The app's strict code-signature check passed. No gateway restart or Codex restart occurred.

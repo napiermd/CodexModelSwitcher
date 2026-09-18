@@ -49,3 +49,7 @@ Native image generation had a separate reproducible cause: Harbor’s allowlist 
 Isolated live probes using deliberately incomplete bodies reached OpenAI and returned HTTP 400. This establishes upstream endpoint reachability, not completed generation or access to a particular image-model version. After activation, the originating task reported a successful real built-in image generation in 35.8 seconds without an external API key. Edit completion and access to any specifically named image-model version remain unverified.
 
 See [router hardening verification](verification/router-hardening.md) for test and staging evidence. The earlier “Build and activation” section describes the previous context patch, not this follow-up.
+
+## Remaining compaction work
+
+The deployed router hardening is complete for its stated scope, not for every remaining context issue. The read-only [context compaction audit](verification/context-compaction-audit.md) reproduces the earlier small-window loop and confirms the later 258,400 effective task window. It also measures a persistent, unattributed difference of about 123,000 tokens between the local post-compaction estimate and the first provider request. Forking codex-router does not explain that difference. Request attribution, atomic catalog reconciliation, task-observed context diagnostics, provider-verified larger context, and optional Chat Completions compatibility are tracked separately in SAY-3359 through SAY-3364.

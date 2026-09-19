@@ -45,4 +45,19 @@ The first request after this upgrade conservatively drops encrypted items produc
 - The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
 - `git diff --check` and Python bytecode compilation passed.
 
-The feature branch includes current `main`; Git reports no unmerged paths or conflict markers. Installed-runtime evidence must be recorded only after a matching build, coordinated maintenance activation, and live verification.
+The feature branch included current `main`; Git reported no unmerged paths or conflict markers. Pull request [#17](https://github.com/napiermd/model-harbor/pull/17) was mergeable without conflicts and merged as `ab97c04a08473db70ea7d9701deb5fd76f024fe2` after the macOS, website, AMD64 native Azure, and ARM64 native Azure checks passed.
+
+## Installed-runtime results
+
+The signed 29-entry candidate was staged at `build/staged-updates/encrypted-history-main-integration-20260919`. Its gateway resources exactly matched the tested source; the stage manifest records clean checkout `be424f1804c5bb8cbce13b93179cb22c9e88ed61`. The app used team `U7FYRC56QD` and CDHash `9b8de3b84ad50e89688e2451ea98fc058c93cfba`.
+
+Explicit coordinated maintenance completed with phase `resumed` at `~/Library/Application Support/Model Harbor/updates/gateway-9efbe1a0-417b-4657-b553-138b37078a71/maintenance.json`. The controller paused and resumed five local issuer processes, transferred existing turn ownership, and preserved the configuration revision. The matching signed interface was not installed because the runtime fix does not require replacing the UI.
+
+- Active runtime: `d3d263a14173df6ebb12f98ae78e0aee9866c01cff11abf81bd37a23617af6c1`
+- Boot ID: `bef4a0be-1d8a-446e-b47a-f397007487f8`
+- Maintenance gate: clear
+- Azure `gpt-5.6-sol`: ready and verified
+- OpenRouter `anthropic/claude-fable-5.1` and `deepseek/deepseek-v4.1-flash`: ready and verified
+- Ownership and shared configuration: preserved
+
+The installed five-request Azure proof passed JSON and streamed tool continuations with same-binding reasoning preserved. A continuation containing modified unknown ciphertext completed after Harbor removed that item. The installed OpenRouter Fable tool call and streamed continuation also passed. The private `opaque-history.sqlite` registry used mode `0600`, schema version 1, and contained only 64-character lowercase hexadecimal bindings and digests.

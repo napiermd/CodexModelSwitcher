@@ -1,6 +1,6 @@
 # Azure encrypted-history provenance
 
-Date: 2026-09-18. Branch: `codex/cross-provider-encrypted-history`.
+Date: 2026-09-19. Branch: `fix/openrouter-parameters`.
 
 ## Incident
 
@@ -36,12 +36,12 @@ The first request after this upgrade conservatively drops encrypted items produc
 
 `scripts/verify-azure-history.py` performs two real Azure tool continuations, one JSON and one streaming. It then modifies the captured encrypted item and verifies that the unknown ciphertext is removed before one successful Azure request. The script emits aggregate evidence only and does not print credentials, prompts, or ciphertext.
 
-## Local candidate results
+## Integrated candidate results
 
-- The full Python suite passed 439 tests with `ResourceWarning` promoted to errors.
-- The Swift suite passed 104 tests with no failures.
-- The focused adapter, Azure-history, and gateway-runtime run passed 82 tests.
+- The full Python suite passed 561 tests.
+- The Swift suite passed 108 tests with no failures.
+- Focused Azure-history, admission, deadline, gateway-runtime, provider-restore, and maintenance tests passed.
 - The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
 - `git diff --check` and Python bytecode compilation passed.
 
-Installed-runtime evidence is recorded after build, staging, activation, and live verification.
+The feature branch includes current `main`; Git reports no unmerged paths or conflict markers. Installed-runtime evidence must be recorded only after a matching build, coordinated maintenance activation, and live verification.

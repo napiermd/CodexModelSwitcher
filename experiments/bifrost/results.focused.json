@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic Azure contract only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+  "live_azure_tested": false,
+  "retry_owner": "bifrost",
+  "max_retries": 1,
+  "client_total_deadline_seconds": 12,
+  "cases": [
+    {
+      "case": "reasoning_history",
+      "passed": false,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "history_preserved": false,
+        "include_preserved": true,
+        "encrypted_content_preserved": false
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 55.12,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [
+        "/1/encrypted_content"
+      ],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error429",
+      "passed": false,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "recovered": true,
+        "one_retry": true,
+        "retry_after_honored": false
+      },
+      "upstream_attempts": 2,
+      "http_status": 200,
+      "elapsed_ms": 186.73,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": 152.98
+    },
+    {
+      "case": "stall",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "timeout_surfaces": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 504,
+      "elapsed_ms": 11707.97,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    }
+  ],
+  "matrix_complete": false,
+  "container_state": {
+    "harbor-bifrost-pilot-3cb497c753-azure": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2117624,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T20:26:07.270650055Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "harbor-bifrost-pilot-3cb497c753": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2117808,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T20:26:07.619607905Z",
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Health": {
+        "Status": "starting",
+        "FailingStreak": 2,
+        "Log": [
+          {
+            "Start": "2026-09-17T16:26:12.836041112-04:00",
+            "End": "2026-09-17T16:26:23.046200213-04:00",
+            "ExitCode": 1,
+            "Output": "wget: can't connect to remote host (127.0.0.1): Connection refused\n"
+          },
+          {
+            "Start": "2026-09-17T16:26:54.077652875-04:00",
+            "End": "2026-09-17T16:27:35.321332606-04:00",
+            "ExitCode": -1,
+            "Output": "timed out starting health check for container 42c2b5b65ae3d1cc35d4884e82db1a60e2ad12a1949a4b7539afd5e3d55b5e85"
+          }
+        ]
+      }
+    }
+  },
+  "cleanup_errors": [
+    {
+      "resource": "harbor-bifrost-pilot-3cb497c753-azure",
+      "error": "Command '['docker', 'rm', '-f', '-v', 'harbor-bifrost-pilot-3cb497c753-azure']' timed out after 15 seconds"
+    }
+  ],
+  "requested_cases_complete": true,
+  "transport_version_banner_verified": true,
+  "synthetic_content_in_console_logs": false,
+  "runtime_files": [
+    "config.db",
+    "config.db-shm",
+    "config.db-wal",
+    "config.json",
+    "empty-list.json",
+    "empty.json"
+  ],
+  "synthetic_content_in_runtime_files": false,
+  "all_synthetic_gates_passed": false,
+  "production_decision": "no-go: live Azure parity and latency unverified",
+  "cleanup_followup": {
+    "harbor-bifrost-pilot-3cb497c753": {
+      "exists": false,
+      "message": "error: no such object: harbor-bifrost-pilot-3cb497c753"
+    },
+    "harbor-bifrost-pilot-3cb497c753-azure": {
+      "exists": false,
+      "message": "error: no such object: harbor-bifrost-pilot-3cb497c753-azure"
+    }
+  }
+}

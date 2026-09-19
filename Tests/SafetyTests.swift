@@ -8,6 +8,103 @@ final class SafetyTests: XCTestCase {
                      models: [CodexModel(id: "test-model", name: "Test"), CodexModel(id: "__native__", name: "Native")], usesExistingProvider: existing)
     }
 
+    func testCatalogRecordsSourceDigestAndFlagsMissingMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("models.json")
+        try Data(#"{"client_version":"fixture-v1","models":[{"slug":"test-model","context_window":272000,"max_context_window":872000}]}"#.utf8).write(to: source)
+        var provider = service("codex-subscription")
+        provider.catalogPath = source.path
+        let data = AppData(services: [provider], selectedModel: nil)
+        let catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let origins = try XCTUnwrap(catalog["harbor_sources"] as? [[String: Any]])
+        XCTAssertEqual(origins.first?["client_version"] as? String, "fixture-v1")
+        XCTAssertEqual(origins.first?["path"] as? String, source.path)
+        XCTAssertEqual((origins.first?["sha256"] as? String)?.count, 64)
+        let entries = try XCTUnwrap(catalog["models"] as? [[String: Any]])
+        XCTAssertEqual(entries[0]["context_window"] as? Int, 272000)
+        XCTAssertEqual(entries[0]["max_context_window"] as? Int, 872000)
+        XCTAssertEqual(entries[1]["harbor_context_source"] as? String, "fallback")
+        XCTAssertNotNil(entries[1]["harbor_context_warning"])
+        try Data(#"{"models":[]}"#.utf8).write(to: source)
+        let changed = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let changedOrigins = try XCTUnwrap(changed["harbor_sources"] as? [[String: Any]])
+        XCTAssertNotEqual(origins.first?["sha256"] as? String, changedOrigins.first?["sha256"] as? String)
+    }
+
+    func testCatalogCandidateUsesOneSnapshotAndDetectsSourceRace() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("provider.json")
+        let original = Data(#"{"models":[{"slug":"test-model","context_window":200000,"max_context_window":300000}]}"#.utf8)
+        try original.write(to: source)
+        var provider = service("codex-subscription")
+        provider.catalogPath = source.path
+        let candidate = try LiveRouting.catalogCandidate(in: AppData(services: [provider], selectedModel: nil))
+        XCTAssertEqual(candidate.inputs[source], original)
+        XCTAssertTrue(candidate.inputsAreUnchanged())
+        try Data(#"{"models":[]}"#.utf8).write(to: source)
+        XCTAssertFalse(candidate.inputsAreUnchanged())
+    }
+
+    func testCatalogPublicationRollsBackWhenSourceChangesDuringWrite() throws {
+        let source = URL(fileURLWithPath: "/synthetic/source.json")
+        let destination = URL(fileURLWithPath: "/synthetic/catalog.json")
+        let previous = Data("previous".utf8)
+        let candidate = LiveRouting.CatalogCandidate(data: Data("candidate".utf8),
+                                                     inputs: [source: Data("source".utf8)])
+        var checks = 0
+        var writes: [Data] = []
+        XCTAssertThrowsError(try writer.publishCatalog(candidate, previous: previous, destination: destination,
+            inputsAreUnchanged: {
+                checks += 1
+                return checks == 1
+            }, write: { data, url in
+                XCTAssertEqual(url, destination)
+                writes.append(data)
+            }, remove: { _ in
+                XCTFail("An existing catalog must be restored, not removed")
+            }))
+        XCTAssertEqual(writes, [candidate.data, previous])
+    }
+
+    func testCatalogRejectsInvalidLimitsWithoutPublishingFallback() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for model in [
+            ["slug": "test-model", "context_window": 400000, "max_context_window": 200000],
+            ["slug": "test-model", "context_window": "private-invalid", "max_context_window": 200000]
+        ] {
+            let source = directory.appendingPathComponent(UUID().uuidString)
+            try JSONSerialization.data(withJSONObject: ["models": [model]]).write(to: source)
+            var provider = service("codex-subscription")
+            provider.catalogPath = source.path
+            XCTAssertThrowsError(try LiveRouting.catalog(in: AppData(services: [provider], selectedModel: nil)))
+        }
+    }
+
+    func testManualAzureCatalogDoesNotRequireNativeCapture() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("azure.json")
+        try JSONSerialization.data(withJSONObject: ["models": [["slug": "test-model",
+            "context_window": 128000, "max_context_window": 128000,
+            "harbor_context_mode": "manual"]]]).write(to: source)
+        var provider = service("azure")
+        provider.models = [CodexModel(id: "test-model", name: "Test")]
+        provider.catalogPath = source.path
+        let candidate = try LiveRouting.catalogCandidate(in: AppData(services: [provider], selectedModel: nil))
+        XCTAssertEqual(Set(candidate.inputs.keys), [source])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: candidate.data) as? [String: Any])
+        let entry = try XCTUnwrap((object["models"] as? [[String: Any]])?.first)
+        XCTAssertEqual(entry["harbor_context_mode"] as? String, "manual")
+        XCTAssertEqual(entry["context_window"] as? Int, 128000)
+    }
+
     func testBasetenTeamCatalogPreservesSelectionAndCustomModels() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -125,6 +222,73 @@ extension SafetyTests {
         let again = try writer.rewriteConfig(output, selected: selection, data: data)
         XCTAssertEqual(again.components(separatedBy: "[model_providers.model-harbor]").count, 2)
     }
+    private func parsedConfig(_ text: String) throws -> [String: Any] {
+        let parsed = try PythonRuntime.run("import json,sys,tomllib; print(json.dumps(tomllib.loads(json.load(sys.stdin)['config'])))",
+                                           input: ["config": text])
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: parsed) as? [String: Any])
+    }
+
+    func testSharedHarborProviderDisablesTransportRetriesForEveryRoute() throws {
+        for providerID in ["azure", "baseten", "codex-subscription", "openrouter", "grok-oauth"] {
+            let selected = SelectedModel(serviceID: providerID, modelID: "test-model")
+            let data = AppData(services: [service(providerID)], selectedModel: selected)
+            let output = try writer.rewriteConfig("", selected: selected, data: data)
+            let parsed = try parsedConfig(output)
+            let providers = try XCTUnwrap(parsed["model_providers"] as? [String: [String: Any]])
+            let provider = try XCTUnwrap(providers["model-harbor"])
+            XCTAssertEqual(parsed["model"] as? String, "harbor/\(providerID)/test-model")
+            XCTAssertEqual(parsed["model_provider"] as? String, "model-harbor")
+            XCTAssertEqual(provider["request_max_retries"] as? Int, 0, providerID)
+            XCTAssertEqual(provider["stream_max_retries"] as? Int, 0, providerID)
+            XCTAssertEqual(provider["http_headers"] as? [String: String],
+                           ["X-Model-Harbor-Token": "test-local-bridge-token"], providerID)
+            XCTAssertNil(parsed["request_max_retries"])
+            XCTAssertNil(parsed["stream_max_retries"])
+            XCTAssertEqual(try writer.rewriteConfig(output, selected: selected, data: data), output, providerID)
+        }
+    }
+
+    func testManagedHarborRetrySettingsReplaceOldValuesAndPreserveUnrelatedProvider() throws {
+        let original = """
+        model_reasoning_effort = "high"
+
+        # Codex Model Switcher managed provider: model-harbor
+        [model_providers.model-harbor]
+        name = "Previous Harbor"
+        base_url = "http://127.0.0.1:48118/harbor/v1"
+        wire_api = "responses"
+        request_max_retries = 4
+        stream_max_retries = 5
+        [model_providers.model-harbor.http_headers]
+        X-Model-Harbor-Token = "previous-local-token"
+
+        [model_providers.unrelated]
+        name = "Keep this provider"
+        base_url = "https://example.invalid/v1"
+        request_max_retries = 7
+        stream_max_retries = 8
+        [model_providers.unrelated.http_headers]
+        X-Synthetic = "keep-this-header"
+        """
+        let selected = SelectedModel(serviceID: "azure", modelID: "test-model")
+        let data = AppData(services: [service("azure")], selectedModel: selected)
+        let output = try writer.rewriteConfig(original, selected: selected, data: data)
+        let parsed = try parsedConfig(output)
+        let providers = try XCTUnwrap(parsed["model_providers"] as? [String: [String: Any]])
+        let harbor = try XCTUnwrap(providers["model-harbor"])
+        XCTAssertEqual(harbor["request_max_retries"] as? Int, 0)
+        XCTAssertEqual(harbor["stream_max_retries"] as? Int, 0)
+        XCTAssertEqual(harbor["http_headers"] as? [String: String],
+                       ["X-Model-Harbor-Token": "test-local-bridge-token"])
+        XCTAssertEqual(parsed["model_reasoning_effort"] as? String, "high")
+        let before = try parsedConfig(original)
+        let beforeProviders = try XCTUnwrap(before["model_providers"] as? [String: [String: Any]])
+        let unrelated = try XCTUnwrap(providers["unrelated"])
+        let originalUnrelated = try XCTUnwrap(beforeProviders["unrelated"])
+        XCTAssertEqual(unrelated as NSDictionary, originalUnrelated as NSDictionary)
+        XCTAssertEqual(try writer.rewriteConfig(output, selected: selected, data: data), output)
+    }
+
     func testGrokCopiesAuthenticationWithoutChangingSourceProvider() throws {
         let original = "[model_providers.xai]\nname = \"xAI\"\nbase_url = \"https://api.x.ai/v1\"\n[model_providers.xai.auth]\ncommand = \"/opt/homebrew/bin/op\"\nargs = [\"read\", \"op://example/item/key\"]\n"
         let selected = SelectedModel(serviceID: "xai", modelID: "test-model")

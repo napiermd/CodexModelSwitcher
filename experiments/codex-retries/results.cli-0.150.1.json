@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-17T23:31:54.712948+00:00",
+  "cli_version": "codex-cli 0.150.1",
+  "cli_sha256": "a14f9a907c12c8812878b70e6b7d65f81c39ed795513e46a55817d7428c0ca6b",
+  "request_max_retries": 0,
+  "stream_max_retries": 0,
+  "command": "<cli> exec --json --ephemeral --strict-config --ignore-rules --skip-git-repo-check -s read-only -C <temporary-workspace> \"Reply only OK.\"",
+  "cases": [
+    {
+      "returncode": 1,
+      "timed_out": false,
+      "elapsed_ms": 480,
+      "stderr": "Reading additional input from stdin...\n",
+      "scenario": "429",
+      "passed": true,
+      "post_attempts": 1,
+      "posts": [
+        {
+          "path": "/v1/responses",
+          "body_bytes": 31594,
+          "elapsed_ms": 469
+        }
+      ],
+      "partial_sse_sent": false,
+      "output_item_observed": false,
+      "blocked_proxy_requests": 1,
+      "unexpected_requests": 0,
+      "events": [
+        {
+          "type": "thread.started",
+          "thread_id": "<synthetic-thread>"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "error",
+            "message": "Model metadata for `fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "error",
+          "message": "exceeded retry limit, last status: 429 Too Many Requests"
+        },
+        {
+          "type": "turn.failed",
+          "error": {
+            "message": "exceeded retry limit, last status: 429 Too Many Requests"
+          }
+        }
+      ]
+    },
+    {
+      "returncode": 1,
+      "timed_out": false,
+      "elapsed_ms": 508,
+      "stderr": "Reading additional input from stdin...\n",
+      "scenario": "503",
+      "passed": true,
+      "post_attempts": 1,
+      "posts": [
+        {
+          "path": "/v1/responses",
+          "body_bytes": 31594,
+          "elapsed_ms": 496
+        }
+      ],
+      "partial_sse_sent": false,
+      "output_item_observed": false,
+      "blocked_proxy_requests": 2,
+      "unexpected_requests": 0,
+      "events": [
+        {
+          "type": "thread.started",
+          "thread_id": "<synthetic-thread>"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "error",
+            "message": "Model metadata for `fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "error",
+          "message": "unexpected status 503 Service Unavailable: synthetic upstream rejection, url: http://127.0.0.1:<port>/v1/responses"
+        },
+        {
+          "type": "turn.failed",
+          "error": {
+            "message": "unexpected status 503 Service Unavailable: synthetic upstream rejection, url: http://127.0.0.1:<port>/v1/responses"
+          }
+        }
+      ]
+    },
+    {
+      "returncode": 1,
+      "timed_out": false,
+      "elapsed_ms": 473,
+      "stderr": "Reading additional input from stdin...\n",
+      "scenario": "partial_delta",
+      "passed": true,
+      "post_attempts": 1,
+      "posts": [
+        {
+          "path": "/v1/responses",
+          "body_bytes": 31664,
+          "elapsed_ms": 449
+        }
+      ],
+      "partial_sse_sent": true,
+      "output_item_observed": false,
+      "blocked_proxy_requests": 2,
+      "unexpected_requests": 0,
+      "events": [
+        {
+          "type": "thread.started",
+          "thread_id": "<synthetic-thread>"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "error",
+            "message": "Model metadata for `fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "error",
+          "message": "stream disconnected before completion: stream closed before response.completed"
+        },
+        {
+          "type": "turn.failed",
+          "error": {
+            "message": "stream disconnected before completion: stream closed before response.completed"
+          }
+        }
+      ]
+    },
+    {
+      "returncode": 1,
+      "timed_out": false,
+      "elapsed_ms": 208,
+      "stderr": "Reading additional input from stdin...\n",
+      "scenario": "partial_output_item",
+      "passed": true,
+      "post_attempts": 1,
+      "posts": [
+        {
+          "path": "/v1/responses",
+          "body_bytes": 31706,
+          "elapsed_ms": 196
+        }
+      ],
+      "partial_sse_sent": true,
+      "output_item_observed": true,
+      "blocked_proxy_requests": 2,
+      "unexpected_requests": 0,
+      "events": [
+        {
+          "type": "thread.started",
+          "thread_id": "<synthetic-thread>"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "error",
+            "message": "Model metadata for `fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+          }
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_1",
+            "type": "agent_message",
+            "text": "synthetic partial output"
+          }
+        },
+        {
+          "type": "error",
+          "message": "stream disconnected before completion: stream closed before response.completed"
+        },
+        {
+          "type": "turn.failed",
+          "error": {
+            "message": "stream disconnected before completion: stream closed before response.completed"
+          }
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "desktop_verified": false,
+  "real_provider_verified": false
+}

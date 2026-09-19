@@ -1,0 +1,156 @@
+name: Bifrost native contract
+on:
+  pull_request:
+    paths:
+      - 'experiments/bifrost/**'
+      - 'Tests/test_bifrost_pilot.py'
+      - 'Tests/test_bifrost_pressure.py'
+      - 'Tests/test_bifrost_composed.py'
+      - 'ModelHarbor/Support/**'
+      - '.github/workflows/bifrost-pilot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bifrost-pilot-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-azure-contract:
+    name: Native Azure contract (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    env:
+      REPORT_DIR: /tmp/harbor-bifrost-native-contract
+      EXPECTED_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Pull exact transport and synthetic helper images
+        run: |
+          python3 -B - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
+          arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[platform.machine()]
+          assert arch == os.environ['EXPECTED_ARCH'], 'Runner architecture differs from matrix assignment'
+          for image in (pin['images'][arch], pin['mock_image']):
+              subprocess.run(['docker', 'pull', image], check=True, timeout=180)
+          PY
+      - name: Exercise native Azure passthrough with zero gateway retries
+        run: |
+          mkdir -p "$REPORT_DIR"
+          for sample in 1 2 3; do
+            python3 -B experiments/bifrost/pilot.py --surface azure-passthrough --output "$REPORT_DIR/sample-$sample.json"
+          done
+      - name: Measure bounded buffer and established stream behavior
+        run: |
+          python3 -B experiments/bifrost/pressure_pilot.py --surface azure-passthrough --output "$REPORT_DIR/pressure.json"
+      - name: Exercise Harbor admission and history through pinned Bifrost
+        run: |
+          python3 -B experiments/bifrost/composed_pilot.py --surface azure-passthrough --output "$REPORT_DIR/composed.json"
+      - name: Require complete conformance and pressure evidence
+        if: always()
+        run: |
+          python3 -B - <<'PY'
+          import hashlib, json, os, subprocess, sys
+          from pathlib import Path
+          directory = Path(os.environ['REPORT_DIR'])
+          pin = json.loads(Path('experiments/bifrost/pin.json').read_text())
+          expected_image = pin['images'][os.environ['EXPECTED_ARCH']]
+          summaries = []
+          for sample in range(1, 4):
+              path = directory / f'sample-{sample}.json'
+              report = json.loads(path.read_text())
+              failures = {row['case']: [name for name, passed in row.get('checks', {}).items() if not passed]
+                          for row in report['cases'] if not row['passed']}
+              summary = {'sample': sample, 'image': report['image'], 'surface': report['surface'],
+                         'cases': len(report['cases']), 'failures': failures,
+                         'all_synthetic_gates_passed': report['all_synthetic_gates_passed'],
+                         'cleanup_errors': report['cleanup_errors'],
+                         'report_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+              summaries.append(summary)
+              print(json.dumps(summary, indent=2))
+              assert report['image'] == expected_image, 'Report image differs from the matrix architecture pin'
+              assert report['surface'] == 'azure-passthrough' and report['max_retries'] == 0
+              assert report['all_synthetic_gates_passed'], 'Native transport conformance failed; see report'
+              assert not report['cleanup_errors'], 'Pilot cleanup was not verified'
+          pressure_path = directory / 'pressure.json'
+          pressure = json.loads(pressure_path.read_text())
+          assert pressure['image'] == expected_image
+          assert pressure['surface'] == 'azure-passthrough' and pressure['max_retries'] == 0
+          assert pressure['study'] == 'provider-pressure'
+          assert pressure['provider_limits'] == {'concurrency': 1, 'buffer_size': 1, 'drop_excess_requests': True}
+          assert [row['case'] for row in pressure['cases']] == ['queue_capacity', 'stream_lifetime']
+          assert pressure['all_synthetic_gates_passed'], 'Pressure observation incomplete; see report'
+          assert not pressure['cleanup_errors'], 'Pressure cleanup was not verified'
+          assert pressure['pacing_verified'] is False, 'A complete observation is not a pacing guarantee'
+          pressure_summary = {'report_sha256': hashlib.sha256(pressure_path.read_bytes()).hexdigest(),
+                              'all_synthetic_gates_passed': pressure['all_synthetic_gates_passed'],
+                              'pacing_verified': pressure['pacing_verified'], 'cases': pressure['cases']}
+          print(json.dumps(pressure_summary, indent=2))
+          composed_path = directory / 'composed.json'
+          composed = json.loads(composed_path.read_text())
+          sys.path.insert(0, str(Path('ModelHarbor/Support').resolve()))
+          from gateway_service import inventory, runtime_digest
+          source = inventory(Path('ModelHarbor/Support'))
+          assert composed['image'] == expected_image
+          assert composed['surface'] == 'azure-passthrough' and composed['max_retries'] == 0
+          assert composed['study'] == 'harbor-composed' and composed['entrypoint_verified']
+          assert composed['client_total_deadline_seconds'] == 55
+          assert composed['harbor_source_inventory'] == source
+          assert composed['harbor_runtime_digest'] == runtime_digest(source)
+          assert composed['harbor_policy'] == {'active_limit': 2, 'max_waiting': 16, 'wait_seconds': 30.0}
+          assert composed['bifrost_provider_limits'] == {'concurrency': 32, 'buffer_size': 32}
+          assert [row['case'] for row in composed['cases']] == [
+              'stream_lifetime', 'queue_capacity', 'queue_timeout', 'queued_cancellation', 'dispatched_cancellation',
+              'error429', 'error503', 'partial_disconnect', 'opaque_json', 'opaque_sse', 'invalid_encrypted']
+          assert composed['study_complete'] and composed['composed_synthetic_gate_passed']
+          assert composed['all_synthetic_gates_passed'] and not composed['cleanup_errors']
+          assert composed['fixture_started_without_upstream_requests'] and composed['all_upstream_requests_accounted_for']
+          assert composed['total_upstream_attempts'] == 34
+          assert composed['gateway_cleanup'] == {
+              'process_exited': True, 'sentinel_unchanged': True, 'source_unchanged': True, 'logs_content_free': True}
+          assert composed['installed_runtime_changed'] is False and composed['live_azure_tested'] is False
+          assert composed['queue_timeout_tested'] is True
+          expiration = next(row for row in composed['cases'] if row['case'] == 'queue_timeout')
+          assert expiration['http_statuses'] == [503, 200, 200]
+          first, second, expired = expiration['request_ids']
+          assert expiration['upstream_attempts'] == {first: 1, second: 1, expired: 0}
+          assert 30000 <= expiration['queued_request_elapsed_ms'] < 38000
+          assert 29000 <= expiration['queue_observed_wait_ms'] <= expiration['queued_request_elapsed_ms']
+          for check in ('local_queue_timeout_response', 'held_streams_open_after_timeout',
+                        'held_streams_completed', 'timed_out_request_has_no_active_lease',
+                        'timeout_does_not_make_turn_uncertain'):
+              assert expiration['checks'][check] is True, check
+          composed_summary = {'report_sha256': hashlib.sha256(composed_path.read_bytes()).hexdigest(),
+                              'harbor_runtime_digest': composed['harbor_runtime_digest'],
+                              'all_synthetic_gates_passed': composed['all_synthetic_gates_passed'],
+                              'total_upstream_attempts': composed['total_upstream_attempts'],
+                              'cases': composed['cases']}
+          print(json.dumps(composed_summary, indent=2))
+          provenance = {'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                        'repository': os.environ['GITHUB_REPOSITORY'], 'architecture': os.environ['EXPECTED_ARCH'],
+                        'checkout_sha': subprocess.check_output(['git', 'rev-parse', '--verify', 'HEAD'], text=True).strip(),
+                        'live_azure_tested': False, 'samples': summaries, 'pressure': pressure_summary, 'composed': composed_summary}
+          (directory / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          PY
+      - name: Retain synthetic report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bifrost-native-contract-${{ matrix.arch }}
+          path: ${{ env.REPORT_DIR }}
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,96 @@
+{
+  "schema_version": 2,
+  "scope": "synthetic Azure contract only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "image": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+  "live_azure_tested": false,
+  "surface": "azure-passthrough",
+  "route": "/azure_passthrough/openai/v1/responses",
+  "retry_owner": "none; caller policy tested separately",
+  "max_retries": 0,
+  "client_total_deadline_seconds": 12,
+  "cases": [],
+  "matrix_complete": false,
+  "all_synthetic_gates_passed": false,
+  "production_decision": "no-go: live Azure parity and latency unverified",
+  "container_state": {
+    "harbor-bifrost-pilot-ca3d5794cc-azure": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2172828,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:01:19.625712966Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "harbor-bifrost-pilot-ca3d5794cc": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2173007,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:01:25.57093315Z",
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Health": {
+        "Status": "starting",
+        "FailingStreak": 0,
+        "Log": []
+      }
+    }
+  },
+  "cleanup_errors": [
+    {
+      "resource": "harbor-bifrost-pilot-ca3d5794cc",
+      "error": "Command '['docker', 'rm', '-f', '-v', 'harbor-bifrost-pilot-ca3d5794cc']' timed out after 15 seconds"
+    },
+    {
+      "resource": "harbor-bifrost-pilot-ca3d5794cc-azure",
+      "error": "Command '['docker', 'rm', '-f', '-v', 'harbor-bifrost-pilot-ca3d5794cc-azure']' timed out after 15 seconds"
+    },
+    {
+      "resource": "harbor-bifrost-pilot-ca3d5794cc-network",
+      "error": "Command '['docker', 'network', 'rm', 'harbor-bifrost-pilot-ca3d5794cc-network']' timed out after 15 seconds"
+    }
+  ],
+  "harness_error": "Command '['docker', 'start', 'harbor-bifrost-pilot-ca3d5794cc']' timed out after 60 seconds",
+  "cleanup_followup": {
+    "checked_at": "2026-09-17T21:11:04.842613+00:00",
+    "method": "container-specific inspect through Colima VM; no image fallback",
+    "containers_absent": [
+      "harbor-bifrost-pilot-ca3d5794cc",
+      "harbor-bifrost-pilot-ca3d5794cc-azure"
+    ],
+    "network_removed_after_empty_endpoint_check": "harbor-bifrost-pilot-ca3d5794cc-network",
+    "network_removal_exit_code": 0,
+    "other_resources_changed": false
+  },
+  "host_diagnostic": {
+    "observed_at": "2026-09-17T14:06:19-07:00",
+    "vm_total_memory_mib": 7922,
+    "vm_available_memory_mib": 308,
+    "swap_mib": 0,
+    "causal_claim": false
+  }
+}

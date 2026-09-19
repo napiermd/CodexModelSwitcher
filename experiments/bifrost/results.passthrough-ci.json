@@ -1,0 +1,689 @@
+{
+  "schema_version": 2,
+  "scope": "synthetic Azure contract only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+  "live_azure_tested": false,
+  "surface": "azure-passthrough",
+  "route": "/azure_passthrough/openai/v1/responses",
+  "retry_owner": "none; caller policy tested separately",
+  "max_retries": 0,
+  "client_total_deadline_seconds": 12,
+  "cases": [
+    {
+      "case": "basic",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 11.67,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "stream",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "one_terminal_completed": true,
+        "nonempty_output_received": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 2.85,
+      "first_output_ms": 2.78,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_item.done",
+        "response.completed"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "image",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "image_unchanged": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.06,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "custom_tool",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "one_terminal_completed": true,
+        "nonempty_output_received": true,
+        "custom_definition_preserved": true,
+        "custom_output_preserved": true,
+        "custom_delta_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.55,
+      "first_output_ms": 1.49,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.custom_tool_call_input.delta",
+        "response.output_item.done",
+        "response.completed"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "custom_history",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "custom_definition_preserved": true,
+        "custom_output_preserved": true,
+        "history_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.0,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "function_history",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "history_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.08,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "reasoning_history",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "history_preserved": true,
+        "include_preserved": true,
+        "encrypted_content_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 41.97,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "previous_response",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "previous_id_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.03,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error429",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "upstream_status_preserved": true,
+        "no_gateway_retry": true,
+        "retry_after_forwarded": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 429,
+      "elapsed_ms": 0.98,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error500",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "upstream_status_preserved": true,
+        "no_gateway_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 500,
+      "elapsed_ms": 1.01,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error502",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "upstream_status_preserved": true,
+        "no_gateway_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 502,
+      "elapsed_ms": 41.57,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error503",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "upstream_status_preserved": true,
+        "no_gateway_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 503,
+      "elapsed_ms": 1.01,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "error529",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "upstream_status_preserved": true,
+        "no_gateway_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 529,
+      "elapsed_ms": 0.99,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "pre_output_failure",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "failure_reported_or_recovered": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.47,
+      "first_output_ms": null,
+      "response_event_types": [
+        "response.created",
+        "response.failed"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "partial_failure",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "nonempty_output_received": true,
+        "no_retry_after_output": true,
+        "no_false_completion": true,
+        "failure_surfaces": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.52,
+      "first_output_ms": 1.47,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.failed"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "cancel",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "nonempty_output_received": true,
+        "no_terminal_success": true,
+        "no_replay_after_cancel": true,
+        "upstream_cancel_within_two_seconds": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.48,
+      "first_output_ms": 1.46,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null,
+      "no_replay_observation_seconds": 2,
+      "upstream_disconnect_after_cancel_ms": 500.75
+    },
+    {
+      "case": "stall",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "timeout_surfaces": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 504,
+      "elapsed_ms": 3004.81,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "opaque_history",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "history_preserved": true,
+        "include_preserved": true,
+        "encrypted_content_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.32,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "opaque_response",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "opaque_output_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.11,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "opaque_stream",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "http_success": true,
+        "response_success": true,
+        "correct_path": true,
+        "deployment_mapped": true,
+        "synthetic_azure_auth": true,
+        "usage_preserved": true,
+        "one_terminal_completed": true,
+        "nonempty_output_received": true,
+        "opaque_output_preserved": true,
+        "opaque_added_events_preserved": true,
+        "opaque_done_events_preserved": true,
+        "opaque_text_delta_preserved": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.76,
+      "first_output_ms": 1.7,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_item.done",
+        "response.completed"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "invalid_auth",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "incorrect_key_reached_upstream": true,
+        "auth_error_surfaces": true,
+        "no_auth_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 401,
+      "elapsed_ms": 0.94,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "invalid_encrypted",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "rejected_history_surfaces": true,
+        "no_history_rewrite_retry": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 400,
+      "elapsed_ms": 41.91,
+      "first_output_ms": null,
+      "response_event_types": [],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "partial_disconnect",
+      "passed": true,
+      "checks": {
+        "upstream_reached": true,
+        "bounded_attempts": true,
+        "bounded_deadline": true,
+        "nonempty_output_received": true,
+        "no_retry_after_output": true,
+        "no_false_completion": true
+      },
+      "upstream_attempts": 1,
+      "http_status": 200,
+      "elapsed_ms": 1.58,
+      "first_output_ms": 1.54,
+      "response_event_types": [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta"
+      ],
+      "error_type": null,
+      "input_changed_paths": [],
+      "retry_gap_ms": null
+    },
+    {
+      "case": "concurrent_workers",
+      "passed": true,
+      "checks": {
+        "three_upstream_requests": true,
+        "three_simultaneous_upstream_requests": true,
+        "bounded_deadline": true,
+        "worker_0_own_response": true,
+        "worker_0_one_attempt": true,
+        "worker_1_own_response": true,
+        "worker_1_one_attempt": true,
+        "worker_2_own_response": true,
+        "worker_2_one_attempt": true
+      },
+      "upstream_attempts": 3,
+      "elapsed_ms": 50.37,
+      "http_statuses": [
+        200,
+        200,
+        200
+      ],
+      "scope": "three concurrent requests; queue bounds, fairness and billing unverified"
+    }
+  ],
+  "matrix_complete": true,
+  "all_synthetic_gates_passed": true,
+  "production_decision": "no-go: live Azure parity and latency unverified",
+  "container_state": {
+    "harbor-bifrost-pilot-83e7f6a57a-azure": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2293,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:16:14.695919307Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "harbor-bifrost-pilot-83e7f6a57a": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 2394,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:16:14.87243895Z",
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0,
+        "Log": [
+          {
+            "Start": "2026-09-17T21:16:19.944969749Z",
+            "End": "2026-09-17T21:16:19.967129703Z",
+            "ExitCode": 0,
+            "Output": ""
+          }
+        ]
+      }
+    }
+  },
+  "cleanup_errors": [],
+  "expected_case_names": [
+    "basic",
+    "stream",
+    "image",
+    "custom_tool",
+    "custom_history",
+    "function_history",
+    "reasoning_history",
+    "previous_response",
+    "error429",
+    "error500",
+    "error502",
+    "error503",
+    "error529",
+    "pre_output_failure",
+    "partial_failure",
+    "cancel",
+    "stall",
+    "opaque_history",
+    "opaque_response",
+    "opaque_stream",
+    "invalid_auth",
+    "invalid_encrypted",
+    "partial_disconnect",
+    "concurrent_workers"
+  ],
+  "requested_cases_complete": true,
+  "transport_version_banner_verified": true,
+  "synthetic_content_in_console_logs": false,
+  "runtime_files": [
+    "config.db",
+    "config.db-shm",
+    "config.db-wal",
+    "config.json",
+    "empty-list.json",
+    "empty.json"
+  ],
+  "synthetic_content_in_runtime_files": false,
+  "all_requested_case_checks_passed": true
+}

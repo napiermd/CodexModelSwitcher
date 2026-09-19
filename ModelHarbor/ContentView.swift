@@ -24,6 +24,7 @@ struct ContentView: View {
     private var service: CodexService? { store.data.services.first { $0.id == focusedProvider } }
     private var activity: ProviderActivity { store.providerActivity[focusedProvider] ?? ProviderActivity() }
     private var connected: Bool { store.providerConnected(focusedProvider) }
+    private var configured: Bool { connected || store.providerCredentialsAvailable[focusedProvider] == true }
     private var visibleProviders: [ProviderDefinition] {
         let visible = ProviderDefinition.all.filter { !hiddenProviders.split(separator: ",").contains(Substring($0.id)) }
         return visible.isEmpty ? ProviderDefinition.all : visible
@@ -206,6 +207,7 @@ struct ContentView: View {
             return connected ? "Direct API · Credential ready" : (store.basetenState == "needs_reconnect" ? "Direct API · Reconnect required" : "Direct API · Unlock once for this session")
         }
         if focusedProvider == "grok-oauth" && store.grokIsSignedIn { return "Browser sign-in · \(store.grokAccount)" }
+        if focusedProvider == "grok-oauth" { return "Grok browser sign-in · \(store.grokAccount)" }
         if focusedProvider == "azure" { return connected ? "Azure OpenAI · Key saved in Keychain" : "Your Azure resource and deployments" }
         if focusedProvider == "openrouter" { return connected ? "API key · Saved in Keychain" : "One connection, multiple model providers" }
         return "Uses the account signed in to Codex"
@@ -220,8 +222,16 @@ struct ContentView: View {
                     Text(activity.httpStatus.flatMap { $0 >= 400 ? "Last request returned HTTP \($0)" : nil } ?? "Last request did not complete").font(.caption).foregroundStyle(.orange)
                 } else if let date = activity.lastSuccess {
                     Text("Last response \(date, style: .relative) ago").font(.caption).foregroundStyle(.secondary)
+                } else if focusedProvider == "codex-subscription" && store.codexConfigured {
+                    Text("No completed request this session").font(.caption).foregroundStyle(.secondary)
+                } else if connected {
+                    Text("Ready for the next request").font(.caption).foregroundStyle(.secondary)
+                } else if configured && store.proxyStatus == .active {
+                    Text("Credentials loaded. Verify a model under Manage connection.").font(.caption).foregroundStyle(.secondary)
+                } else if focusedProvider == "grok-oauth" && store.grokAccount == "Sign-in not checked" && store.proxyStatus == .active {
+                    Text("Sign-in status has not been checked in this session").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text(focusedProvider == "codex-subscription" && store.codexConfigured ? "No completed request this session" : (connected ? "Ready for the next request" : "No connection established")).font(.caption).foregroundStyle(.secondary)
+                    Text("No connection established").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if activity.completed > 0 { Text("\(activity.completed) completed").font(.caption).monospacedDigit().foregroundStyle(.secondary).help("Completed requests since Harbor started") }
@@ -243,19 +253,33 @@ struct ContentView: View {
         case "grok-oauth":
             Button(store.isGrokLoginRunning ? "Signing in…" : (connected ? "Switch account…" : "Sign in to Grok")) { store.signInGrok() }.disabled(store.isGrokLoginRunning).buttonStyle(.bordered)
         case "azure":
-            Menu(connected ? "Manage connection" : "Connect Azure OpenAI") {
-                Button(connected ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }
-                if connected { Button("Disconnect") { Task { await store.disconnectAzure() } } }
+            Menu(configured ? "Manage connection" : "Connect Azure OpenAI") {
+                restoreSavedConnectionAction
+                Button(configured ? "Add or update deployment…" : "Set up Azure…") { store.clearError(); page = "azure" }.disabled(store.restoringSavedConnection)
+                if configured { Button("Disconnect") { Task { await store.disconnectAzure() } }.disabled(store.restoringSavedConnection) }
             }.fixedSize()
         case "openrouter":
-            if connected {
+            if configured || service?.models.isEmpty == false {
                 Menu("Manage connection") {
-                    Button("Choose models…") { beginOpenRouter() }
+                    restoreSavedConnectionAction
+                    Button("Choose models…") { beginOpenRouter() }.disabled(store.restoringSavedConnection)
                     Button("Open OpenRouter dashboard") { open(provider.dashboard) }
-                    Button("Disconnect") { Task { await store.disconnectOpenRouter() } }
+                    Button("Disconnect") { Task { await store.disconnectOpenRouter() } }.disabled(store.restoringSavedConnection)
                 }.fixedSize()
             } else { Button("Connect OpenRouter") { beginOpenRouter() }.buttonStyle(.bordered) }
         default: Button("Manage accounts…") { settingsTab = "Providers"; page = "settings" }.buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder private var restoreSavedConnectionAction: some View {
+        if store.restoringSavedConnection {
+            Button("Cancel connection restore") { store.cancelSavedConnectionRestore() }
+        } else if let service, !service.models.isEmpty {
+            Menu("Restore saved connection") {
+                ForEach(service.models) { model in
+                    Button("Verify " + model.id) { store.restoreSavedConnection(providerID: service.id, modelID: model.id) }
+                }
+            }.disabled(store.proxyStatus != .active)
         }
     }
 

@@ -14,10 +14,35 @@ struct CodexConfigWriter {
 
     func updateCatalog(in data: AppData) throws {
         try FileManager.default.createDirectory(at: LiveRouting.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let catalog = try LiveRouting.catalog(in: data)
-        if (try? Data(contentsOf: LiveRouting.catalogURL)) != catalog {
-            try privateWrite(catalog, to: LiveRouting.catalogURL)
+        let lock = try ConfigLock(directory: AppPaths.codexDirectory)
+        defer { withExtendedLifetime(lock) {} }
+        let candidate = try LiveRouting.catalogCandidate(in: data)
+        let previous = try? Data(contentsOf: LiveRouting.catalogURL)
+        guard candidate.inputsAreUnchanged() else { throw catalogSourceRace() }
+        if previous != candidate.data {
+            try publishCatalog(candidate, previous: previous, destination: LiveRouting.catalogURL,
+                inputsAreUnchanged: { candidate.inputsAreUnchanged() },
+                write: { try privateWrite($0, to: $1) },
+                remove: { try FileManager.default.removeItem(at: $0) })
         }
+    }
+
+    func publishCatalog(_ candidate: LiveRouting.CatalogCandidate, previous: Data?, destination: URL,
+                        inputsAreUnchanged: () -> Bool,
+                        write: (Data, URL) throws -> Void,
+                        remove: (URL) throws -> Void) throws {
+        guard inputsAreUnchanged() else { throw catalogSourceRace() }
+        try write(candidate.data, destination)
+        guard inputsAreUnchanged() else {
+            if let previous { try write(previous, destination) }
+            else { try remove(destination) }
+            throw catalogSourceRace()
+        }
+    }
+
+    private func catalogSourceRace() -> NSError {
+        NSError(domain: "ModelHarbor.Catalog", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "A model catalog changed while Harbor was reconciling it. Try again."])
     }
 
     func applySelection(_ selected: SelectedModel, in data: AppData) throws {
@@ -113,6 +138,7 @@ struct CodexConfigWriter {
                     let token = try bridgeToken ?? String(contentsOfFile: tokenPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !token.isEmpty, !token.contains("\n"), !token.contains("\r") else { throw AppError.openAIAccountLoginFailed }
                     lines.append(contentsOf: ["supports_websockets = false", "requires_openai_auth = true",
+                        "request_max_retries = 0", "stream_max_retries = 0",
                         "stream_idle_timeout_ms = 900000",
                         "[model_providers.model-harbor.http_headers]",
                         "X-Model-Harbor-Token = \"\(tomlEscape(token))\""])

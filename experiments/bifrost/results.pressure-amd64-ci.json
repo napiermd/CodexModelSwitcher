@@ -1,0 +1,145 @@
+{
+  "schema_version": 2,
+  "scope": "synthetic provider admission and stream-lifetime observations only",
+  "pin": {
+    "transport_version": "v2.2.0",
+    "source_tag": "transports/v2.2.0",
+    "image_tag": "maximhq/bifrost:v2.2.0",
+    "images": {
+      "arm64": "maximhq/bifrost@sha256:d2c81d1dbfb11e0e0deea4a7bc6eea3b49503f05b76b4d18d7b34dcb9a24369b",
+      "amd64": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0"
+    },
+    "edition": "OSS container; no enterprise license",
+    "resolved_at": "2026-09-17",
+    "resolution": "docker manifest inspect maximhq/bifrost:v2.2.0; docker pull exact platform digest",
+    "live_azure_benchmark": false,
+    "source_commit": "ed79592fc4771f12f2717dd7c9ab668e663a08f3",
+    "mock_image": "python@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a"
+  },
+  "image": "maximhq/bifrost@sha256:5857d3a4061b16f47fdeeb060920f6cb0399bed1b320d408b94e41578ad667b0",
+  "live_azure_tested": false,
+  "surface": "azure-passthrough",
+  "route": "/azure_passthrough/openai/v1/responses",
+  "retry_owner": "none; caller policy tested separately",
+  "max_retries": 0,
+  "client_total_deadline_seconds": 12,
+  "cases": [
+    {
+      "case": "queue_capacity",
+      "passed": true,
+      "checks": {
+        "only_held_request_reached_upstream_before_release": true,
+        "overflow_is_queue_full_503": true,
+        "overflow_never_reached_upstream": true,
+        "accepted_requests_once_each": true,
+        "accepted_responses_match_callers": true,
+        "clients_finished_within_deadline": true,
+        "no_unexpected_upstream_requests": true,
+        "upstream_uses_synthetic_key": true,
+        "native_path_and_payload_preserved": true,
+        "queued_request_started_after_release": true
+      },
+      "held_request_id": "8f7f60245f0e414c920744f2daa883e3",
+      "queued_request_id": "4565357d42f04693b2a625ac2180621e",
+      "rejected_request_id": "1acab51a822f42b28554acd83f80b363",
+      "upstream_attempts": {
+        "8f7f60245f0e414c920744f2daa883e3": 1,
+        "4565357d42f04693b2a625ac2180621e": 1,
+        "1acab51a822f42b28554acd83f80b363": 0
+      },
+      "total_upstream_attempts": 2,
+      "http_statuses": [
+        200,
+        200,
+        503
+      ],
+      "scope": "one held, one queued, one rejected; follower identities observed, FIFO not asserted"
+    },
+    {
+      "case": "stream_lifetime",
+      "passed": true,
+      "checks": {
+        "one_attempt_per_request": true,
+        "complete_correlated_streams": true,
+        "first_stream_was_established": true,
+        "overlap_observation_matches_both_ends": true,
+        "clients_finished_within_deadline": true,
+        "no_unexpected_upstream_requests": true,
+        "upstream_uses_synthetic_key": true,
+        "native_path_and_payload_preserved": true
+      },
+      "upstream_attempts": {
+        "c450dcb976f94db496dd13bff669552e": 1,
+        "f017259271c34ef58266cdcdf7236848": 1
+      },
+      "total_upstream_attempts": 2,
+      "overlap_observed": true,
+      "observation": "overlap_observed",
+      "observation_window_seconds": 2,
+      "pacing_verified": false,
+      "active_stream_bound_disproved": true,
+      "scope": "worker concurrency versus two open streams; a passing row means valid evidence, not a pacing guarantee"
+    }
+  ],
+  "matrix_complete": true,
+  "all_synthetic_gates_passed": true,
+  "production_decision": "no-go: live Azure parity and latency unverified",
+  "container_state": {
+    "harbor-bifrost-pilot-bcec547101-azure": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 4156,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:56:31.592870014Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "harbor-bifrost-pilot-bcec547101": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 4256,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-17T21:56:31.739723584Z",
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Health": {
+        "Status": "starting",
+        "FailingStreak": 0,
+        "Log": []
+      }
+    }
+  },
+  "cleanup_errors": [],
+  "expected_case_names": [
+    "queue_capacity",
+    "stream_lifetime"
+  ],
+  "study": "provider-pressure",
+  "pacing_verified": false,
+  "provider_limits": {
+    "concurrency": 1,
+    "buffer_size": 1,
+    "drop_excess_requests": true
+  },
+  "requested_cases_complete": true,
+  "transport_version_banner_verified": true,
+  "synthetic_content_in_console_logs": false,
+  "runtime_files": [
+    "config.db",
+    "config.db-shm",
+    "config.db-wal",
+    "config.json",
+    "empty-list.json",
+    "empty.json"
+  ],
+  "synthetic_content_in_runtime_files": false,
+  "all_requested_case_checks_passed": true
+}

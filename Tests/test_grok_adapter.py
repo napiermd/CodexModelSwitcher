@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import json
 import pathlib
@@ -38,20 +39,48 @@ class TranslationTests(unittest.TestCase):
                     translated = module.Translation({'model': model, 'input': [], 'reasoning': {'effort': effort}})
                     self.assertEqual(translated.request['reasoning']['effort'], effort)
 
-    def test_tool_free_request_drops_stale_tool_choice(self):
+    def test_tool_free_request_drops_stale_tool_choice_without_mutating_source(self):
         for supplied_tools in (False, True):
-            source = {
-                'model': 'grok-4.6',
-                'input': [{'role': 'user', 'content': 'Summarize this task'}],
-                'tool_choice': {'type': 'function', 'name': 'exec'},
-            }
-            if supplied_tools:
-                source['tools'] = []
-            for native_tools in (False, True):
-                with self.subTest(supplied_tools=supplied_tools, native_tools=native_tools):
-                    translated = module.Translation(source, native_tools=native_tools)
-                    self.assertFalse(translated.request.get('tools'))
-                    self.assertNotIn('tool_choice', translated.request)
+            for choice in ({'type': 'function', 'name': 'exec'}, 'required', 'auto', 'none'):
+                for translation, native in ((module.Translation, False), (module.Translation, True),
+                                            (module.AzureTranslation, False)):
+                    with self.subTest(supplied_tools=supplied_tools, choice=choice,
+                                      translation=translation.__name__, native=native):
+                        source = {'model': 'fixture-model',
+                                  'input': [{'role': 'user', 'content': 'Summarize this task'}],
+                                  'tool_choice': choice}
+                        if supplied_tools:
+                            source['tools'] = []
+                        original = copy.deepcopy(source)
+                        translated = translation(source, native_tools=native).request
+                        self.assertNotIn('tool_choice', translated)
+                        self.assertFalse(translated.get('tools'))
+                        self.assertEqual(translated['input'], original['input'])
+                        self.assertEqual(source, original)
+
+    def test_nonempty_tools_keep_forced_choice_in_every_request_path(self):
+        source = {'tools': [{'type': 'function', 'name': 'exec', 'parameters': {'type': 'object'}}],
+                  'tool_choice': {'type': 'function', 'name': 'exec'}, 'input': []}
+        for translation, native in ((module.Translation, False), (module.Translation, True),
+                                    (module.AzureTranslation, False)):
+            with self.subTest(translation=translation.__name__, native=native):
+                translated = translation(source, native_tools=native).request
+                self.assertEqual(translated['tools'], source['tools'])
+                self.assertEqual(translated['tool_choice'], {'type': 'function', 'name': 'exec'})
+
+    def test_tool_free_azure_compaction_preserves_opaque_history_and_tool_result(self):
+        reasoning = {'type': 'reasoning', 'id': 'rs_fixture', 'summary': [],
+                     'encrypted_content': 'synthetic-opaque',
+                     'extension': {'tool_choice': {'type': 'function', 'name': 'opaque'}}}
+        source = {'tools': [], 'tool_choice': {'type': 'function', 'name': 'exec'}, 'input': [
+            reasoning, {'type': 'custom_tool_call_output', 'id': 'ctco_fixture',
+                        'call_id': 'call_fixture', 'output': 'synthetic-result'}]}
+        translated = module.AzureTranslation(source).request
+        self.assertNotIn('tool_choice', translated)
+        self.assertEqual(translated['input'], [reasoning, {'type': 'function_call_output',
+                         'call_id': 'call_fixture', 'output': 'synthetic-result'}])
+        self.assertIn('tool_choice', source)
+        self.assertEqual(source['input'][1]['type'], 'custom_tool_call_output')
 
     def test_large_group_keeps_every_tool_under_provider_limit(self):
         t=self.translation(446)
@@ -405,7 +434,7 @@ class LiveRoutingTests(unittest.TestCase):
         import threading, urllib.request, urllib.error, io
         from unittest.mock import patch
         token = self.root/'token'; token.write_text('test-local-bridge-token')
-        response = {'type':'response.completed','response':{'id':'r','model':'grok-4.6','status':'completed','output':[]}}
+        response = {'type':'response.completed','response':{'id':'r','model':'grok-4.6','status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'OK'}]}]}}
         body = ('event: response.completed\ndata: '+json.dumps(response)+'\n\n').encode()
         class Upstream(io.BytesIO):
             status = 200

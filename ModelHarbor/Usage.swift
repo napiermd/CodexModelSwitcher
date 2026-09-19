@@ -202,11 +202,7 @@ enum UsageClient {
         return try UsageParser.codex(raw, id: account.id, label: account.label)
     }
     static func bridge() async throws -> [UsageSnapshot] {
-        let token = try String(contentsOf: AppPaths.codexDirectory.appendingPathComponent("model-harbor-bridge-token"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:48118/harbor/usage")!, timeoutInterval: 120)
-        request.setValue(token, forHTTPHeaderField: "X-Model-Harbor-Token")
-        let (bytes, response) = try await transport.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ProviderError.message("Usage service is unavailable. Keep Model Harbor open.") }
+        let bytes = try await GrokAdapter.ownerControl("GET", path: "/harbor/usage")
         struct Envelope: Decodable { var entries: [UsageSnapshot] }
         return try UsageSnapshot.decoder.decode(Envelope.self, from: bytes).entries
     }

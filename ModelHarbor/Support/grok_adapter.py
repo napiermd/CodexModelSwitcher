@@ -71,6 +71,10 @@ _metrics_module = importlib.util.module_from_spec(_metrics_spec)
 _metrics_spec.loader.exec_module(_metrics_module)
 REQUEST_METRICS = _metrics_module.Recorder()
 REQUEST_METRICS_ENABLED = os.environ.get('MODEL_HARBOR_REQUEST_METRICS') == '1'
+_ledger_spec = importlib.util.spec_from_file_location('harbor_usage_ledger', pathlib.Path(__file__).with_name('usage_ledger.py'))
+_ledger_module = importlib.util.module_from_spec(_ledger_spec)
+_ledger_spec.loader.exec_module(_ledger_module)
+USAGE_LEDGER = _ledger_module
 
 
 _CATALOG_VERSION = None
@@ -2146,6 +2150,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         'at': time.time()})
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
+                USAGE_LEDGER.record({'provider': route['provider'], 'model': route['model'],
+                    'status': activity_status, 'http_status': activity_http_status,
+                    'failure_class': failure_kind or (azure_budget.stop_reason if azure_budget else None),
+                    'stream': bool(translation.request.get('stream')) if hasattr(translation, 'request') else None,
+                    'duration_seconds': time.monotonic() - request_started_at,
+                    'usage': translation.usage})
             if metrics_handle is not None:
                 metric_state = ('completed' if activity_status == 'completed' else
                                 'cancelled' if activity_status == 'cancelled' else
@@ -2169,6 +2179,8 @@ class GatewayHTTPServer(http.server.ThreadingHTTPServer):
 def main():
     global RUNTIME, TASK_REPAIRS, _CATALOG_VERSION
     _CATALOG_VERSION = detect_codex_version()
+    ledger_dir = pathlib.Path(os.environ.get('MODEL_HARBOR_STATE_DIR', str(CONFIG_DIR / 'model-harbor')))
+    USAGE_LEDGER.configure(ledger_dir / 'usage-events.jsonl')
     independent = os.environ.get('MODEL_HARBOR_INDEPENDENT') == '1'
     if independent:
         directory = os.environ.get('MODEL_HARBOR_STATE_DIR')

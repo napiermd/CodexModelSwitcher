@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "captured_with": "0.155.0-alpha.9.2",
+  "captured_at": "2026-09-18",
+  "source": "Codex desktop session tool registration (mcp__codex_app namespace, deferred loading)",
+  "tools": [
+    {
+      "type": "namespace",
+      "name": "codex_app",
+      "description": "Tools provided by the Codex app.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "automation_update",
+          "description": "Codex app tool automation_update. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "capture_screen_context",
+          "description": "Codex app tool capture_screen_context. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "create_thread",
+          "description": "Codex app tool create_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "fork_thread",
+          "description": "Codex app tool fork_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "get_handoff_status",
+          "description": "Codex app tool get_handoff_status. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "handoff_thread",
+          "description": "Codex app tool handoff_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "list_projects",
+          "description": "Codex app tool list_projects. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "list_threads",
+          "description": "Codex app tool list_threads. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "list_archived_threads",
+          "description": "Codex app tool list_archived_threads. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "navigate_to_codex_page",
+          "description": "Codex app tool navigate_to_codex_page. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "open_in_codex",
+          "description": "Codex app tool open_in_codex. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "read_thread",
+          "description": "Codex app tool read_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "read_thread_terminal",
+          "description": "Codex app tool read_thread_terminal. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "send_message_to_thread",
+          "description": "Codex app tool send_message_to_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "set_thread_archived",
+          "description": "Codex app tool set_thread_archived. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "set_thread_title",
+          "description": "Codex app tool set_thread_title. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "share_thread",
+          "description": "Codex app tool share_thread. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "wait_threads",
+          "description": "Codex app tool wait_threads. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        },
+        {
+          "type": "function",
+          "name": "load_workspace_dependencies",
+          "description": "Codex app tool load_workspace_dependencies. Provided by the Codex app; the app executes it natively.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          }
+        }
+      ]
+    }
+  ]
+}

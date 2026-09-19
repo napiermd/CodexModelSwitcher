@@ -79,6 +79,11 @@ _estimate_spec = importlib.util.spec_from_file_location('harbor_usage_estimate',
 _estimate_module = importlib.util.module_from_spec(_estimate_spec)
 _estimate_spec.loader.exec_module(_estimate_module)
 USAGE_ESTIMATE = _estimate_module
+_app_tools_spec = importlib.util.spec_from_file_location('harbor_codex_app_tools', pathlib.Path(__file__).with_name('codex_app_tools.py'))
+_app_tools_module = importlib.util.module_from_spec(_app_tools_spec)
+_app_tools_spec.loader.exec_module(_app_tools_module)
+CODEX_APP_TOOLS = _app_tools_module
+CODEX_APP_TOOLS_ENABLED = os.environ.get('MODEL_HARBOR_CODEX_APP_TOOLS') == '1'
 
 
 _CATALOG_VERSION = None
@@ -1145,7 +1150,12 @@ class Translation:
             return
         if str(source.get('model', '')).startswith('grok-4.20'):
             self.request.pop('reasoning', None)
-        self.request['tools'] = self.tools(source.get('tools', []))
+        tools = source.get('tools', [])
+        if CODEX_APP_TOOLS_ENABLED:
+            snapshot = CODEX_APP_TOOLS.load_snapshot()
+            if snapshot is not None and CODEX_APP_TOOLS.staleness(snapshot, _CATALOG_VERSION) is None:
+                tools, _ = CODEX_APP_TOOLS.merge(tools, snapshot)
+        self.request['tools'] = self.tools(tools)
         self.request['input'] = self.input_items(source.get('input', []))
         if self.request['tools'] and isinstance(source.get('tool_choice'), dict):
             self.request['tool_choice'] = self.choice(source['tool_choice'])

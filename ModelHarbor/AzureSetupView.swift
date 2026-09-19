@@ -7,7 +7,8 @@ struct AzureSetupView: View {
     @State private var key = ""
     @State private var deploymentName = ""
     @State private var effort = "none"
-    @State private var context = "128000"
+    @State private var context = ""
+    @State private var restoredModelName: String?
     @State private var vision = false
     @State private var advanced = false
     @State private var hideBaseten = true
@@ -113,8 +114,8 @@ struct AzureSetupView: View {
                     Text("Harbor checks the selected setting and uses it for this deployment. Change it here and verify again to use another effort.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Toggle("Enable image input", isOn: $vision)
-                    HStack { Text("Context limit"); TextField("128000", text: $context).textFieldStyle(.roundedBorder) }
-                    Text("Set the token limit from your deployment's model specifications. Harbor cannot discover this limit from the key.")
+                    HStack { Text("Context limit"); TextField("Automatic", text: $context).textFieldStyle(.roundedBorder) }
+                    Text("Leave blank to use matching native model metadata. Unknown models fall back to 128,000 tokens. Enter a limit to override it for your deployment.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 8)
             }
@@ -138,12 +139,17 @@ struct AzureSetupView: View {
     private func resetDiscovery() { deployments = []; discoveryMessage = "" }
 
     private func restoreDeploymentOptions() {
+        restoredModelName = nil
         guard let path = store.data.services.first(where: { $0.id == "azure" })?.catalogPath,
               let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let catalog = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let entry = (catalog["models"] as? [[String: Any]])?.first(where: { $0["slug"] as? String == deploymentName }) else { return }
         effort = entry["default_reasoning_level"] as? String ?? "none"
-        context = String(entry["context_window"] as? Int ?? 128000)
+        restoredModelName = entry["harbor_model_name"] as? String
+        let automatic = entry["harbor_context_mode"] as? String == "automatic"
+            || (entry["harbor_context_mode"] == nil && entry["context_window"] as? Int == 128000
+                && entry["max_context_window"] as? Int == 128000)
+        context = automatic ? "" : String(entry["context_window"] as? Int ?? 128000)
         vision = (entry["input_modalities"] as? [String] ?? []).contains("image")
     }
 
@@ -166,8 +172,11 @@ struct AzureSetupView: View {
         startedAt = Date()
         operation = Task {
             defer { startedAt = nil }
-            let model = AzureDeployment(name: deploymentName.trimmingCharacters(in: .whitespacesAndNewlines),
-                                        effort: effort, context: Int(context) ?? 0, vision: vision)
+            let name = deploymentName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let automatic = context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let model = AzureDeployment(name: name, modelName: deployments.first(where: { $0.id == name })?.modelName ?? restoredModelName,
+                                        effort: effort, context: automatic ? 128000 : (Int(context) ?? 0), vision: vision,
+                                        contextIsAutomatic: automatic)
             if await store.connectAzure(endpoint: endpoint, key: key, deployment: model, makeDefault: makeDefault, hideBasetenModels: hideBaseten) {
                 var hidden = Set((UserDefaults.standard.string(forKey: "harbor.hiddenProviders") ?? "").split(separator: ",").map(String.init))
                 hidden.remove("azure")

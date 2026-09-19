@@ -66,6 +66,7 @@ enum LiveRouting {
                     "truncation_policy": ["mode": "tokens", "limit": 10000],
                     "experimental_supported_tools": []
                 ]
+                if service.id == "azure" { entry = AzureDeployment.resolvingContext(in: entry) }
                 let routeID = modelID(for: SelectedModel(serviceID: service.id, modelID: model.id))
                 entry["slug"] = routeID
                 if service.id == "azure" { entry["auto_review_model_override"] = routeID }

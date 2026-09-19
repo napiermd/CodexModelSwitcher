@@ -2,6 +2,60 @@ import XCTest
 @testable import HarborCore
 
 final class AzureProviderTests: XCTestCase {
+    private let nativeMetadata = Data(#"{"models":[{"slug":"gpt-5.6-sol","context_window":272000,"max_context_window":872000}]}"#.utf8)
+
+    func testAutomaticContextUsesExactModelThenUnderlyingIdentity() {
+        for model in [AzureDeployment(name: "gpt-5.6-sol"),
+                      AzureDeployment(name: "coding-prod", modelName: "gpt-5.6-sol")] {
+            let entry = model.catalogEntry { self.nativeMetadata }
+            XCTAssertEqual(entry["context_window"] as? Int, 272000)
+            XCTAssertEqual(entry["max_context_window"] as? Int, 872000)
+        }
+        let entry = AzureDeployment(name: "gpt-5.6-sol", modelName: "other").catalogEntry {
+            Data(#"{"models":[{"slug":"other","context_window":64000,"max_context_window":64000},{"slug":"gpt-5.6-sol","context_window":272000,"max_context_window":872000}]}"#.utf8)
+        }
+        XCTAssertEqual(entry["context_window"] as? Int, 272000)
+        XCTAssertEqual(entry["max_context_window"] as? Int, 872000)
+    }
+
+    func testManualLimitsNeverReadNativeMetadataIncludingExplicit128k() {
+        for limit in [128000, 200000] {
+            let model = AzureDeployment(name: "gpt-5.6-sol", context: limit, contextIsAutomatic: false)
+            let entry = model.catalogEntry { XCTFail("Manual limits must not consult metadata"); return self.nativeMetadata }
+            XCTAssertEqual(entry["context_window"] as? Int, limit)
+            XCTAssertEqual(entry["max_context_window"] as? Int, limit)
+        }
+    }
+
+    func testMissingUnknownAndMalformedMetadataKeepFallback() {
+        let readers: [() throws -> Data] = [
+            { self.nativeMetadata }, { Data("invalid".utf8) }, { Data("{}".utf8) },
+            { throw CocoaError(.fileReadNoSuchFile) }
+        ]
+        for reader in readers {
+            let entry = AzureDeployment(name: "unknown-alias").catalogEntry(readNativeMetadata: reader)
+            XCTAssertEqual(entry["context_window"] as? Int, 128000)
+            XCTAssertEqual(entry["max_context_window"] as? Int, 128000)
+        }
+    }
+
+    func testContextFieldsResolveIndependentlyAndLegacyCatalogMigrates() {
+        let legacy: [String: Any] = ["slug": "gpt-5.6-sol", "context_window": 128000, "max_context_window": 128000]
+        let entry = AzureDeployment.resolvingContext(in: legacy) { self.nativeMetadata }
+        XCTAssertEqual(entry["context_window"] as? Int, 272000)
+        XCTAssertEqual(entry["max_context_window"] as? Int, 872000)
+        let partial = AzureDeployment(name: "gpt-5.6-sol").catalogEntry {
+            Data(#"{"models":[{"slug":"gpt-5.6-sol","max_context_window":872000}]}"#.utf8)
+        }
+        XCTAssertEqual(partial["context_window"] as? Int, 128000)
+        XCTAssertEqual(partial["max_context_window"] as? Int, 872000)
+        let refreshed = AzureDeployment.resolvingContext(in: entry) {
+            Data(#"{"models":[{"slug":"gpt-5.6-sol","context_window":300000,"max_context_window":900000}]}"#.utf8)
+        }
+        XCTAssertEqual(refreshed["context_window"] as? Int, 300000)
+        XCTAssertEqual(refreshed["max_context_window"] as? Int, 900000)
+    }
+
     func testAzureEndpointNormalizesOnlyDirectResources() throws {
         XCTAssertEqual(try AzureAPI.endpoint(" https://test-resource.openai.azure.com/ ").absoluteString,
                        "https://test-resource.openai.azure.com/openai/v1")
@@ -87,6 +141,8 @@ final class AzureProviderTests: XCTestCase {
         XCTAssertEqual(entries.first?["slug"] as? String, "harbor/azure/coding-deploy")
         XCTAssertEqual(entries.first?["auto_review_model_override"] as? String, "harbor/azure/coding-deploy")
         XCTAssertEqual(entries.first?["use_responses_lite"] as? Bool, false)
+        XCTAssertEqual(entries.first?["context_window"] as? Int, 200000)
+        XCTAssertEqual(entries.first?["max_context_window"] as? Int, 200000)
         XCTAssertEqual(entries.first?["supported_reasoning_levels"] as? [[String: String]], [["effort": "medium", "description": "Medium"]])
         XCTAssertEqual(entries.first?["input_modalities"] as? [String], ["text", "image"])
         XCTAssertFalse(String(decoding: raw, as: UTF8.self).contains("fixture-secret"))

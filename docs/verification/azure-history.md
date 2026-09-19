@@ -42,6 +42,7 @@ The first request after this upgrade conservatively drops encrypted items produc
 - The Swift suite passed 108 tests with no failures.
 - The model-picker suite passed with an empty temporary home, proving catalog tests do not depend on a developer machine's `~/.codex/models_cache.json`.
 - Focused Azure-history, admission, deadline, gateway-runtime, provider-restore, and maintenance tests passed.
+- A CI-exposed Baseten timeout race was fixed by releasing the model lane before its terminal 503 is observable; the regression passed 50 consecutive runs and all 25 pacing tests.
 - The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
 - `git diff --check` and Python bytecode compilation passed.
 

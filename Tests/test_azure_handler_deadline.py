@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 import unittest
+import urllib.parse
 import urllib.request
 from unittest.mock import patch
 
@@ -27,7 +28,11 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
     def setUp(self):
         admission.AzureHandlerAdmissionTests.setUp(self)
         self.mode = 'headers'
+        self.resume_behavior = 'complete'
         self.attempts = 0
+        self.methods = []
+        self.requests = []
+        self.deletes = []
         self.arrived = threading.Event()
         self.disconnected = threading.Event()
         self.end = threading.Event()
@@ -38,8 +43,10 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                 pass
 
             def do_POST(self):
-                self.rfile.read(int(self.headers['Content-Length']))
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 owner.attempts += 1
+                owner.methods.append('POST')
+                owner.requests.append(body)
                 owner.arrived.set()
                 try:
                     if owner.mode == 'headers':
@@ -54,7 +61,7 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                             return
                     else:
                         self.send_response(200)
-                        self.send_header('Content-Type', 'text/event-stream' if owner.mode in ('stream', 'stream-eof', 'backpressure') else 'application/json')
+                        self.send_header('Content-Type', 'text/event-stream' if owner.mode in ('stream', 'stream-eof', 'stream-resumable', 'stream-reset', 'backpressure') else 'application/json')
                         if owner.mode == 'verify-truncated':
                             self.send_header('Content-Length', '100')
                         self.end_headers()
@@ -66,6 +73,18 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                             frame = b'data: ' + json.dumps(event).encode() + b'\n\n'
                             for _ in range(32):
                                 self.wfile.write(frame)
+                        if owner.mode in ('stream-resumable', 'stream-reset'):
+                            created = {'type': 'response.created', 'sequence_number': 0,
+                                       'response': {'id': 'resp_fixture', 'status': 'in_progress'}}
+                            self.wfile.write(b'data: ' + json.dumps(created).encode() + b'\n\n')
+                            event = {'type': 'response.output_text.delta', 'sequence_number': 2,
+                                     'item_id': 'msg_fixture', 'output_index': 0,
+                                     'content_index': 0, 'delta': 'partial-marker'}
+                            self.wfile.write(b'data: ' + json.dumps(event).encode() + b'\n\n')
+                            self.wfile.flush()
+                            if owner.mode == 'stream-reset':
+                                self.connection.shutdown(socket.SHUT_RDWR)
+                            return
                         if owner.mode in ('stream', 'stream-eof'):
                             event = {'type': 'response.output_text.delta', 'item_id': 'msg_fixture',
                                      'output_index': 0, 'content_index': 0, 'delta': 'partial-marker'}
@@ -87,6 +106,47 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
                 except OSError:
                     owner.disconnected.set()
 
+            def do_GET(self):
+                owner.attempts += 1
+                owner.methods.append('GET')
+                owner.requests.append(self.path)
+                if owner.resume_behavior == '404-race' and 'starting_after=' in self.path:
+                    self.send_error(404)
+                    return
+                if owner.resume_behavior == 'retrieval-reset':
+                    if 'starting_after=' in self.path:
+                        self.send_error(404)
+                    else:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if owner.resume_behavior == 'always-404':
+                    self.send_error(404)
+                    return
+                if owner.resume_behavior == '404-race':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'id': 'resp_fixture', 'status': 'completed',
+                        'output': [{'type': 'message', 'content': [
+                            {'type': 'output_text', 'text': 'recovered-race'}]}]}).encode())
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                completed = {'type': 'response.completed', 'sequence_number': 3,
+                    'response': {'id': 'resp_fixture', 'status': 'completed',
+                                 'output': [{'type': 'message', 'content': [
+                                     {'type': 'output_text', 'text': 'recovered'}]}]}}
+                self.wfile.write(b'data: ' + json.dumps(completed).encode() + b'\n\n')
+
+            def do_DELETE(self):
+                owner.methods.append('DELETE')
+                owner.deletes.append(self.path)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"deleted":true}')
+
         upstream = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
         upstream.daemon_threads = True
         runner = threading.Thread(target=lambda: upstream.serve_forever(poll_interval=.01), daemon=True)
@@ -104,8 +164,10 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
             opener = original_builder(urllib.request.ProxyHandler({}), *handlers)
             class Loopback:
                 def open(self, request, **kwargs):
+                    parsed = urllib.parse.urlsplit(request.full_url)
+                    path = parsed.path + (('?' + parsed.query) if parsed.query else '')
                     redirected = urllib.request.Request(
-                        f'http://127.0.0.1:{upstream.server_port}/responses', data=request.data,
+                        f'http://127.0.0.1:{upstream.server_port}{path}', data=request.data,
                         headers=dict(request.header_items()), method=request.get_method())
                     return opener.open(redirected, **kwargs)
             return Loopback()
@@ -170,6 +232,174 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
         self.assertEqual(self.runtime.status()['uncertain_turns'], 1)
         self.assertEqual(self.inference('stream-eof', stream=True)[0], 400)
         self.assertEqual(self.attempts, 1)
+
+    def test_background_azure_stream_resumes_after_eof_without_replaying_post(self):
+        self.mode = 'stream-resumable'
+        self.write_effort('none', resumable=True)
+        status, body = self.inference('stream-resumable', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'partial-marker', body)
+        self.assertIn(b'recovered', body)
+        self.assertIn(b'response.completed', body)
+        self.assertNotIn(b'response.failed', body)
+        self.finished()
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+        self.wait_for(lambda: bool(self.deletes))
+        self.assertEqual(self.methods[:2], ['POST', 'GET'])
+        self.assertEqual(self.methods.count('POST'), 1)
+        self.assertTrue(self.requests[0]['background'])
+        self.assertTrue(self.requests[0]['store'])
+        self.assertEqual(self.requests[1], '/openai/v1/responses/resp_fixture?stream=true&starting_after=2')
+        self.assertEqual(self.deletes, ['/openai/v1/responses/resp_fixture'])
+
+    def test_background_azure_stream_resumes_after_connection_reset(self):
+        self.mode = 'stream-reset'
+        self.write_effort('none', resumable=True)
+        status, body = self.inference('stream-reset', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'response.completed', body)
+        self.assertEqual(self.methods.count('POST'), 1)
+        self.assertEqual(self.methods[1], 'GET')
+
+    def test_resume_404_completion_race_retrieves_same_response(self):
+        self.mode = 'stream-resumable'
+        self.resume_behavior = '404-race'
+        self.write_effort('none', resumable=True)
+        status, body = self.inference('stream-race', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'recovered-race', body)
+        self.assertIn(b'response.completed', body)
+        self.assertEqual(self.methods[:3], ['POST', 'GET', 'GET'])
+        self.assertEqual(self.methods.count('POST'), 1)
+        self.assertNotIn('starting_after=', self.requests[2])
+
+    def test_resume_exhaustion_never_replays_post_and_deletes_response(self):
+        self.mode = 'stream-resumable'
+        self.resume_behavior = 'always-404'
+        self.write_effort('none', resumable=True)
+        status, body = self.inference('stream-exhausted', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'response.failed', body)
+        self.assertEqual(self.methods.count('POST'), 1)
+        self.assertEqual(self.methods.count('GET'), bridge.AZURE_STREAM_RESUMES * 2)
+        self.wait_for(lambda: bool(self.deletes))
+        self.assertEqual(self.deletes, ['/openai/v1/responses/resp_fixture'])
+
+    def test_resume_connection_errors_exhaust_without_replaying_post(self):
+        self.mode = 'stream-resumable'
+        self.write_effort('none', resumable=True)
+        original_builder = urllib.request.build_opener
+        opened = original_builder(urllib.request.ProxyHandler({}))
+        class ErrorsAfterPost:
+            def open(self, request, **kwargs):
+                if request.get_method() == 'POST':
+                    return opened.open(request, **kwargs)
+                raise ConnectionResetError('synthetic resume reset')
+        with patch.object(bridge.urllib.request, 'build_opener', return_value=ErrorsAfterPost()):
+            status, body = self.inference('resume-reset-exhausted', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'response.failed', body)
+        self.assertEqual(self.attempts, 1)
+
+    def test_completion_race_retrieval_errors_are_bounded_without_replaying_post(self):
+        self.mode = 'stream-resumable'
+        self.resume_behavior = 'retrieval-reset'
+        self.write_effort('none', resumable=True)
+        status, body = self.inference('retrieval-reset-exhausted', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'response.failed', body)
+        self.assertEqual(self.methods.count('POST'), 1)
+        self.assertEqual(self.methods.count('GET'), bridge.AZURE_STREAM_RESUMES * 2)
+
+    def test_client_cancellation_during_resume_never_replays_post_and_deletes(self):
+        self.mode = 'stream-resumable'
+        self.write_effort('none', resumable=True)
+        cancelled = threading.Event()
+        cleanup_started = threading.Event()
+
+        class CancelledResponse:
+            status = 200
+            headers = {'Content-Type': 'text/event-stream'}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def __iter__(self):
+                yield b'data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_cancel","status":"in_progress"}}\n'
+                yield b'\n'
+                cancelled.set()
+                raise ConnectionResetError('synthetic reset after cancellation')
+
+        original_builder = urllib.request.build_opener
+        delete_client = original_builder(urllib.request.ProxyHandler({}))
+        class Opener:
+            def open(self, request, **_kwargs):
+                if request.get_method() == 'DELETE':
+                    cleanup_started.set()
+                    return delete_client.open(request, **_kwargs)
+                return CancelledResponse()
+
+        original_disconnected = bridge.Handler.client_disconnected
+        def disconnected(handler):
+            return cancelled.is_set() or original_disconnected(handler)
+        with patch.object(bridge.urllib.request, 'build_opener', return_value=Opener()), \
+             patch.object(bridge.Handler, 'client_disconnected', disconnected):
+            status, body = self.inference('cancel-resume', stream=True)
+        self.assertEqual(status, 200)
+        self.assertNotIn(b'response.completed', body)
+        self.assertEqual(self.methods.count('GET'), 0)
+        self.finished()
+        self.assertTrue(cleanup_started.wait(1))
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+
+    def test_heartbeat_sequence_does_not_change_raw_resume_cursor(self):
+        self.mode = 'stream-resumable'
+        self.write_effort('none', resumable=True)
+        original = bridge.Translation.event
+        def inject_heartbeat(translation, block):
+            result = original(translation, block)
+            if translation.upstream_sequence == 2:
+                translation.lifecycle.injected = True
+                translation.lifecycle.sequence = 99
+            return result
+        with patch.object(bridge.Translation, 'event', inject_heartbeat):
+            status, _ = self.inference('stream-heartbeat-cursor', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn('starting_after=2', self.requests[1])
+
+    def test_nonstream_and_unverified_stream_remain_unstored(self):
+        self.mode = 'complete'
+        status, _ = self.inference('nonstream')
+        self.assertEqual(status, 200)
+        self.assertFalse(self.requests[0]['store'])
+        self.assertNotIn('background', self.requests[0])
+        self.methods.clear(); self.requests.clear(); self.attempts = 0
+        self.mode = 'stream-eof'
+        status, body = self.inference('ordinary-stream', stream=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'response.failed', body)
+        self.assertEqual(self.methods, ['POST'])
+        self.assertFalse(self.requests[0]['store'])
+        self.assertNotIn('background', self.requests[0])
+
+    def test_resume_url_encodes_response_identifier(self):
+        request = bridge.azure_resume_request('https://fixture.openai.azure.com/openai/v1',
+            {'api-key': 'fixture'}, 'resp /?#%', 7)
+        self.assertEqual(request.full_url,
+            'https://fixture.openai.azure.com/openai/v1/responses/resp%20%2F%3F%23%25?stream=true&starting_after=7')
+
+    def test_recovery_diagnostics_are_content_free(self):
+        self.mode = 'stream-resumable'
+        self.write_effort('none', resumable=True)
+        status, _ = self.inference('private prompt marker', stream=True)
+        self.assertEqual(status, 200)
+        status, body = self.request('GET', '/harbor/status')
+        self.assertEqual(status, 200)
+        diagnostics = body['azure_stream_recovery']
+        self.assertGreaterEqual(diagnostics['attempted'], 1)
+        self.assertGreaterEqual(diagnostics['succeeded'], 1)
+        encoded = json.dumps(diagnostics)
+        self.assertNotIn('private prompt marker', encoded)
+        self.assertNotIn('resp_fixture', encoded)
+        self.assertNotIn(self.key, encoded)
 
     def test_error_body_stall_is_not_a_known_delivered_outcome(self):
         self.mode = 'error'

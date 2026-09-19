@@ -10,6 +10,7 @@ struct AzureSetupView: View {
     @State private var context = ""
     @State private var restoredModelName: String?
     @State private var vision = false
+    @State private var resumableStreaming: Bool?
     @State private var advanced = false
     @State private var hideBaseten = true
     @State private var makeDefault = true
@@ -140,6 +141,7 @@ struct AzureSetupView: View {
 
     private func restoreDeploymentOptions() {
         restoredModelName = nil
+        resumableStreaming = nil
         guard let path = store.data.services.first(where: { $0.id == "azure" })?.catalogPath,
               let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let catalog = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
@@ -151,6 +153,7 @@ struct AzureSetupView: View {
                 && entry["max_context_window"] as? Int == 128000)
         context = automatic ? "" : String(entry["context_window"] as? Int ?? 128000)
         vision = (entry["input_modalities"] as? [String] ?? []).contains("image")
+        resumableStreaming = entry["harbor_resumable_streaming"] as? Bool
     }
 
     private func findDeployments() {
@@ -176,7 +179,7 @@ struct AzureSetupView: View {
             let automatic = context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let model = AzureDeployment(name: name, modelName: deployments.first(where: { $0.id == name })?.modelName ?? restoredModelName,
                                         effort: effort, context: automatic ? 128000 : (Int(context) ?? 0), vision: vision,
-                                        contextIsAutomatic: automatic)
+                                        contextIsAutomatic: automatic, resumableStreaming: resumableStreaming)
             if await store.connectAzure(endpoint: endpoint, key: key, deployment: model, makeDefault: makeDefault, hideBasetenModels: hideBaseten) {
                 var hidden = Set((UserDefaults.standard.string(forKey: "harbor.hiddenProviders") ?? "").split(separator: ",").map(String.init))
                 hidden.remove("azure")

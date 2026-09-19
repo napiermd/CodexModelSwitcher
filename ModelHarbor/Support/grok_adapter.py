@@ -34,6 +34,9 @@ BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
 AZURE_REQUEST_SECONDS = 180
 AZURE_VERIFY_SECONDS = 10
+AZURE_STREAM_RESUMES = 3
+AZURE_DELETE_SECONDS = 10
+AZURE_RESUMABLE_DEPLOYMENTS = frozenset({'gpt-5.6-sol'})
 RESTORE_SECONDS = 40
 OAUTH_BASE = 'https://cli-chat-proxy.grok.com/v1'
 CODEX_BASE = 'https://chatgpt.com/backend-api/codex'
@@ -74,6 +77,8 @@ _metrics_module = importlib.util.module_from_spec(_metrics_spec)
 _metrics_spec.loader.exec_module(_metrics_module)
 REQUEST_METRICS = _metrics_module.Recorder()
 REQUEST_METRICS_ENABLED = os.environ.get('MODEL_HARBOR_REQUEST_METRICS') == '1'
+AZURE_STREAM_RECOVERY = {'attempted': 0, 'succeeded': 0, 'failed': 0,
+                         'cleanup_attempted': 0, 'cleanup_succeeded': 0, 'cleanup_failed': 0}
 _ledger_spec = importlib.util.spec_from_file_location('harbor_usage_ledger', pathlib.Path(__file__).with_name('usage_ledger.py'))
 _ledger_module = importlib.util.module_from_spec(_ledger_spec)
 _ledger_spec.loader.exec_module(_ledger_module)
@@ -556,6 +561,16 @@ def azure_request(source):
     # The catalog exposes one verified setting; inherited task effort must not override it.
     effort = entry['default_reasoning_level']
     source['reasoning'] = dict(source.get('reasoning') or {}, effort=effort)
+    # Azure can only resume a dropped stream when it owns a stored background
+    # response. A resume is a GET for that same response, never another model
+    # dispatch. Nonstream requests remain stateless.
+    resumable = entry.get('harbor_resumable_streaming', source['model'] in AZURE_RESUMABLE_DEPLOYMENTS) is True
+    if source.get('stream') and resumable:
+        source['store'] = True
+        source['background'] = True
+    else:
+        source['store'] = False
+        source.pop('background', None)
     # Codex host metadata and subscription priority are not Azure Responses fields.
     source.pop('client_metadata', None)
     source.pop('service_tier', None)
@@ -568,6 +583,82 @@ def azure_request(source):
         include.append('reasoning.encrypted_content')
     source['input'] = baseten_tool_images(source.get('input', []))
     return source
+
+
+def azure_resume_request(base, headers, response_id, sequence):
+    if not isinstance(response_id, str) or not response_id or type(sequence) is not int or sequence < 0:
+        raise ValueError('Azure stream has no valid resume cursor.')
+    query = urllib.parse.urlencode({'stream': 'true', 'starting_after': sequence})
+    url = base + '/responses/' + urllib.parse.quote(response_id, safe='') + '?' + query
+    return urllib.request.Request(url, headers=dict(headers, Accept='text/event-stream'), method='GET')
+
+
+def azure_response_request(base, headers, response_id):
+    if not isinstance(response_id, str) or not response_id:
+        raise ValueError('Azure stream has no valid response identifier.')
+    url = base + '/responses/' + urllib.parse.quote(response_id, safe='')
+    return urllib.request.Request(url, headers=dict(headers, Accept='application/json'), method='GET')
+
+
+def azure_recovery_stat(name):
+    with ROUTE_LOCK:
+        AZURE_STREAM_RECOVERY[name] += 1
+
+
+def delete_azure_response(base, headers, response_id, opener=None):
+    """Delete one stored response with a bounded best-effort worker."""
+    if not isinstance(response_id, str) or not response_id:
+        return None
+    url = base + '/responses/' + urllib.parse.quote(response_id, safe='')
+    request_headers = {name: value for name, value in headers.items()
+                       if name.lower() in ('api-key', 'user-agent')}
+
+    def delete():
+        azure_recovery_stat('cleanup_attempted')
+        try:
+            request = urllib.request.Request(url, headers=request_headers, method='DELETE')
+            client = opener or urllib.request.build_opener(NoRedirect)
+            with client.open(request, timeout=AZURE_DELETE_SECONDS) as response:
+                response.read(1024)
+            azure_recovery_stat('cleanup_succeeded')
+        except Exception:
+            azure_recovery_stat('cleanup_failed')
+
+    worker = threading.Thread(target=delete, name='harbor-azure-response-delete', daemon=True)
+    worker.start()
+    return worker
+
+
+def retrieve_azure_response(opener, base, headers, response_id, budget):
+    """Resolve a resume 404 race by reading the same stored response once."""
+    request = azure_response_request(base, headers, response_id)
+    with opener.open(request, timeout=budget.remaining()) as response:
+        value = budget.io(json.load, response)
+    if not isinstance(value, dict) or value.get('id') != response_id:
+        raise ValueError('Azure returned an invalid stored response.')
+    return value
+
+
+def stored_response_event(translation, response):
+    """Translate one terminal stored response without changing Azure's cursor."""
+    status = response.get('status') if isinstance(response, dict) else None
+    if status not in ('completed', 'failed', 'incomplete'):
+        return b''
+    if status == 'completed':
+        if not translation.invalid_function_arguments:
+            for output_item in response.get('output') or []:
+                if not valid_function_arguments(output_item, translation.names):
+                    translation.invalid_function_arguments = True
+                    break
+        response = translation.validate_completion(response)
+        status = response.get('status')
+    event = {'type': 'response.' + status, 'response': translation.output(response),
+             'sequence_number': translation.lifecycle.sequence + 1}
+    translation.lifecycle.observe(event)
+    translation.response_status = status
+    translation.usage = response.get('usage')
+    return ('event: ' + event['type'] + '\ndata: '
+            + json.dumps(event, separators=(',', ':')) + '\n\n').encode()
 
 
 def grok_binary():
@@ -1198,6 +1289,8 @@ class Translation:
         self.usage = None
         self.invalid_function_arguments = False
         self.has_output = False
+        self.upstream_response_id = None
+        self.upstream_sequence = None
         self.request = copy.deepcopy(source)
         # Codex can retain a forced tool choice when it creates a tool-free
         # compaction request. Every Responses provider rejects that pair, so
@@ -1381,6 +1474,13 @@ class Translation:
                 event['type'] = event_name
         original = copy.deepcopy(event)
         kind = event.get('type', '')
+        response = event.get('response')
+        response_id = ((response or {}).get('id') if isinstance(response, dict) else None) or event.get('response_id')
+        if isinstance(response_id, str) and response_id:
+            self.upstream_response_id = response_id
+        sequence = event.get('sequence_number')
+        if type(sequence) is int and sequence >= 0:
+            self.upstream_sequence = sequence
         item = event.get('item') or {}
         if kind in ('response.output_text.delta', 'response.refusal.delta') and event.get('delta'):
             self.has_output = True
@@ -1536,6 +1636,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                'baseten_auth': BASETEN_CREDENTIALS.snapshot,
                                'baseten_traffic': baseten_traffic_status(),
                                'azure_traffic': AZURE_ADMISSION.snapshot(),
+                               'azure_stream_recovery': copy.deepcopy(AZURE_STREAM_RECOVERY),
                                'task_repairs': TASK_REPAIRS.snapshot if TASK_REPAIRS else None,
                                'runtime': RUNTIME.status() if RUNTIME else {'mode': 'legacy', 'protocol_version': 1, 'boot_id': READINESS.boot_id},
                                'configuration_revision': configuration_revision(),
@@ -1877,6 +1978,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_started_at = time.monotonic()
         failure_kind = None
         last_heartbeat = float("-inf")
+        azure_resume_attempts = 0
+        azure_recovery_recorded = False
+        translation = None
+        headers = None
+        base = None
+        azure_cleanup_scheduled = False
 
         def azure_stopped():
             nonlocal activity_status, activity_http_status
@@ -2081,79 +2188,160 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 require_inference_admission()
                 upstream_response = opener.open(request, timeout=180)
-            with upstream_response as upstream:
-                if azure_budget:
-                    azure_budget.check()
-                if route:
-                    with ROUTE_LOCK:
-                        LAST_ROUTE = dict(route, state='streaming')
-                content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
-                streaming_response = 'text/event-stream' in content_type
-                response = azure_budget.io(json.load, upstream) if azure_budget and not streaming_response else None
-                if not started:
-                    self.send_response(upstream.status)
-                    self.send_header('Content-Type', content_type)
-                    self.send_header('Cache-Control', 'no-cache')
-                    for name, value in provider_response_headers(upstream.headers).items():
-                        self.send_header(name, value)
+            while True:
+                stream_error = None
+                with upstream_response as upstream:
+                    if azure_budget:
+                        azure_budget.check()
                     if route:
-                        self.send_header('X-Model-Harbor-Provider', route['provider'])
-                        self.send_header('X-Model-Harbor-Model', route['model'])
-                    self.send_header('Connection', 'close')
-                    started = True
-                    self.close_connection = True
-                    self.finish_headers(azure_budget)
-                    headers_complete = True
-                if 'text/event-stream' in content_type:
-                    block = []
-                    for line in self.response_lines(upstream, azure_budget):
-                        if line is None:
-                            heartbeat = translation.lifecycle.heartbeat()
-                            if heartbeat:
-                                self.write_output(heartbeat, azure_budget)
-                            continue
-                        if line.strip():
-                            block.append(line.rstrip(b'\r\n'))
-                        elif block:
+                        with ROUTE_LOCK:
+                            LAST_ROUTE = dict(route, state='streaming')
+                    content_type = upstream.headers.get('Content-Type') or ('text/event-stream' if translation.request.get('stream') else 'application/json')
+                    streaming_response = 'text/event-stream' in content_type
+                    response = azure_budget.io(json.load, upstream) if azure_budget and not streaming_response else None
+                    if not started:
+                        self.send_response(upstream.status)
+                        self.send_header('Content-Type', content_type)
+                        self.send_header('Cache-Control', 'no-cache')
+                        for name, value in provider_response_headers(upstream.headers).items():
+                            self.send_header(name, value)
+                        if route:
+                            self.send_header('X-Model-Harbor-Provider', route['provider'])
+                            self.send_header('X-Model-Harbor-Model', route['model'])
+                        self.send_header('Connection', 'close')
+                        started = True
+                        self.close_connection = True
+                        self.finish_headers(azure_budget)
+                        headers_complete = True
+                    if streaming_response:
+                        block = []
+                        lines = iter(self.response_lines(upstream, azure_budget))
+                        while True:
+                            try:
+                                line = next(lines)
+                            except StopIteration:
+                                break
+                            except Exception as error:
+                                stream_error = error
+                                break
+                            if line is None:
+                                heartbeat = translation.lifecycle.heartbeat()
+                                if heartbeat:
+                                    self.write_output(heartbeat, azure_budget)
+                                continue
+                            if line.strip():
+                                block.append(line.rstrip(b'\r\n'))
+                            elif block:
+                                event = translation.event(b'\n'.join(block))
+                                self.response_id = translation.upstream_response_id
+                                if route and translation.response_status:
+                                    with ROUTE_LOCK:
+                                        LAST_ROUTE = dict(route, state=translation.response_status)
+                                self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
+                                block = []
+                                if translation.response_status:
+                                    break
+                        if block and stream_error is None:
                             event = translation.event(b'\n'.join(block))
-                            self.response_id = (translation.lifecycle.response or {}).get('id')
+                            self.response_id = translation.upstream_response_id
                             if route and translation.response_status:
                                 with ROUTE_LOCK:
                                     LAST_ROUTE = dict(route, state=translation.response_status)
                             self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
-                            block = []
-                            if translation.response_status:
-                                break
-                    if block:
-                        event = translation.event(b'\n'.join(block))
-                        if route and translation.response_status:
-                            with ROUTE_LOCK:
-                                LAST_ROUTE = dict(route, state=translation.response_status)
-                        self.write_output(event, azure_budget, terminal=translation.response_status == 'completed')
-                    if not translation.response_status:
-                        report_error(502, 'The upstream stream ended before a terminal response event. Model Harbor did not retry the partial response.')
-                        translation.response_status = 'failed'
+                    else:
+                        if response is None:
+                            response = json.load(upstream)
+                        response = translation.validate_completion(response)
+                        translation.response_status = response.get('status')
+                        translation.usage = response.get('usage')
                         if route:
                             with ROUTE_LOCK:
-                                LAST_ROUTE = dict(route, state='failed')
-                else:
-                    if response is None:
-                        response = json.load(upstream)
-                    response = translation.validate_completion(response)
-                    translation.response_status = response.get('status')
-                    translation.usage = response.get('usage')
-                    if route:
+                                LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
+                        self.write_output(json.dumps(translation.output(response)).encode(), azure_budget,
+                                          terminal=translation.response_status == 'completed')
+                if translation.response_status or not streaming_response:
+                    if azure_resume_attempts and not azure_recovery_recorded:
+                        azure_recovery_stat('succeeded')
+                        azure_recovery_recorded = True
+                    break
+                resumable = (route and route['provider'] == 'azure'
+                    and translation.request.get('background') is True
+                    and translation.request.get('store') is True
+                    and azure_resume_attempts < AZURE_STREAM_RESUMES
+                    and translation.upstream_response_id is not None
+                    and translation.upstream_sequence is not None
+                    and not self.client_disconnected())
+                if resumable:
+                    resume_opened = False
+                    while azure_resume_attempts < AZURE_STREAM_RESUMES:
+                        azure_budget.check()
+                        azure_resume_attempts += 1
+                        azure_recovery_stat('attempted')
                         with ROUTE_LOCK:
-                            LAST_ROUTE = dict(route, state=translation.response_status or 'finished')
-                    self.write_output(json.dumps(translation.output(response)).encode(), azure_budget,
-                                      terminal=translation.response_status == 'completed')
-                azure_outcome_known = translation.response_status == 'completed'
-                activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
-                if route and revision and route['provider'] in ('azure', 'openrouter'):
-                    record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
-                if route and not translation.response_status:
+                            LAST_ROUTE = dict(route, state='resuming', resume_attempt=azure_resume_attempts)
+                        resume = azure_resume_request(base, headers, translation.upstream_response_id,
+                                                      translation.upstream_sequence)
+                        try:
+                            upstream_response = opener.open(resume, timeout=azure_budget.remaining())
+                            resume_opened = True
+                            break
+                        except urllib.error.HTTPError as resume_error:
+                            code = resume_error.code
+                            resume_error.close()
+                            if code != 404:
+                                continue
+                            # A fast response can complete between disconnect and
+                            # resume. Azure may then answer the streaming GET with
+                            # 404 even though the stored response is retrievable.
+                            try:
+                                stored = retrieve_azure_response(opener, base, headers,
+                                                                 translation.upstream_response_id, azure_budget)
+                            except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+                                raise
+                            except urllib.error.HTTPError as retrieval_error:
+                                retrieval_error.close()
+                                continue
+                            except (OSError, urllib.error.URLError, ValueError):
+                                continue
+                            event = stored_response_event(translation, stored)
+                            if event:
+                                self.write_output(event, azure_budget,
+                                                  terminal=translation.response_status == 'completed')
+                                break
+                        except (_transport_module.RequestDeadline, _transport_module.RequestCancelled):
+                            raise
+                        except (OSError, urllib.error.URLError):
+                            continue
+                        except ValueError:
+                            continue
+                    if translation.response_status:
+                        azure_recovery_stat('succeeded')
+                        azure_recovery_recorded = True
+                        break
+                    if resume_opened:
+                        continue
+                if azure_resume_attempts and not azure_recovery_recorded:
+                    azure_recovery_stat('failed')
+                    azure_recovery_recorded = True
+                if stream_error is not None:
+                    raise stream_error
+                report_error(502, 'The upstream stream ended before a terminal response event. Model Harbor did not retry the model request.')
+                translation.response_status = 'failed'
+                if route:
                     with ROUTE_LOCK:
-                        LAST_ROUTE = dict(route, state='finished')
+                        LAST_ROUTE = dict(route, state='failed')
+                break
+            azure_outcome_known = translation.response_status == 'completed'
+            activity_status = 'completed' if translation.response_status == 'completed' else 'incomplete'
+            if route and revision and route['provider'] in ('azure', 'openrouter'):
+                record_readiness(route, revision, 'verified' if activity_status == 'completed' else 'invalid_response')
+            if route and not translation.response_status:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='finished')
+            if (route and route['provider'] == 'azure' and translation.request.get('background') is True
+                    and translation.upstream_response_id is not None):
+                delete_azure_response(base, headers, translation.upstream_response_id)
+                azure_cleanup_scheduled = True
             if azure_budget and not azure_outcome_known:
                 azure_budget.check()
         except urllib.error.HTTPError as error:
@@ -2281,6 +2469,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             report_error(502, 'Adapter failed: ' + type(error).__name__)
             self.close_connection = True
         finally:
+            if azure_resume_attempts and not azure_recovery_recorded:
+                azure_recovery_stat('failed')
+            if (route and route['provider'] == 'azure' and translation is not None
+                    and translation.request.get('background') is True
+                    and translation.upstream_response_id is not None
+                    and not azure_cleanup_scheduled):
+                # Error, cancellation, or deadline paths can leave the normal
+                # cleanup block before it runs.
+                delete_azure_response(base, headers, translation.upstream_response_id)
             if azure_budget is not None:
                 azure_budget.finish()
             if azure_permit is not None:

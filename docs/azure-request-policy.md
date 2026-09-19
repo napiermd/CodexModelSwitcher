@@ -4,7 +4,7 @@ Status: implemented and tested in the isolated candidate on September 17, 2026. 
 
 ## Request behavior
 
-Each accepted Azure inference request has one 180-second monotonic deadline. It begins after input parsing and route preparation, before admission. Queueing, DNS resolution, TCP connect, TLS handshake, request upload, response headers, body/SSE reads, and downstream delivery consume that same budget. A trickle of bytes does not reset it. Verification probes use the same transport with a ten-second budget.
+Each accepted Azure inference request has one 180-second monotonic deadline. It begins after input parsing and route preparation, before admission. Queueing, DNS resolution, TCP connect, TLS handshake, request upload, response headers, body/SSE reads, any same-response resume GETs, and downstream delivery consume that same budget. A trickle of bytes does not reset it. Verification probes use the same transport with a ten-second budget.
 
 Admission remains process-local: two active requests per endpoint/deployment, sixteen FIFO waiters, and at most thirty seconds waiting. The total deadline can expire earlier. A permit stays held until the upstream response closes. Verification shares this queue. Queue rejection or cancellation before dispatch sends no provider request and preserves prior readiness proof.
 
@@ -16,13 +16,13 @@ On deadline expiry, the provider work stops. Harbor allows up to 250 millisecond
 
 Harbor records the possibility of dispatch immediately before sending HTTP request data. DNS, TCP, TLS, and proxy CONNECT setup do not count as provider inference dispatch.
 
-A dispatched request whose outcome was not fully delivered leaves the turn uncertain. That includes interrupted output, stalled error bodies, premature EOF against a declared content length, errors larger than the 64 KiB forwarding cap, and failed downstream delivery. The runtime refuses another request for that uncertain turn before dispatch. This prevents replay; it does not reconstruct a missing answer or assert that the provider cancelled work it already received.
+A dispatched request whose outcome was not fully delivered leaves the turn uncertain. That includes interrupted output that cannot be resumed, stalled error bodies, premature EOF against a declared content length, errors larger than the 64 KiB forwarding cap, and failed downstream delivery. The runtime refuses another inference request for that uncertain turn before dispatch. This prevents replay. A deployment explicitly marked `harbor_resumable_streaming` uses Azure's stored background-response contract: the initial inference remains one POST, while a dropped SSE connection can issue up to three GET requests for the same response ID starting after the last raw Azure sequence number. Harbor heartbeats may renumber downstream events, but never change that provider cursor. A resume 404 receives one stored-response retrieval to resolve a completion race. Stored responses receive bounded best-effort deletion after success, failure, cancellation, or exhausted recovery.
 
 The gateway closes the response before releasing admission. A known completed response can still ask Codex to run tools, so its task ownership remains retained through that gap. [Desktop completion and update handoff](desktop-lifecycle-evidence.md) remain a separate gate.
 
 ## Retry policy
 
-Azure performs one upstream attempt per accepted gateway request. It does not automatically replay 429, 503, a transport failure, or partial output. A complete provider error preserves its status, body, and supported headers such as `Retry-After`. Forwarding that header is not an automatic backoff scheduler.
+Azure performs one inference POST per accepted gateway request. It does not automatically replay 429, 503, a transport failure, or partial output. Same-response recovery GETs are not inference retries. A complete provider error preserves its status, body, and supported headers such as `Retry-After`. Forwarding that header is not an automatic backoff scheduler.
 
 Generated `[model_providers.model-harbor]` configuration now explicitly sets both `request_max_retries = 0` and `stream_max_retries = 0`. Managed team workers already used those values. The shared stanza applies to all models routed through Harbor when Codex loads it. Baseten's internal gateway retry/pacing policy is unchanged.
 
@@ -31,7 +31,7 @@ An isolated test of installed `codex-cli 0.150.1` observed exactly one POST for 
 ## Verification and limits
 
 - `Tests/test_azure_transport.py`: bounded DNS, late results, connect/cancel races, TLS stall, trickling data, dispatch tracking, and cleanup.
-- `Tests/test_azure_handler_deadline.py`: real loopback provider and Harbor handlers; queue plus transport deadline, partial output, nonstream timeout, cancellation, nonreading client, readiness, truncated verification framing, and no replay.
+- `Tests/test_azure_handler_deadline.py`: real loopback provider and Harbor handlers; queue plus transport deadline, partial output, resumable EOF/reset, raw cursor preservation, completion-race retrieval, resume exhaustion, stored-response cleanup, nonstream timeout, cancellation, nonreading client, readiness, truncated verification framing, and no replay.
 - `Tests/test_azure_error_budget.py`: truncated/oversized error framing and a header write that exhausts the budget before the body can be written.
 - `Tests/SafetyTests.swift`: parsed TOML scope, all routed providers, repeated generation, replacement of prior managed retry values, and preservation of unrelated provider settings.
 

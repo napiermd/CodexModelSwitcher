@@ -40,6 +40,7 @@ The first request after this upgrade conservatively drops encrypted items produc
 
 - The full Python suite passed 561 tests.
 - The Swift suite passed 108 tests with no failures.
+- The model-picker suite passed with an empty temporary home, proving catalog tests do not depend on a developer machine's `~/.codex/models_cache.json`.
 - Focused Azure-history, admission, deadline, gateway-runtime, provider-restore, and maintenance tests passed.
 - The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
 - `git diff --check` and Python bytecode compilation passed.

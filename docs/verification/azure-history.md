@@ -1,32 +1,47 @@
-# Azure reasoning-history preservation
+# Azure encrypted-history provenance
 
-The direct Azure route used a translator originally written for Grok. That translator removed every reasoning item before sending a follow-up request. A second recursive conversion could rewrite tool-shaped dictionaries inside opaque provider metadata. Both defects are reproduced and fixed in the source candidate described here.
+Date: 2026-09-18. Branch: `codex/cross-provider-encrypted-history`.
 
-## Behavior
+## Incident
 
-`AzureTranslation` retains reasoning, compaction, and unknown typed history items in their original order. Their IDs, encrypted strings, summaries, and extension fields remain intact. The request asks Azure to return encrypted reasoning for subsequent turns.
+A task switched from a Codex subscription model to Azure `gpt-5.6-sol`. Harbor forwarded the earlier provider's encrypted reasoning item. Azure could not authenticate that ciphertext and rejected the request. The same invalid cross-provider history can also terminate a streamed request before completion.
 
-Known message and tool item IDs still receive the existing normalization. This preserves the fix for Codex custom-tool result IDs such as `ctco_…` reaching Azure as function-call results. Tool `call_id` links and known namespace/custom-tool mappings remain intact.
+The failure was not an Azure subscription limit, a context-window limit, or the removed 32 MiB Harbor request ceiling.
 
-Output conversion visits only actual response output items and recognized streaming event positions. It leaves opaque metadata untouched, including dictionaries that resemble tool calls. Unchanged streaming events retain their data bytes. Dispatcher suppression applies only to mapped function calls.
+## Fix
 
-Harbor cannot determine ciphertext origin from its contents. The selected Azure resource validates the supplied history once. A rejection returns unchanged under the existing error-body limits. Harbor does not remove reasoning, replay a modified request, substitute a model, or rewrite saved conversations. This policy does not guarantee that history from another provider or account will be accepted. Existing conversations that previously continued only because their foreign reasoning was removed may now receive an explicit Azure validation error. Real continuation and cross-provider behavior must be checked before promoting this candidate.
+Azure history now uses item-level provenance:
 
-A mandatory local provenance registry would also classify valid pre-upgrade history as unknown. Azure API keys do not provide a stable account identity that distinguishes key rotation from account changes. Such a registry needs a separate identity and migration design if future policy requires rejection before provider validation.
+- Harbor records a SHA-256 digest for each encrypted item returned by an Azure deployment.
+- The digest is scoped to the Azure resource endpoint and deployment that produced it.
+- A later request to that exact binding retains the encrypted reasoning item unchanged.
+- Encrypted reasoning from another provider, Azure resource, or Azure deployment is removed before dispatch.
+- Portable messages, tool calls, tool results, and their `call_id` links remain in order.
+- Unknown non-encrypted item types remain unchanged.
 
-## Verified locally
+Harbor does not rewrite saved task history and does not retry a rejected or partially delivered request. A key rotation on the same Azure resource and deployment retains compatibility because the API key is not part of the history binding.
 
-- Eight regression tests cover ordered opaque input, tool links, nested metadata, unchanged streaming events, dispatcher suppression, and malformed `include` values.
-- The actual HTTP handler returns JSON and streaming reasoning output, then preserves that output in the next tool-result request.
-- A simulated `400 invalid_encrypted_content` reaches the caller after exactly one unchanged upstream attempt.
-- The full Python suite passes 335 tests with warnings treated as errors.
-- Independent review found no blocking correctness or comment issues.
-- The signed candidate builds successfully. The packaged gateway passes ten lifecycle tests and is staged as `azure-history-preservation-20260917`.
+The independent gateway stores only 64-character binding and item digests in a private, bounded `opaque-history.sqlite` database. It never stores ciphertext, prompts, or response content. The registry survives gateway maintenance and remains separate from the version-1 ownership journal so the retained previous runtime can still roll back safely. Legacy runtimes use a bounded in-memory registry.
 
-## Live verification remains open
+The first request after this upgrade conservatively drops encrypted items produced before provenance tracking began. Its portable conversation and tool history still continues. New Azure encrypted items are then tracked for subsequent same-deployment turns.
 
-`scripts/verify-azure-history.py` runs five bounded requests through an isolated source gateway: a JSON tool round trip, a streaming tool round trip, and an invalid-ciphertext negative control. It reads an Azure key from stdin and emits only aggregate results. It never changes the installed gateway, task histories, or provider configuration. No real ciphertext or credential belongs in an evidence file.
+## Verification
 
-The attempted run stopped before any Azure request because the isolated Keychain reader timed out. Do not interpret the installed app's earlier successful stateless probe as evidence that this candidate preserves real Azure continuation.
+- A direct cross-provider HTTP regression proves unknown encrypted reasoning and compaction are absent from the one Azure request while portable messages and tool links remain.
+- A streaming HTTP regression proves the same filter runs before streamed dispatch and a normal terminal completion reaches the client.
+- Endpoint and deployment isolation tests prove ciphertext registered under another Azure binding is still removed.
+- JSON and SSE round-trip tests prove Azure-produced encrypted reasoning is retained unchanged in the next tool-result request.
+- A known-ciphertext rejection still makes exactly one upstream request; Harbor does not hide provider errors with replay.
+- Registry tests cover restart persistence, the 100,000-item bound, private file mode, and rejection of raw ciphertext values.
 
-This candidate has not replaced the installed gateway. Full native namespace/custom-tool passthrough, tool-image shape preservation, stored `previous_response_id` routing, cross-account ciphertext compatibility, and actual desktop history persistence remain separate checks. The existing tool-image conversion is unchanged.
+`scripts/verify-azure-history.py` performs two real Azure tool continuations, one JSON and one streaming. It then modifies the captured encrypted item and verifies that the unknown ciphertext is removed before one successful Azure request. The script emits aggregate evidence only and does not print credentials, prompts, or ciphertext.
+
+## Local candidate results
+
+- The full Python suite passed 439 tests with `ResourceWarning` promoted to errors.
+- The Swift suite passed 104 tests with no failures.
+- The focused adapter, Azure-history, and gateway-runtime run passed 82 tests.
+- The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
+- `git diff --check` and Python bytecode compilation passed.
+
+Installed-runtime evidence is recorded after build, staging, activation, and live verification.

@@ -206,6 +206,24 @@ class GatewayRuntimeTests(unittest.TestCase):
         self.assertIs(status['promotion_allowed'], False)
         self.assertIs(status['retirement_allowed'], False)
 
+    def test_opaque_history_provenance_is_bounded_and_survives_restart(self):
+        first = self.runtime(max_history_items=2)
+        binding = 'a' * 64
+        digests = [character * 64 for character in ('b', 'c', 'd')]
+        for digest in digests:
+            first.remember_opaque_history(binding, digest)
+        self.assertFalse(first.knows_opaque_history(binding, digests[0]))
+        self.assertTrue(first.knows_opaque_history(binding, digests[1]))
+        self.assertTrue(first.knows_opaque_history(binding, digests[2]))
+        self.assertEqual((self.state / 'opaque-history.sqlite').stat().st_mode & 0o777, 0o600)
+        first.close()
+
+        reopened = self.runtime(boot_id='boot-b', max_history_items=2)
+        self.assertTrue(reopened.knows_opaque_history(binding, digests[1]))
+        self.assertTrue(reopened.knows_opaque_history(binding, digests[2]))
+        with self.assertRaisesRegex(ValueError, 'digests'):
+            reopened.remember_opaque_history(binding, 'raw-ciphertext')
+
     def test_zero_active_requests_cannot_enable_live_update_gates(self):
         runtime = self.runtime()
         runtime.pin('private-thread-turn', lambda: ROUTE)

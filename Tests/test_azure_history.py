@@ -39,6 +39,10 @@ class AzureHistoryTests(unittest.TestCase):
 
     def translated(self, source):
         self.configure()
+        binding = bridge.azure_history_binding(
+            {'provider': 'azure', 'model': 'coding-prod'}, self.endpoint)
+        for item in source.get('input', []):
+            bridge.remember_opaque_history(binding, item)
         return bridge.routed_request(source, {})[0]
 
     def test_azure_preserves_opaque_items_order_and_public_tool_links(self):
@@ -56,6 +60,91 @@ class AzureHistoryTests(unittest.TestCase):
         self.assertEqual(source, original)
         source['include'].append('reasoning.encrypted_content')
         self.assertEqual(self.translated(source).request['include'], source['include'])
+
+    def test_foreign_encrypted_history_is_removed_before_azure_dispatch(self):
+        self.configure()
+        source = self.source()
+        original = copy.deepcopy(source)
+
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(
+                b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
+            status, body = self.request(path='/harbor/v1/responses', body=source,
+                                        headers={'Authorization': 'Bearer synthetic-owner-token'})
+            sent = json.loads(opener.return_value.open.call_args.args[0].data)
+
+        self.assertEqual((status, body['status']), (200, 'completed'))
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertFalse(any(item.get('type') in ('reasoning', 'compaction')
+                             or 'encrypted_content' in item for item in sent['input']))
+        self.assertEqual(sent['input'][0], source['input'][0])
+        self.assertEqual([item.get('call_id') for item in sent['input'][1:3]],
+                         ['call_patch', 'call_patch'])
+        self.assertEqual(sent['input'][-1], source['input'][-1])
+        self.assertEqual(source, original)
+
+    def test_foreign_encrypted_history_is_removed_before_stream_dispatch(self):
+        self.configure()
+        source = self.source()
+        source['stream'] = True
+
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'text/event-stream'}
+
+        terminal = {'type': 'response.completed', 'response': {'status': 'completed',
+                    'output': [{'type': 'message', 'content': [
+                        {'type': 'output_text', 'text': 'OK'}]}]}}
+        wire = ('event: response.completed\ndata: ' + json.dumps(terminal) + '\n\n').encode()
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(wire)
+            connection = http.client.HTTPConnection(
+                '127.0.0.1', self.server.server_port, timeout=4)
+            try:
+                connection.request('POST', '/harbor/v1/responses', json.dumps(source),
+                                   {'Authorization': 'Bearer synthetic-owner-token'})
+                response = connection.getresponse()
+                payload = response.read()
+            finally:
+                connection.close()
+            sent = json.loads(opener.return_value.open.call_args.args[0].data)
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(b'response.completed', payload)
+        self.assertNotIn(b'response.failed', payload)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertFalse(any(item.get('type') in ('reasoning', 'compaction')
+                             or 'encrypted_content' in item for item in sent['input']))
+        self.assertEqual([item.get('call_id') for item in sent['input'][1:3]],
+                         ['call_patch', 'call_patch'])
+
+    def test_ciphertext_from_another_azure_binding_is_removed(self):
+        self.configure()
+        source = self.source()
+        protected = [item for item in source['input']
+                     if item.get('type') in ('reasoning', 'compaction')]
+        other_bindings = [
+            bridge.azure_history_binding(
+                {'provider': 'azure', 'model': 'coding-prod'},
+                'https://other.openai.azure.com/openai/v1'),
+            bridge.azure_history_binding(
+                {'provider': 'azure', 'model': 'other-deployment'}, self.endpoint),
+        ]
+        for binding in other_bindings:
+            for item in protected:
+                bridge.remember_opaque_history(binding, item)
+
+        sent = bridge.routed_request(source, {})[0].request['input']
+
+        self.assertFalse(any(item.get('type') in ('reasoning', 'compaction') for item in sent))
+        self.assertEqual(sent[0], source['input'][0])
+        self.assertEqual([item.get('call_id') for item in sent[1:3]],
+                         ['call_patch', 'call_patch'])
+        self.assertEqual(sent[-1], source['input'][-1])
 
     def test_json_and_sse_preserve_opaque_fields_but_translate_actual_tools(self):
         source = self.source()
@@ -103,9 +192,13 @@ class AzureHistoryTests(unittest.TestCase):
         self.assertEqual(translation.event(block), block + b'\n\n')
         self.assertEqual(translation.pending, set())
 
-    def test_invalid_ciphertext_is_sent_once_and_rejection_is_not_repaired(self):
+    def test_known_ciphertext_is_sent_once_and_rejection_is_not_repaired(self):
         source = self.source()
         self.configure()
+        binding = bridge.azure_history_binding(
+            {'provider': 'azure', 'model': 'coding-prod'}, self.endpoint)
+        for item in source['input']:
+            bridge.remember_opaque_history(binding, item)
         failure = {'error': {'code': 'invalid_encrypted_content',
                             'message': 'Synthetic encrypted history is invalid'}}
         error = bridge.urllib.error.HTTPError(self.endpoint + '/responses', 400, 'fixture', {},

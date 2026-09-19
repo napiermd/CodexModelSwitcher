@@ -135,16 +135,18 @@ def main():
                     'encrypted_reasoning_preserved': True, 'tool_continuation': True,
                     'first_seconds': first_seconds, 'continuation_seconds': continuation_seconds})
                 last_followup = followup
-            invalid = copy.deepcopy(last_followup)
-            invalid['stream'] = False
-            next(item for item in invalid['input'] if item.get('type') == 'reasoning')['encrypted_content'] = 'invalid-synthetic-ciphertext'
+            foreign = copy.deepcopy(last_followup)
+            foreign['stream'] = False
+            next(item for item in foreign['input'] if item.get('type') == 'reasoning')['encrypted_content'] = 'unknown-synthetic-ciphertext'
             before = len(upstream_requests)
-            status, response, seconds = request(invalid)
-            code = (response.get('error') or {}).get('code')
-            if status != 400 or code != 'invalid_encrypted_content' or len(upstream_requests) != before + 1:
-                raise VerificationError('Invalid-ciphertext negative control was not rejected once as expected.')
-            evidence['negative_control'] = {'http_status': status, 'code': code, 'upstream_attempts': 1,
-                                            'seconds': seconds}
+            status, response, seconds = request(foreign)
+            if status != 200 or response.get('status') != 'completed' or len(upstream_requests) != before + 1:
+                raise VerificationError('Unknown ciphertext was not removed before one successful Azure request.')
+            if any(item.get('encrypted_content') for item in upstream_requests[-1]):
+                raise VerificationError('Unknown ciphertext reached Azure.')
+            evidence['foreign_history'] = {'http_status': status, 'completed': True,
+                                           'encrypted_reasoning_removed': True,
+                                           'upstream_attempts': 1, 'seconds': seconds}
             evidence['upstream_requests'] = len(upstream_requests)
             print(json.dumps(evidence, indent=2))
         finally:

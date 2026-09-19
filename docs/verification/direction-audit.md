@@ -53,5 +53,5 @@ The merge question and the activation question are separate. Merging to `main` i
 - [x] Create one Linear issue: merge the adoption stack to main as inactive code ([SAY-3380](https://linear.app/sayvant/issue/SAY-3380)).
 - [x] Create one Linear issue: validate the app-tool snapshot against a real deferred-load capture before any enablement ([SAY-3382](https://linear.app/sayvant/issue/SAY-3382)).
 - [x] Create one Linear issue: promote the tested Chat compatibility pilot into routing only when a concrete Chat-only thinking model requires it; keep the model-family replay contract at that boundary ([SAY-3381](https://linear.app/sayvant/issue/SAY-3381)).
-- [ ] Close out the remaining SAY-3370–3379 bookkeeping so issue state matches reality.
-- [ ] Do not enable any environment flag in the shared runtime during this work.
+- [x] Close out SAY-3370–3379 with implementation evidence and corrected scope; production promotion and real-capture validation remain in SAY-3381 and SAY-3382.
+- [x] Keep every optional environment flag disabled in the shared runtime during this work.

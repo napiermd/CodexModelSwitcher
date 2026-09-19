@@ -34,4 +34,12 @@ Final pre-deployment checks passed on September 19:
 - A signed application build using `Apple Development: Andrew Napier (P9ZRLF7F56)`. `codesign --verify --deep --strict` passed.
 - A second isolated live Azure proof with the exact command above and the same one-POST, one-GET, sequence 4-to-5 completion result.
 
-Coordinated runtime activation is recorded separately; it is not inferred from unit tests or the isolated provider proof.
+## Production activation
+
+Pull request [#21](https://github.com/napiermd/model-harbor/pull/21) merged as `0a613136afcdef67a8ecdd22b414eb503ac6232f` after the macOS, website, AMD64 native Azure, and ARM64 native Azure checks passed.
+
+The signed application was installed with a verified rollback copy. The installed adapter, retained runtime adapter, and source adapter all have SHA-256 `f8ecb46e74fa1fdcbec26686fe6376363e499bc2cb11cba3af39ba72faf435c3`. The installation record is `~/Library/Application Support/Model Harbor/updates/azure-stream-resume-20260919-ui-d560c48e/installation.json`.
+
+Coordinated maintenance transaction `59b0baf5-d091-4ee8-8000-4c5af186ecb2` completed with phase `resumed`. It changed the active runtime from `d3d263a14173df6ebb12f98ae78e0aee9866c01cff11abf81bd37a23617af6c1` to `bac5825ab57c03c2d5e312b8a06a47bcd812ea946c5d3487729bb9671cf9349c`. The controller preserved runtime ownership and shared configuration, verified Azure Sol and both configured OpenRouter routes, and resumed all five captured Harbor and Codex processes.
+
+Authenticated post-activation status reported `azure_ready: true`, `openrouter_ready: true`, an unblocked maintenance state, and the new content-free Azure recovery counters. A fresh installed-route Azure verification completed on the new boot. The isolated interruption proof then passed again with one inference POST, one resume GET, sequence 4 followed by sequence 5, and `response.completed`.

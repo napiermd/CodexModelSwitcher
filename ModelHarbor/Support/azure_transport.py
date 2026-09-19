@@ -1,5 +1,6 @@
-"""One-attempt Azure HTTP transport with an absolute, cancellable request budget."""
+"""Azure HTTP transport with an absolute, cancellable request budget."""
 import errno
+import enum
 import http.client
 import math
 import select
@@ -56,6 +57,13 @@ class _ResolverPool:
 _RESOLVER = _ResolverPool()
 
 
+class DispatchState(enum.IntEnum):
+    NOT_STARTED = 0
+    REQUEST_HEADERS_POSSIBLE = 1
+    MODEL_BYTES_POSSIBLE = 2
+    RESPONSE_HEADERS_RECEIVED = 3
+
+
 class RequestBudget:
     def __init__(self, seconds=180, *, cancelled=None, clock=time.monotonic, poll_seconds=.1):
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 180:
@@ -69,7 +77,7 @@ class RequestBudget:
         self._lock = threading.Lock()
         self._sockets = set()
         self._stop_reason = None
-        self._dispatch_possible = False
+        self._dispatch_state = DispatchState.NOT_STARTED
         self._done = threading.Event()
         self._watcher = threading.Thread(target=self._watch, name='harbor-azure-budget', daemon=True)
         self._watcher.start()
@@ -82,7 +90,22 @@ class RequestBudget:
     @property
     def dispatch_possible(self):
         with self._lock:
-            return self._dispatch_possible
+            return self._dispatch_state >= DispatchState.MODEL_BYTES_POSSIBLE
+
+    @property
+    def dispatch_state(self):
+        with self._lock:
+            return self._dispatch_state
+
+    @property
+    def retry_safe(self):
+        with self._lock:
+            return self._dispatch_state < DispatchState.MODEL_BYTES_POSSIBLE
+
+    @property
+    def response_headers_received(self):
+        with self._lock:
+            return self._dispatch_state >= DispatchState.RESPONSE_HEADERS_RECEIVED
 
     @staticmethod
     def _interrupt(sock):
@@ -155,13 +178,22 @@ class RequestBudget:
         with self._lock:
             self._sockets.discard(sock)
 
-    def mark_dispatch_possible(self):
+    def _advance_dispatch_state(self, state):
         self.check()
         with self._lock:
             if self._stop_reason is None and not self._done.is_set():
-                self._dispatch_possible = True
+                self._dispatch_state = max(self._dispatch_state, state)
                 return
         self.check()
+
+    def mark_request_headers_possible(self):
+        self._advance_dispatch_state(DispatchState.REQUEST_HEADERS_POSSIBLE)
+
+    def mark_model_bytes_possible(self):
+        self._advance_dispatch_state(DispatchState.MODEL_BYTES_POSSIBLE)
+
+    def mark_response_headers_received(self):
+        self._advance_dispatch_state(DispatchState.RESPONSE_HEADERS_RECEIVED)
 
     def io(self, operation, *args, **kwargs):
         self.check()
@@ -232,6 +264,7 @@ class _Connection:
     def __init__(self, *args, budget, **kwargs):
         self._budget = budget
         self._tunnelling = False
+        self._origin_send_index = 0
         super().__init__(*args, **kwargs)
 
     def connect(self):
@@ -248,12 +281,20 @@ class _Connection:
             self.close()
             raise
 
+    def _send_output(self, message_body=None, encode_chunked=False):
+        self._origin_send_index = 0
+        return super()._send_output(message_body, encode_chunked)
+
     def send(self, data):
         if self.sock is None:
             self.connect()
         self.sock.settimeout(self._budget.remaining())
         if not self._tunnelling:
-            self._budget.mark_dispatch_possible()
+            if self._origin_send_index == 0 and _headers_only(data):
+                self._budget.mark_request_headers_possible()
+            else:
+                self._budget.mark_model_bytes_possible()
+            self._origin_send_index += 1
         return self._budget.io(super().send, data)
 
 
@@ -303,7 +344,9 @@ class _HTTPHandler(urllib.request.HTTPHandler):
     def http_open(self, request):
         try:
             self._budget.check()
-            return self.do_open(lambda *args, **kwargs: _HTTPConnection(*args, budget=self._budget, **kwargs), request)
+            response = self.do_open(lambda *args, **kwargs: _HTTPConnection(*args, budget=self._budget, **kwargs), request)
+            self._budget.mark_response_headers_received()
+            return response
         except Exception:
             self._budget.check()
             raise
@@ -319,8 +362,19 @@ class _HTTPSHandler(urllib.request.HTTPSHandler):
     def https_open(self, request):
         try:
             self._budget.check()
-            return self.do_open(lambda *args, **kwargs: _HTTPSConnection(*args, budget=self._budget, **kwargs),
-                                request, context=self._context)
+            response = self.do_open(lambda *args, **kwargs: _HTTPSConnection(*args, budget=self._budget, **kwargs),
+                                    request, context=self._context)
+            self._budget.mark_response_headers_received()
+            return response
         except Exception:
             self._budget.check()
             raise
+
+
+def _headers_only(data):
+    try:
+        value = memoryview(data).tobytes()
+    except TypeError:
+        return False
+    delimiter = value.find(b'\r\n\r\n')
+    return delimiter >= 0 and delimiter + 4 == len(value)

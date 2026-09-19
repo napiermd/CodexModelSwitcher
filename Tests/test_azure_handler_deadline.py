@@ -233,6 +233,98 @@ class AzureHandlerDeadlineTests(unittest.TestCase):
         self.assertEqual(self.inference('stream-eof', stream=True)[0], 400)
         self.assertEqual(self.attempts, 1)
 
+    def test_initial_pre_body_failure_retries_once_without_duplicate_dispatch(self):
+        class Response:
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}'
+
+        original_budget = bridge._transport_module.RequestBudget
+        budgets = []
+        def tracked_budget(*args, **kwargs):
+            budget = original_budget(*args, **kwargs)
+            budgets.append(budget)
+            return budget
+        calls = []
+        def upstream(request, **_kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                raise ConnectionResetError('synthetic reset before model bytes')
+            budget = budgets[-1]
+            budget.mark_request_headers_possible()
+            budget.mark_response_headers_received()
+            return Response()
+
+        with patch.object(bridge._transport_module, 'RequestBudget', side_effect=tracked_budget), \
+             patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = upstream
+            status, body = self.inference('retry-before-body')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['status'], 'completed')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+        self.assertEqual(bridge.AZURE_ADMISSION.snapshot()['keys'], 0)
+        self.assertEqual(len(budgets), 1)
+        self.assertTrue(budgets[0].dispatch_possible)
+
+    def test_two_initial_pre_body_failures_are_replayable_and_record_attempt_count(self):
+        original_budget = bridge._transport_module.RequestBudget
+        budgets = []
+        def tracked_budget(*args, **kwargs):
+            budget = original_budget(*args, **kwargs)
+            budgets.append(budget)
+            return budget
+        calls = []
+        def upstream(request, **_kwargs):
+            calls.append(request)
+            raise ConnectionResetError('synthetic reset before model bytes')
+
+        with patch.object(bridge._transport_module, 'RequestBudget', side_effect=tracked_budget), \
+             patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = upstream
+            status, body = self.inference('retry-exhausted-before-body')
+        self.assertEqual(status, 502)
+        self.assertIn(b'response connection was interrupted', body)
+        self.assertEqual(len(calls), 2)
+        self.finished()
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 0)
+        failure = bridge.RECENT_FAILURES[-1]
+        self.assertEqual(failure['phase'], 'pre_model_body')
+        self.assertEqual(failure['initial_post_attempts'], 2)
+
+    def test_initial_post_body_failure_never_replays_and_records_safe_diagnostics(self):
+        original_budget = bridge._transport_module.RequestBudget
+        budgets = []
+        def tracked_budget(*args, **kwargs):
+            budget = original_budget(*args, **kwargs)
+            budgets.append(budget)
+            return budget
+        calls = []
+        def upstream(request, **_kwargs):
+            calls.append(request)
+            budgets[-1].mark_model_bytes_possible()
+            raise ConnectionResetError('synthetic reset after PRIVATE_PROMPT_MARKER')
+
+        with patch.object(bridge._transport_module, 'RequestBudget', side_effect=tracked_budget), \
+             patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = upstream
+            status, body = self.inference('PRIVATE_PROMPT_MARKER')
+        self.assertEqual(status, 502)
+        self.assertIn(b'response connection was interrupted', body)
+        self.assertEqual(len(calls), 1)
+        self.finished()
+        self.assertEqual(self.runtime.status()['uncertain_turns'], 1)
+        self.assertEqual(self.inference('PRIVATE_PROMPT_MARKER')[0], 400)
+        failure = bridge.RECENT_FAILURES[-1]
+        self.assertEqual(failure['kind'], 'connection_interrupted')
+        self.assertEqual(failure['phase'], 'post_dispatch_pre_header')
+        self.assertEqual(failure['initial_post_attempts'], 1)
+        encoded = json.dumps(failure)
+        self.assertNotIn('PRIVATE_PROMPT_MARKER', encoded)
+        self.assertNotIn(self.key, encoded)
+
     def test_background_azure_stream_resumes_after_eof_without_replaying_post(self):
         self.mode = 'stream-resumable'
         self.write_effort('none', resumable=True)

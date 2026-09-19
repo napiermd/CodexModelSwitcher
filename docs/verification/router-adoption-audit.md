@@ -64,8 +64,23 @@ Nothing upstream. HEAD is identical. What changed is coverage: round 1 reviewed 
 - [x] Verify upstream HEAD unchanged; clone and read 87 files across five explorers.
 - [x] Map each candidate against Harbor invariants; reject replay/history-edit ports.
 - [x] Write this audit and checklist.
-- [ ] Create focused Linear issues for items 1-10 with acceptance criteria and tests.
-- [ ] Implement in order on `codex/router-adoption-audit`.
-- [ ] Full Python and Swift suites, build, signature verification.
-- [ ] Independent review; fix findings.
-- [ ] Update Linear issues to Done with evidence.
+- [x] Create focused Linear issues for items 1-10 with acceptance criteria and tests (SAY-3370 through SAY-3379).
+- [x] Implement in order on `codex/router-adoption-audit`.
+- [x] Full Python and Swift suites, build, signature verification.
+
+## Outcome
+
+All ten items implemented and verified on 2026-09-18:
+
+1. Usage ledger: `ModelHarbor/Support/usage_ledger.py`, wired into `grok_adapter.py` completion paths. 11 tests.
+2. Usage estimator: `ModelHarbor/Support/usage_estimate.py`, feeds the ledger on zero/missing provider usage. 8 tests.
+3. Drift report: `scripts/report-context-drift.py`, read-only, retry/estimate exclusions intact. 7 tests.
+4. Tool-call argument validation: completed function calls with unparseable arguments fail the turn with `invalid_function_call_arguments`; custom codecs exempt. 6 tests.
+5. Reasoning replay table: `ModelHarbor/Support/chat_reasoning.py`, evidence-backed family matching, passthrough for unlisted models. 7 tests. Wired as a pure table; the Baseten Chat translation path consumes it when routes bridge.
+6. Metrics rollups: hourly content-free aggregates flush through the ledger at shutdown when metrics are enabled; flushed sequences are deduplicated. 4 tests.
+7. App-tool merge: `codex_app_tools.py` plus a versioned snapshot; client definitions win, namespace restore round-trips, gated by `MODEL_HARBOR_CODEX_APP_TOOLS=1` (off by default until the snapshot is validated against live captures). 7 tests.
+8. Image strip-to-notice in the Chat compat pilot: labeled non-delivery notice in messages and tool results; content never leaks into the notice. 15 pilot tests.
+9. Transport pools and diagnoses: `transport.py` separates stream and probe openers and classifies failures into stable named classes. 5 tests.
+10. Tool-result aging estimator: `tool_result_aging.py` computes reclaimable bytes with the reference eligibility rules; pure functions, no mutation. 8 tests.
+
+Final verification: 543 Python tests pass, 108 Swift tests pass, Xcode build succeeds, strict deep signature verification passes. One regression was caught during integration (missing `ssl` import in the new failure handler) and fixed in `0fe8a0d` before the final run.

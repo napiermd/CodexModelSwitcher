@@ -146,6 +146,72 @@ class AzureTransportTests(unittest.TestCase):
         with self.assertRaises(transport.RequestDeadline):
             second.io(late_result)
 
+    def test_dispatch_states_are_monotonic_and_only_model_bytes_disable_retry(self):
+        budget = self.budget()
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.NOT_STARTED)
+        self.assertTrue(budget.retry_safe)
+        self.assertFalse(budget.dispatch_possible)
+        budget.mark_request_headers_possible()
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.REQUEST_HEADERS_POSSIBLE)
+        self.assertTrue(budget.retry_safe)
+        self.assertFalse(budget.dispatch_possible)
+        budget.mark_model_bytes_possible()
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.MODEL_BYTES_POSSIBLE)
+        self.assertFalse(budget.retry_safe)
+        self.assertTrue(budget.dispatch_possible)
+        budget.mark_response_headers_received()
+        budget.mark_request_headers_possible()
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.RESPONSE_HEADERS_RECEIVED)
+        self.assertTrue(budget.response_headers_received)
+
+    def test_header_only_classifier_fails_closed(self):
+        self.assertTrue(transport._headers_only(b'POST /responses HTTP/1.1\r\nHost: fixture\r\n\r\n'))
+        self.assertFalse(transport._headers_only(b'POST /responses HTTP/1.1\r\n\r\n{}'))
+        self.assertFalse(transport._headers_only(b'not-an-http-request'))
+        self.assertFalse(transport._headers_only(object()))
+
+    def test_header_send_failure_remains_safe_to_retry_before_the_body(self):
+        attempts = []
+        class Socket:
+            def settimeout(self, _seconds): pass
+            def sendall(self, value):
+                attempts.append(value)
+                raise ConnectionResetError('synthetic header reset')
+
+        budget = self.budget()
+        connection = transport._HTTPConnection('fixture.invalid', 80, budget=budget)
+        connection.sock = Socket()
+        connection.putrequest('POST', '/responses')
+        connection.putheader('Content-Length', '2')
+        with self.assertRaises(ConnectionResetError):
+            connection._send_output(b'{}')
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0].endswith(b'\r\n\r\n'))
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.REQUEST_HEADERS_POSSIBLE)
+        self.assertTrue(budget.retry_safe)
+        self.assertFalse(budget.dispatch_possible)
+
+    def test_body_send_failure_disables_retry_before_sendall_returns(self):
+        attempts = []
+        class Socket:
+            def settimeout(self, _seconds): pass
+            def sendall(self, value):
+                attempts.append(value)
+                if len(attempts) == 2:
+                    raise ConnectionResetError('synthetic body reset')
+
+        budget = self.budget()
+        connection = transport._HTTPConnection('fixture.invalid', 80, budget=budget)
+        connection.sock = Socket()
+        connection.putrequest('POST', '/responses')
+        connection.putheader('Content-Length', '2')
+        with self.assertRaises(ConnectionResetError):
+            connection._send_output(b'{}')
+        self.assertEqual(attempts[1], b'{}')
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.MODEL_BYTES_POSSIBLE)
+        self.assertFalse(budget.retry_safe)
+        self.assertTrue(budget.dispatch_possible)
+
     def test_cancellation_callback_failure_fails_closed(self):
         def failed_callback():
             raise OSError('Synthetic disconnected socket')
@@ -323,11 +389,24 @@ class AzureTransportTests(unittest.TestCase):
                 self.assertEqual(budget.io(response.read), b'{}')
                 self.assertEqual(server.payload, payload)
                 self.assertTrue(budget.dispatch_possible)
+                self.assertTrue(budget.response_headers_received)
+                self.assertEqual(budget.dispatch_state, transport.DispatchState.RESPONSE_HEADERS_RECEIVED)
                 self.assertIsNone(budget.stop_reason)
             finally:
                 response.close()
         budget.finish()
         self.assertTrue(response.closed)
+
+    def test_http_error_headers_are_recorded_before_urllib_raises(self):
+        def behavior(handler):
+            handler.read_request()
+            handler.request.sendall(b'HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+        server, budget = self.server(behavior), self.budget()
+        with self.loopback_resolver(), self.assertRaises(urllib.error.HTTPError) as caught:
+            self.opener(budget).open(f'http://fixture.invalid:{server.server_address[1]}/responses', b'{}')
+        caught.exception.close()
+        self.assertEqual(budget.dispatch_state, transport.DispatchState.RESPONSE_HEADERS_RECEIVED)
+        self.assertTrue(budget.response_headers_received)
         self.assertEqual(len(server.requests), 1)
 
     def test_proxy_connect_is_not_model_dispatch(self):

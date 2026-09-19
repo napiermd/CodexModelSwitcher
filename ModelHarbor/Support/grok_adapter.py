@@ -600,6 +600,16 @@ def azure_response_request(base, headers, response_id):
     return urllib.request.Request(url, headers=dict(headers, Accept='application/json'), method='GET')
 
 
+def azure_initial_retry_phase(budget, translation):
+    if budget.retry_safe:
+        return 'pre_model_body'
+    if not budget.response_headers_received:
+        return 'post_dispatch_pre_header'
+    if translation.upstream_response_id is None or translation.upstream_sequence is None:
+        return 'post_header_pre_cursor'
+    return 'post_cursor_stream'
+
+
 def azure_recovery_stat(name):
     with ROUTE_LOCK:
         AZURE_STREAM_RECOVERY[name] += 1
@@ -1984,6 +1994,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         headers = None
         base = None
         azure_cleanup_scheduled = False
+        azure_initial_attempts = 0
 
         def azure_stopped():
             nonlocal activity_status, activity_http_status
@@ -2184,7 +2195,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     cancelled=azure_budget.cancelled, timeout=azure_budget.remaining())
                 azure_budget.check()
                 require_inference_admission()
-                upstream_response = opener.open(request, timeout=azure_budget.remaining())
+                while True:
+                    azure_initial_attempts += 1
+                    try:
+                        upstream_response = opener.open(request, timeout=azure_budget.remaining())
+                        break
+                    except (_transport_module.RequestDeadline, _transport_module.RequestCancelled,
+                            urllib.error.HTTPError):
+                        raise
+                    except (OSError, urllib.error.URLError):
+                        if azure_initial_attempts >= 2 or not azure_budget.retry_safe:
+                            raise
+                        azure_budget.check()
             else:
                 require_inference_admission()
                 upstream_response = opener.open(request, timeout=180)
@@ -2487,11 +2509,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 known = (azure_outcome_known or not azure_budget.dispatch_possible) if azure_budget is not None else (activity_status == 'completed' or activity_http_status is not None and not started)
                 RUNTIME.finish(request_lease, known or maintenance_not_dispatched)
             if activity_started and activity_status != 'completed':
+                failure = {'provider': route['provider'], 'model': route['model'],
+                    'kind': failure_kind or (azure_budget.stop_reason if azure_budget else None) or 'incomplete',
+                    'elapsed_seconds': round(time.monotonic() - request_started_at, 3),
+                    'at': time.time()}
+                if route['provider'] == 'azure' and azure_budget is not None:
+                    failure.update(phase=azure_initial_retry_phase(azure_budget, translation),
+                                   initial_post_attempts=azure_initial_attempts)
                 with ROUTE_LOCK:
-                    RECENT_FAILURES.append({'provider': route['provider'], 'model': route['model'],
-                        'kind': failure_kind or (azure_budget.stop_reason if azure_budget else None) or 'incomplete',
-                        'elapsed_seconds': round(time.monotonic() - request_started_at, 3),
-                        'at': time.time()})
+                    RECENT_FAILURES.append(failure)
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
                 usage = translation.usage

@@ -126,7 +126,7 @@ class AzureHandlerAdmissionTests(unittest.TestCase):
         original_budget = bridge._transport_module.RequestBudget
         def dispatched_budget(*args, **kwargs):
             budget = original_budget(*args, **kwargs)
-            budget.mark_dispatch_possible()
+            budget.mark_model_bytes_possible()
             return budget
 
         class Stream:

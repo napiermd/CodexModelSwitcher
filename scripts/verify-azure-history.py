@@ -164,9 +164,12 @@ def main():
             if not args.installed and any(item.get('encrypted_content') for item in upstream_requests[-1]):
                 raise VerificationError('Unknown ciphertext reached Azure.')
             evidence['foreign_history'] = {'http_status': status, 'completed': True,
-                                           'encrypted_reasoning_removed': True,
-                                           'upstream_attempts': 1, 'seconds': seconds}
-            evidence['upstream_requests'] = len(upstream_requests) if not args.installed else 5
+                                           'encrypted_reasoning_removed': True, 'seconds': seconds}
+            if args.installed:
+                evidence['gateway_requests'] = 5
+            else:
+                evidence['foreign_history']['upstream_attempts'] = 1
+                evidence['upstream_requests'] = len(upstream_requests)
             print(json.dumps(evidence, indent=2))
         finally:
             if server is not None:

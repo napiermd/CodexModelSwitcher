@@ -95,3 +95,43 @@ class RequestMetricsTests(unittest.TestCase):
         self.assertEqual(second[0]['input_shape']['message:user']['items'], 1)
         self.assertNotIn('PRIVATE', json.dumps(second))
         self.assertNotIn('CHANGED', json.dumps(second))
+
+class RollupTests(unittest.TestCase):
+    def test_rollup_aggregates_without_content(self):
+        recorder = metrics.Recorder()
+        source = {'input': [{'role': 'user', 'content': 'PRIVATE text'}],
+                  'tools': [{'type': 'function', 'name': 'PRIVATE tool'}]}
+        handle = recorder.begin(source, source, {'provider': 'azure', 'model': 'm'},
+                                json.dumps(source).encode())
+        recorder.finish(handle, 'completed', {'input_tokens': 10})
+        buckets = metrics.rollup(recorder.snapshot())
+        self.assertEqual(len(buckets), 1)
+        bucket = buckets[0]
+        self.assertEqual(bucket['requests'], 1)
+        self.assertEqual(bucket['states'], {'completed': 1})
+        self.assertGreater(bucket['input_serialized_bytes'], 0)
+        self.assertNotIn('PRIVATE', json.dumps(buckets))
+
+    def test_flush_writes_rollups_once(self):
+        recorder = metrics.Recorder()
+        handle = recorder.begin({'input': []}, {'input': []}, {'provider': 'p', 'model': 'm'}, b'{}')
+        recorder.finish(handle, 'completed', {'input_tokens': 1})
+        written = []
+        self.assertTrue(recorder.flush_rollups(written.append))
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0]['status'], 'metrics_rollup')
+        self.assertTrue(recorder.flush_rollups(written.append))
+        self.assertEqual(len(written), 1)
+
+    def test_flush_write_failure_is_swallowed(self):
+        recorder = metrics.Recorder()
+        handle = recorder.begin({'input': []}, {'input': []}, {}, b'{}')
+        recorder.finish(handle, 'completed', {'input_tokens': 1})
+        def boom(event):
+            raise OSError('disk full')
+        self.assertFalse(recorder.flush_rollups(boom))
+
+    def test_started_records_do_not_rollup(self):
+        recorder = metrics.Recorder()
+        recorder.begin({'input': []}, {'input': []}, {}, b'{}')
+        self.assertEqual(metrics.rollup(recorder.snapshot()), [])

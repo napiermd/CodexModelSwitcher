@@ -77,12 +77,41 @@ def measure(source, translated, route, wire_bytes):
     return report
 
 
+def rollup(records, *, hour=None):
+    """Aggregate content-free records into hourly buckets keyed by provider
+    and model. Counts and totals only."""
+    buckets = {}
+    for record in records:
+        if record.get('state') == 'started':
+            continue
+        started = record.get('started_at')
+        if type(started) not in (int, float):
+            continue
+        bucket_hour = int(started // 3600) if hour is None else hour
+        key = (bucket_hour, record.get('provider'), record.get('model'))
+        bucket = buckets.setdefault(key, {'hour': bucket_hour, 'provider': record.get('provider'),
+            'model': record.get('model'), 'requests': 0, 'wire_bytes': 0,
+            'instructions_serialized_bytes': 0, 'tools_serialized_bytes': 0,
+            'input_serialized_bytes': 0, 'images': 0, 'encrypted_items': 0,
+            'states': {}})
+        bucket['requests'] += 1
+        for field in ('wire_bytes', 'instructions_serialized_bytes', 'tools_serialized_bytes',
+                      'input_serialized_bytes', 'images', 'encrypted_items'):
+            value = record.get(field)
+            if type(value) is int and value >= 0:
+                bucket[field] += value
+        state = record.get('state')
+        bucket['states'][state] = bucket['states'].get(state, 0) + 1
+    return list(buckets.values())
+
+
 class Recorder:
     def __init__(self, limit=32, clock=time.time):
         self._records = deque(maxlen=limit)
         self._lock = threading.Lock()
         self._clock = clock
         self._sequence = 0
+        self._flushed_sequences = set()
 
     def begin(self, source, translated, route, wire_bytes):
         report = measure(source, translated, route, wire_bytes)
@@ -111,3 +140,22 @@ class Recorder:
     def snapshot(self):
         with self._lock:
             return copy.deepcopy(list(self._records))
+
+    def flush_rollups(self, write):
+        """Write hourly rollups through the supplied callable. Write failures
+        are swallowed: telemetry must never break a request."""
+        with self._lock:
+            records = copy.deepcopy(list(self._records))
+        records = [record for record in records if record['sequence'] not in self._flushed_sequences]
+        try:
+            for bucket in rollup(records):
+                write({'provider': bucket['provider'] or 'unknown',
+                       'model': bucket['model'] or 'unknown',
+                       'status': 'metrics_rollup',
+                       'at': bucket['hour'] * 3600,
+                       'usage': None,
+                       'rollup': bucket})
+        except Exception:
+            return False
+        self._flushed_sequences.update(record['sequence'] for record in records)
+        return True

@@ -89,10 +89,13 @@ def record(event):
         if usage:
             entry['usage'] = usage
             entry['usage_source'] = 'estimated' if event.get('estimated') else 'provider'
-        elif event.get('estimated'):
+        elif event.get('estimated') and isinstance(event.get('estimated'), int):
             entry['usage'] = {'input_tokens': int(event['estimated']), 'total_tokens': int(event['estimated'])}
             entry['usage_source'] = 'estimated'
         entry['retried'] = False
+        rollup = event.get('rollup')
+        if isinstance(rollup, dict):
+            entry['rollup'] = rollup
         line = json.dumps(entry, separators=(',', ':')).encode()
         if len(line) > MAX_LINE_BYTES:
             return False

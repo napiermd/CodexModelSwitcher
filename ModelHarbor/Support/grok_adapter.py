@@ -2266,6 +2266,8 @@ def main():
             server.server_close()
         if RUNTIME:
             RUNTIME.close()
+        if REQUEST_METRICS_ENABLED:
+            REQUEST_METRICS.flush_rollups(USAGE_LEDGER.record)
 
 
 if __name__ == '__main__':

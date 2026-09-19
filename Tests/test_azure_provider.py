@@ -24,8 +24,10 @@ class AzureConnectionsTests(unittest.TestCase):
             p.start(); self.addCleanup(p.stop)
 
     # Reuse only the local HTTP harness, not the OpenRouter-specific tests.
-    def write_effort(self, effort):
-        (self.root / 'model-catalogs/azure.json').write_text(json.dumps({'models': [{'slug': 'coding-prod', 'default_reasoning_level': effort}]}))
+    def write_effort(self, effort, resumable=False):
+        (self.root / 'model-catalogs/azure.json').write_text(json.dumps({'models': [{
+            'slug': 'coding-prod', 'default_reasoning_level': effort,
+            'harbor_resumable_streaming': resumable}]}))
 
     def configure(self, **kwargs):
         return self.request(path='/harbor/providers/azure', body={'key': self.key, 'endpoint': self.endpoint}, **kwargs)

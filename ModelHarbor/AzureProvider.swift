@@ -7,6 +7,7 @@ struct AzureDeployment {
     var context = 128000
     var vision = false
     var contextIsAutomatic: Bool? = nil
+    var resumableStreaming: Bool? = nil
 
     func validate() throws {
         guard name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#, options: .regularExpression) != nil else {
@@ -36,6 +37,7 @@ struct AzureDeployment {
          "truncation_policy": ["mode": "tokens", "limit": 10000], "experimental_supported_tools": []]
         entry["harbor_model_name"] = modelName
         entry["harbor_context_mode"] = (contextIsAutomatic ?? (context == 128000)) ? "automatic" : "manual"
+        entry["harbor_resumable_streaming"] = resumableStreaming ?? (name == "gpt-5.6-sol")
         return Self.resolvingContext(in: entry, readNativeMetadata: readNativeMetadata)
     }
 

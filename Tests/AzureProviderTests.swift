@@ -119,6 +119,17 @@ final class AzureProviderTests: XCTestCase {
         XCTAssertFalse(try String(decoding: JSONSerialization.data(withJSONObject: defaults), as: UTF8.self).contains("input_image"))
     }
 
+    func testResumableStreamingIsExplicitCatalogCapability() {
+        let disabled = AzureDeployment(name: "ordinary").catalogEntry { self.nativeMetadata }
+        let enabled = AzureDeployment(name: "resumable", resumableStreaming: true).catalogEntry { self.nativeMetadata }
+        let sol = AzureDeployment(name: "gpt-5.6-sol").catalogEntry { self.nativeMetadata }
+        XCTAssertEqual(disabled["harbor_resumable_streaming"] as? Bool, false)
+        XCTAssertEqual(enabled["harbor_resumable_streaming"] as? Bool, true)
+        XCTAssertEqual(sol["harbor_resumable_streaming"] as? Bool, true)
+        XCTAssertEqual(AzureDeployment(name: "gpt-5.6-sol", resumableStreaming: false)
+            .catalogEntry { self.nativeMetadata }["harbor_resumable_streaming"] as? Bool, false)
+    }
+
     func testVerificationRequiresCompletedToolCall() throws {
         try AzureAPI.validateResponse(Data(#"{"status":"completed","output":[{"type":"function_call","name":"harbor_connection_check"}]}"#.utf8))
         for value in [#"{"status":"completed","output":[]}"#, #"{"status":"incomplete","output":[{"type":"function_call","name":"harbor_connection_check"}]}"#,

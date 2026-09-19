@@ -1,10 +1,10 @@
 # Direction audit
 
-Date: 2026-09-18. Scope: every open workstream on `codex/router-adoption-audit` and its ancestors. This is an audit, not an implementation.
+Date: 2026-09-18, updated 2026-09-19 after execution. Scope: every workstream on `codex/router-adoption-audit` and its ancestors.
 
 ## The actual situation
 
-`origin/main` (`b72ad38`) is an ancestor of the work branch. The whole stack — context-stream fix, router hardening, context-audit diagnostics, and the codex-router adoption layer — fast-forwards cleanly. Nothing is merged back yet. The comparison document is accurate: the deployed runtime already carries heartbeats, provenance, empty-completion rejection, and image routing, and the remaining codex-router ideas were evaluated honestly in `router-adoption-audit.md`.
+`origin/main` (`b72ad38`) was an ancestor of the work branch. The whole stack — context-stream fix, router hardening, context-audit diagnostics, and the codex-router adoption layer — fast-forwarded to local `main` at `9962578`. No runtime was activated and no optional flag was enabled. The comparison document is accurate: the deployed runtime already carries heartbeats, provenance, empty-completion rejection, and image routing, and the remaining codex-router ideas were evaluated in `router-adoption-audit.md`.
 
 ## The drift the direction question is about
 
@@ -43,7 +43,7 @@ Not a bug. The issue is that evaluation produced code faster than the evidence t
 
 ## What should happen to each piece
 
-The merge question and the activation question are separate. Merging to `main` is safe — it is a fast-forward, everything is tested, and nothing self-activates. Activation is the decision that needs discipline.
+The merge question and the activation question are separate. The tested stack is now on local `main`; nothing self-activated. Production Chat promotion, app-tool snapshot validation, and any shared-runtime activation remain separate work.
 
 ## Execution checklist
 

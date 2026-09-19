@@ -581,6 +581,29 @@ def flat_name(namespace, name, custom=False):
     return 'cms_' + hashlib.sha256(identity).hexdigest()[:24] + '_' + re.sub(r'[^A-Za-z0-9_-]', '_', name)[:30]
 
 
+def valid_function_arguments(item, names):
+    """Completed function calls must carry parseable JSON arguments unless a
+    custom codec owns the payload. Repairing would invent bytes; a poisoned
+    call stored in history breaks every later turn."""
+    if not isinstance(item, dict) or item.get('type') != 'function_call':
+        return True
+    name = item.get('name')
+    if name in names and names[name][2]:
+        return True
+    if any(mapped[1] == name and mapped[2] for mapped in names.values()):
+        return True
+    arguments = item.get('arguments')
+    if arguments in (None, ''):
+        return True
+    if not isinstance(arguments, str):
+        return False
+    try:
+        json.loads(arguments)
+    except ValueError:
+        return False
+    return True
+
+
 def requested_route(model_id):
     data = json.loads((CONFIG_DIR / 'model-switcher.json').read_text())
     if model_id == 'harbor-selected':
@@ -1105,6 +1128,7 @@ class Translation:
         self.pending = set()
         self.response_status = None
         self.usage = None
+        self.invalid_function_arguments = False
         self.has_output = False
         self.request = copy.deepcopy(source)
         # Codex can retain a forced tool choice when it creates a tool-free
@@ -1227,6 +1251,9 @@ class Translation:
     def validate_completion(self, response):
         if response.get('status') != 'completed':
             return response
+        if self.invalid_function_arguments:
+            return dict(response, status='failed', error={'code': 'invalid_function_call_arguments',
+                'message': 'The provider completed a tool call whose arguments are not valid JSON. Model Harbor did not relay or retry it.'})
         if 'output' not in response or response.get('output') or self.has_output:
             return response
         return dict(response, status='failed', error={'code': 'empty_response',
@@ -1236,6 +1263,11 @@ class Translation:
         result = copy.deepcopy(response)
         if isinstance(result.get('output'), list):
             result['output'] = [self.output_item(item) for item in result['output']]
+            if result.get('status') == 'completed':
+                for item in result['output']:
+                    if not valid_function_arguments(item, self.names):
+                        self.invalid_function_arguments = True
+                        break
         return result
 
     def output_item(self, item):
@@ -1282,6 +1314,11 @@ class Translation:
         if kind in ('response.output_item.added', 'response.output_item.done') and item.get('type') in ('function_call', 'custom_tool_call', 'message'):
             self.has_output = True
         if kind == 'response.completed':
+            if not self.invalid_function_arguments:
+                for output_item in (event.get('response') or {}).get('output') or []:
+                    if not valid_function_arguments(output_item, self.names):
+                        self.invalid_function_arguments = True
+                        break
             event['response'] = self.validate_completion(dict(event.get('response') or {}, status='completed'))
             if event['response']['status'] == 'failed':
                 event['type'] = 'response.failed'
@@ -1298,6 +1335,8 @@ class Translation:
         if event.get('type', '').startswith('response.function_call_arguments.') and event.get('item_id') in self.pending:
             return b''
         obj = self.output(event)
+        if kind == 'response.output_item.done' and not valid_function_arguments(item, self.names):
+            self.invalid_function_arguments = True
         if obj == original and json.loads(payload) == obj:
             return block + b'\n\n'
         retained = [line for line in lines if not line.startswith('data:')]

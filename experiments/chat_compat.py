@@ -57,6 +57,11 @@ def _contains_key(value: Any, key: str) -> bool:
     return False
 
 
+def _image_notice() -> str:
+    return ("[An image was attached here. It was not provided to this model, "
+            "which accepts text only. Do not describe or claim to have seen it.]")
+
+
 def _reject_lossy_semantics(source: Mapping[str, Any]) -> None:
     if _contains_key(source, "encrypted_content"):
         raise UnsupportedFeatureError("encrypted reasoning cannot be translated to Chat Completions")
@@ -68,8 +73,6 @@ def _reject_lossy_semantics(source: Mapping[str, Any]) -> None:
     def inspect(value: Any) -> None:
         if isinstance(value, Mapping):
             kind = value.get("type")
-            if kind in {"input_image", "image_url", "image", "computer_screenshot"} or "image_url" in value:
-                raise UnsupportedFeatureError("image content is not supported by this text compatibility pilot")
             if kind in {"custom", "custom_tool_call", "custom_tool_call_output"}:
                 raise UnsupportedFeatureError("custom tools and custom tool history are not translatable")
             if kind == "namespace" or "namespace" in value:
@@ -103,7 +106,8 @@ def _text_parts(content: Any, *, context: str) -> str:
             raise ProtocolError(f"{context} contains a non-object content part")
         kind = part.get("type")
         if kind in {"input_image", "image_url", "image", "computer_screenshot"} or "image_url" in part:
-            raise UnsupportedFeatureError("image content is not supported by this text compatibility pilot")
+            text.append(_image_notice())
+            continue
         if kind in {"input_text", "output_text", "text"} and isinstance(part.get("text"), str):
             text.append(part["text"])
             continue

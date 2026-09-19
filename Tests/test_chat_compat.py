@@ -290,8 +290,6 @@ class ChatCompatibilityTests(unittest.TestCase):
             ({"input": [{"type": "reasoning", "encrypted_content": "opaque"}]}, "encrypted reasoning"),
             ({"tools": [{"type": "custom", "name": "shell"}]}, "custom tools"),
             ({"tools": [{"type": "namespace", "name": "work", "tools": []}]}, "namespace tools"),
-            ({"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}]}, "image content"),
-            ({"input": [{"type": "function_call_output", "call_id": "c", "output": [{"type": "input_image", "image_url": "x"}]}]}, "image content"),
             ({"previous_response_id": "resp_provider_owned"}, "previous_response_id"),
         ]
         for changes, message in cases:
@@ -300,6 +298,30 @@ class ChatCompatibilityTests(unittest.TestCase):
                 source.update(changes)
                 with self.assertRaisesRegex(compat.UnsupportedFeatureError, message):
                     compat.translate_request(source)
+
+    def test_images_become_labeled_notices_on_text_routes(self):
+        source = {"model": "exact", "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "before"},
+                {"type": "input_image", "image_url": "data:image/png;base64,PRIVATE"},
+                {"type": "input_text", "text": "after"}]}]}
+        body = compat.translate_request(source).body
+        content = body["messages"][0]["content"]
+        self.assertIn("before", content)
+        self.assertIn("after", content)
+        self.assertIn("not provided to this model", content)
+        self.assertNotIn("PRIVATE", content)
+
+    def test_tool_result_images_become_labeled_notices(self):
+        source = {"model": "exact", "input": [
+            {"type": "function_call", "call_id": "c1", "name": "view_image", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1",
+             "output": [{"type": "input_image", "image_url": "data:image/png;base64,PRIVATE"}]}]}
+        body = compat.translate_request(source).body
+        tool_message = body["messages"][-1]
+        self.assertEqual(tool_message["role"], "tool")
+        self.assertIn("not provided to this model", tool_message["content"])
+        self.assertNotIn("PRIVATE", tool_message["content"])
 
     def test_unknown_fields_and_incomplete_history_fail_closed(self):
         with self.assertRaisesRegex(compat.UnsupportedFeatureError, "request field.*service_tier"):

@@ -94,6 +94,77 @@ class OwnershipTransferTests(unittest.TestCase):
                 self.fail('Cannot transfer a live journal')
 
 
+class ProviderCoverageTests(unittest.TestCase):
+    def test_known_self_authenticating_routes_transfer_without_connection_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config'
+            config.mkdir()
+            (config / 'model-switcher.json').write_text(json.dumps({'services': [{
+                'id': 'azure', 'baseURL': 'https://fixture.openai.azure.com/openai/v1',
+                'models': [{'id': 'gpt-fixture'}]
+            }]}))
+            operation = maintenance.Maintenance(root / 'app', root / 'state', config)
+            operation.record = {
+                'credentials_available': {'azure': True, 'openrouter': False},
+                'ownership': {'turns': [
+                    ['azure', json.dumps({'provider': 'azure', 'model': 'gpt-fixture'}), 'old', 'binding', 0],
+                    ['baseten', json.dumps({'provider': 'baseten', 'model': 'fixture-code'}), 'old', 'binding', 0],
+                    ['grok', json.dumps({'provider': 'grok-oauth', 'model': 'grok-fixture'}), 'old', 'binding', 0],
+                    ['codex', json.dumps({'provider': 'codex-subscription', 'model': 'gpt-fixture'}), 'old', 'binding', 0],
+                ]}
+            }
+            result = type('Result', (), {'returncode': 0, 'stdout': b'synthetic-key\n'})()
+            with patch.object(maintenance.subprocess, 'run', return_value=result):
+                operation.keys()
+            self.assertEqual(operation.record['required_models'], ['harbor/azure/gpt-fixture'])
+            self.assertEqual(operation.record['preserved_unprobed_models'], [
+                'harbor/baseten/fixture-code', 'harbor/grok-oauth/grok-fixture',
+                'harbor/codex-subscription/gpt-fixture'])
+
+    def test_freeze_preserves_known_self_authenticating_routes_without_live_probe(self):
+        operation = maintenance.Maintenance(Path('/app'), Path('/state'), Path('/config'))
+        identity = {'mode': 'independent', 'protocol_version': 1,
+                    'runtime_id': 'a' * 64, 'boot_id': 'old-boot'}
+        snapshot = {'requests': [], 'counters': [], 'turns': [
+            ['baseten', json.dumps({'provider': 'baseten', 'model': 'fixture-code'}),
+             'a' * 64, 'binding', 0],
+            ['grok', json.dumps({'provider': 'grok-oauth', 'model': 'grok-fixture'}),
+             'a' * 64, 'binding', 0],
+        ]}
+        operation.record = {'old_identity': identity, 'configuration_revision': 'revision',
+                            'shared_files': {'config': 'same'}, 'required_models': [],
+                            'ownership': snapshot, 'paused': []}
+        process = {'pid': 100, 'ppid': 1, 'started': 'first', 'state': 'S',
+                   'executable': '/Applications/ChatGPT.app/Contents/Resources/codex'}
+        status = {'configuration_revision': 'revision', 'runtime': {'active_requests': 0}}
+        with patch.object(operation, 'status', return_value=(status, identity)),              patch.object(operation, 'assert_paused'),              patch.object(operation, 'shared_files', return_value={'config': 'same'}),              patch.object(operation, 'save'),              patch.object(maintenance, 'processes', return_value={100: process}),              patch.object(maintenance, 'journal_snapshot', return_value=snapshot),              patch.object(maintenance.os, 'kill'):
+            operation.freeze(1)
+        self.assertEqual(operation.record['ownership'], snapshot)
+
+    def test_unknown_owned_provider_still_blocks_transfer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config'
+            config.mkdir()
+            (config / 'model-switcher.json').write_text(json.dumps({'services': [{
+                'id': 'azure', 'baseURL': 'https://fixture.openai.azure.com/openai/v1',
+                'models': [{'id': 'gpt-fixture'}]
+            }]}))
+            operation = maintenance.Maintenance(root / 'app', root / 'state', config)
+            operation.record = {
+                'credentials_available': {'azure': True, 'openrouter': False},
+                'ownership': {'turns': [[
+                    'unknown', json.dumps({'provider': 'unknown', 'model': 'fixture'}),
+                    'old', 'binding', 0
+                ]]}
+            }
+            result = type('Result', (), {'returncode': 0, 'stdout': b'synthetic-key\n'})()
+            with patch.object(maintenance.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(maintenance.MaintenanceError, 'cannot transfer'):
+                    operation.keys()
+
+
 class PauseTests(unittest.TestCase):
     def item(self, pid=100, started='first', state='T'):
         return {'pid': pid, 'ppid': 1, 'started': started, 'state': state, 'executable': '/Applications/ChatGPT.app/Contents/Resources/codex'}

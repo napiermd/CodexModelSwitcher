@@ -2181,6 +2181,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     LAST_ROUTE = dict(route, state='disconnected')
             report_error(502, 'The response connection was interrupted.')
             self.close_connection = True
+        except (ssl.SSLError, socket.gaierror, ConnectionRefusedError, urllib.error.URLError) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                report_error(error.code, str(error))
+                self.close_connection = True
+                return
+            failure_kind = TRANSPORT.classify(error)
+            if azure_stopped():
+                return
+            if route:
+                with ROUTE_LOCK:
+                    LAST_ROUTE = dict(route, state='failed')
+            report_error(502, 'The upstream connection failed: ' + failure_kind + '. Model Harbor did not retry the request.')
+            self.close_connection = True
         except Exception as error:
             if azure_stopped():
                 return

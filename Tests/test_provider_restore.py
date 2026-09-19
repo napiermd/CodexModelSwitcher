@@ -85,6 +85,26 @@ class RestoreTests(unittest.TestCase):
         self.assertTrue(all(p['verified'] and p['configuration_revision'] == value['configuration_revision'] for p in proofs))
         self.assertNotIn('synthetic-', json.dumps(value))
 
+    def test_previous_revision_contract_accepts_only_the_same_files_and_credentials(self):
+        published = self.root / 'model-catalogs/model-harbor.json'
+        published.write_text('{"generated":true}')
+        credentials = [self.payload['connections']['azure'], self.payload['connections']['openrouter']['key']]
+        legacy = bridge._configuration_revision(credentials, True)
+        current = bridge._configuration_revision(credentials, False)
+        self.assertNotEqual(legacy, current)
+        payload = copy.deepcopy(self.payload)
+        payload['previous_configuration_revision'] = legacy
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = lambda *args, **kwargs: self.response()
+            status, value = self.restore(payload)
+        self.assertEqual(status, 200, value)
+        self.assertEqual(value['configuration_revision'], current)
+
+        payload['previous_configuration_revision'] = '0' * 64
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            self.assertEqual(self.restore(payload)[0], 400)
+            opener.assert_not_called()
+
     def test_second_failed_probe_publishes_nothing_and_redacts_upstream(self):
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
             opener.return_value.open.side_effect = [self.response(), urllib.error.HTTPError(
@@ -143,6 +163,7 @@ class RestoreTests(unittest.TestCase):
             lambda p: p.update(connections={}),
             lambda p: p['expected_runtime'].update(mode='legacy'),
             lambda p: p['expected_runtime'].update(extra=True),
+            lambda p: p.update(previous_configuration_revision='invalid'),
         ]
         with patch.object(bridge.urllib.request, 'build_opener') as opener:
             for mutate in mutations:

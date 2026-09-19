@@ -95,6 +95,25 @@ class OwnershipTransferTests(unittest.TestCase):
 
 
 class ProviderCoverageTests(unittest.TestCase):
+    def test_restore_records_and_reuses_the_candidate_revision(self):
+        operation = maintenance.Maintenance(Path('/app'), Path('/state'), Path('/config'))
+        operation.record = {'configuration_revision': 'old-revision', 'required_models': ['harbor/azure/model']}
+        operation.connections = {'azure': {'endpoint': 'https://fixture.test', 'key': 'key'}}
+        identity = {'mode': 'independent', 'protocol_version': 1,
+                    'runtime_id': 'a' * 64, 'boot_id': 'boot'}
+        status = {'configuration_revision': 'candidate-revision'}
+        with patch.object(operation, 'status', return_value=(status, identity)), \
+                patch.object(operation, 'post', return_value={'configuration_revision': 'candidate-revision'}) as post:
+            operation.restore()
+            operation.restore()
+        self.assertEqual(operation.record['new_configuration_revision'], 'candidate-revision')
+        self.assertEqual(post.call_args.args[1]['previous_configuration_revision'], 'old-revision')
+
+        with patch.object(operation, 'status', return_value=(status, identity)), \
+                patch.object(operation, 'post', return_value={'configuration_revision': 'different'}):
+            with self.assertRaisesRegex(maintenance.MaintenanceError, 'do not reproduce'):
+                operation.restore()
+
     def test_known_self_authenticating_routes_transfer_without_connection_probe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -138,12 +138,12 @@ def inspect_catalog(directory, current_version):
     return result
 
 
-def configuration_revision(credentials=None):
+def _configuration_revision(credentials, include_published_catalog):
     digest = hashlib.sha256()
     # The merged catalog is a Codex picker publication, not gateway routing
     # state. Refreshing its metadata must not invalidate active turn bindings.
     catalogs = [path for path in (CONFIG_DIR / 'model-catalogs').glob('*.json')
-                if path.name != 'model-harbor.json']
+                if include_published_catalog or path.name != 'model-harbor.json']
     paths = [CONFIG_DIR / 'model-switcher.json'] + sorted(catalogs)
     for path in paths:
         digest.update(path.name.encode())
@@ -157,6 +157,15 @@ def configuration_revision(credentials=None):
         secret = READINESS.boot_id.encode()
     digest.update(hmac.digest(secret, private, 'sha256'))
     return digest.hexdigest()
+
+
+def configuration_revision(credentials=None):
+    return _configuration_revision(credentials, False)
+
+
+def compatible_configuration_revisions(credentials=None):
+    """Accepted revisions for the one known configuration-hash migration."""
+    return {configuration_revision(credentials), _configuration_revision(credentials, True)}
 
 
 def prepared_routed_request(source, incoming_headers, *, track_turn=True):
@@ -251,8 +260,9 @@ class RestoreUnavailable(ValueError):
 
 
 def validate_restore(payload):
-    fields = {'expected_runtime', 'expected_configuration_revision', 'connections', 'required_models'}
-    if not isinstance(payload, dict) or set(payload) != fields:
+    required = {'expected_runtime', 'expected_configuration_revision', 'connections', 'required_models'}
+    allowed = required | {'previous_configuration_revision'}
+    if not isinstance(payload, dict) or not required <= set(payload) or not set(payload) <= allowed:
         raise ValueError('Restore requires runtime identity, configuration revision, saved connections, and exact models.')
     identity = payload['expected_runtime']
     if not isinstance(identity, dict) or set(identity) != {'protocol_version', 'runtime_id', 'boot_id', 'mode'}:
@@ -266,6 +276,10 @@ def validate_restore(payload):
     revision = payload['expected_configuration_revision']
     if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
         raise ValueError('Restore requires a configuration revision.')
+    previous_revision = payload.get('previous_configuration_revision')
+    if (previous_revision is not None
+            and (not isinstance(previous_revision, str) or not re.fullmatch('[a-f0-9]{64}', previous_revision))):
+        raise ValueError('Restore requires a valid previous configuration revision.')
     connections, models = payload['connections'], payload['required_models']
     if (not isinstance(connections, dict) or not connections
             or not set(connections) <= {'azure', 'openrouter'}):
@@ -310,6 +324,11 @@ def validate_restore(payload):
         prepared.append((translation, headers, base, route))
     if {item[3]['provider'] for item in prepared} != set(staged):
         raise ValueError('Every restored provider requires at least one exact saved model check.')
+    if previous_revision is not None:
+        azure = staged.get('azure', AZURE_CONNECTION)
+        router = staged['openrouter']['key'] if 'openrouter' in staged else OPENROUTER_KEY
+        if previous_revision not in compatible_configuration_revisions([azure, router]):
+            raise ValueError('The saved credentials do not match the previous configuration revision.')
     return staged, prepared
 
 

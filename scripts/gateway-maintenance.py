@@ -162,6 +162,9 @@ class Maintenance:
         self.connections = {}
         self.pause_limit = 150
 
+    def candidate_revision(self):
+        return self.record.get('new_configuration_revision', self.record['configuration_revision'])
+
     def status(self, port=None):
         body, identity = control.owner_request('GET', '/harbor/status', b'', port or self.port, self.token)
         return json.loads(body), identity
@@ -228,10 +231,15 @@ class Maintenance:
 
     def restore(self, port=None):
         status, identity = self.status(port)
-        result = self.post('/harbor/providers/restore', {
+        payload = {
             'expected_runtime': identity, 'expected_configuration_revision': status['configuration_revision'],
-            'connections': self.connections, 'required_models': self.record['required_models']}, identity, port)
-        if result.get('configuration_revision') != self.record['configuration_revision']:
+            'connections': self.connections, 'required_models': self.record['required_models'],
+            'previous_configuration_revision': self.record['configuration_revision']}
+        result = self.post('/harbor/providers/restore', payload, identity, port)
+        target = self.record.get('new_configuration_revision')
+        if target is None:
+            self.record['new_configuration_revision'] = result.get('configuration_revision')
+        elif result.get('configuration_revision') != target:
             raise MaintenanceError('The saved credentials do not reproduce the existing account configuration.')
         return result, identity
 
@@ -390,7 +398,7 @@ class Maintenance:
     def switch(self):
         self.assert_paused()
         marker = {'schema': 1, 'id': self.record['id'], 'from_runtime': self.record['old_identity']['runtime_id'],
-            'to_runtime': self.record['new_digest'], 'configuration_revision': self.record['configuration_revision'],
+            'to_runtime': self.record['new_digest'], 'configuration_revision': self.candidate_revision(),
             'required_models': self.record['required_models'], 'phase': 'prepared'}
         self.save('stopping')
         atomic_json(self.state / 'maintenance.json', marker)
@@ -411,10 +419,10 @@ class Maintenance:
         receipt, identity = self.restore()
         self.assert_paused()
         self.post('/harbor/maintenance/commit', {'expected_runtime': identity,
-            'expected_configuration_revision': self.record['configuration_revision'],
+            'expected_configuration_revision': self.candidate_revision(),
             'maintenance_id': self.record['id']}, identity)
         status, identity = self.status()
-        if status['configuration_revision'] != self.record['configuration_revision'] or self.shared_files() != self.record['shared_files']:
+        if status['configuration_revision'] != self.candidate_revision() or self.shared_files() != self.record['shared_files']:
             raise MaintenanceError('The promoted gateway did not preserve shared account configuration.')
         after = journal_snapshot(self.state / 'ownership.sqlite')
         expected = dict(self.record['ownership'])
@@ -430,7 +438,7 @@ class Maintenance:
             marker = json.loads(marker_path.read_text())
             if (marker.get('id') != self.record['id'] or marker.get('phase') != 'committed'
                     or marker.get('boot_id') != self.record['final_identity']['boot_id']
-                    or marker.get('configuration_revision') != self.record['configuration_revision']):
+                    or marker.get('configuration_revision') != self.candidate_revision()):
                 raise MaintenanceError('The committed maintenance marker changed before finalization.')
             marker_path.unlink()
             directory = os.open(self.state, os.O_RDONLY)
@@ -440,7 +448,7 @@ class Maintenance:
                 os.close(directory)
         status, identity = self.status()
         if (identity != self.record['final_identity']
-                or status['configuration_revision'] != self.record['configuration_revision']
+                or status['configuration_revision'] != self.candidate_revision()
                 or status.get('maintenance', {}).get('blocked', False)):
             raise MaintenanceError('The verified gateway is not ready to resume clients.')
 
@@ -451,7 +459,8 @@ class Maintenance:
             resume_owned(self.record['paused']); return
         if phase == 'committed':
             status, identity = self.status()
-            if identity != self.record['final_identity'] or status['configuration_revision'] != self.record['configuration_revision']:
+            if (identity != self.record['final_identity']
+                    or status['configuration_revision'] != self.candidate_revision()):
                 raise MaintenanceError('Committed gateway identity changed; explicit recovery is required.')
             self.finalize_committed()
             resume_owned(self.record['paused']); self.save('resumed'); return

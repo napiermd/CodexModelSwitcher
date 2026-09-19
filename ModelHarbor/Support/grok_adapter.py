@@ -2227,6 +2227,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             activity_http_status = 503
             if pacer:
                 pacer.queue_timeouts += 1
+            if acquired:
+                # Release the model lane before the terminal response becomes
+                # observable; otherwise the next request can see a stale owner.
+                pacer.leave()
+                acquired = False
             if route:
                 with ROUTE_LOCK:
                     LAST_ROUTE = dict(route, state='waiting', retry_after_seconds=error.retry_after)

@@ -31,6 +31,32 @@ def reasoning_family(upstream_model):
     return None
 
 
+def reasoning_text(item, upstream_model):
+    """Return replayable plaintext from one reasoning item.
+
+    None means the item or model is outside the replay contract. An empty
+    string means the item is in-contract but has no plaintext that can be
+    replayed. Encrypted content is never inspected or converted.
+    """
+    if (reasoning_family(upstream_model) is None or not isinstance(item, dict)
+            or item.get('type') != 'reasoning'):
+        return None
+    if item.get('encrypted_content') is not None:
+        return ''
+    content = item.get('content')
+    if isinstance(content, list):
+        text = ''.join(part.get('text', '') for part in content
+                       if isinstance(part, dict) and part.get('type') == 'reasoning_text'
+                       and isinstance(part.get('text'), str))
+    else:
+        text = ''
+    if not text and isinstance(item.get('summary'), list):
+        text = ''.join(part.get('text', '') for part in item['summary']
+                       if isinstance(part, dict) and part.get('type') == 'summary_text'
+                       and isinstance(part.get('text'), str))
+    return text
+
+
 def replay_reasoning(history, upstream_model):
     """Return assistant-history messages with reasoning carried as
     reasoning_content fields. Unlisted models and non-assistant items pass
@@ -42,15 +68,7 @@ def replay_reasoning(history, upstream_model):
         if not isinstance(item, dict) or item.get('type') != 'reasoning':
             result.append(item)
             continue
-        content = item.get('content')
-        if isinstance(content, list):
-            text = ''.join(part.get('text', '') for part in content
-                           if isinstance(part, dict) and part.get('type') == 'reasoning_text')
-        else:
-            text = ''
-        if not text and isinstance(item.get('summary'), list):
-            text = ''.join(part.get('text', '') for part in item['summary']
-                           if isinstance(part, dict) and part.get('type') == 'summary_text')
+        text = reasoning_text(item, upstream_model)
         if not text:
             continue
         result.append((item, text))

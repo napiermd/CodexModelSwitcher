@@ -8,10 +8,20 @@ from __future__ import annotations
 
 import codecs
 import copy
+import importlib.util
 import json
+from pathlib import Path
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
+
+
+_REASONING_SPEC = importlib.util.spec_from_file_location(
+    "harbor_chat_reasoning",
+    Path(__file__).resolve().parents[1] / "ModelHarbor/Support/chat_reasoning.py",
+)
+_REASONING = importlib.util.module_from_spec(_REASONING_SPEC)
+_REASONING_SPEC.loader.exec_module(_REASONING)
 
 
 class CompatibilityError(ValueError):
@@ -62,7 +72,7 @@ def _image_notice() -> str:
             "which accepts text only. Do not describe or claim to have seen it.]")
 
 
-def _reject_lossy_semantics(source: Mapping[str, Any]) -> None:
+def _reject_lossy_semantics(source: Mapping[str, Any], *, allow_reasoning: bool = False) -> None:
     if _contains_key(source, "encrypted_content"):
         raise UnsupportedFeatureError("encrypted reasoning cannot be translated to Chat Completions")
     if source.get("previous_response_id") is not None:
@@ -79,7 +89,7 @@ def _reject_lossy_semantics(source: Mapping[str, Any]) -> None:
                 raise UnsupportedFeatureError("namespace tools and namespace-only call semantics are not translatable")
             if kind in {"item_reference", "response_reference"}:
                 raise UnsupportedFeatureError("prior response item references are ambiguous without provider state")
-            if kind == "reasoning":
+            if kind == "reasoning" and not allow_reasoning:
                 raise UnsupportedFeatureError("reasoning items are not translatable to Chat Completions")
             for child in value.values():
                 inspect(child)
@@ -150,7 +160,7 @@ def _function_call(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _messages(source: Any) -> list[dict[str, Any]]:
+def _messages(source: Any, upstream_model: str) -> list[dict[str, Any]]:
     if isinstance(source, str):
         return [{"role": "user", "content": source}]
     if not isinstance(source, list):
@@ -158,12 +168,21 @@ def _messages(source: Any) -> list[dict[str, Any]]:
 
     result: list[dict[str, Any]] = []
     known_calls: set[str] = set()
+    pending_reasoning: list[str] = []
     index = 0
     while index < len(source):
         item = source[index]
         if not isinstance(item, Mapping):
             raise ProtocolError("Responses history items must be objects")
         kind = item.get("type", "message")
+        if kind == "reasoning":
+            text = _REASONING.reasoning_text(item, upstream_model)
+            if text is None:
+                raise UnsupportedFeatureError("reasoning items are not translatable for this model")
+            if text:
+                pending_reasoning.append(text)
+            index += 1
+            continue
         if kind == "function_call":
             calls = []
             while index < len(source):
@@ -176,16 +195,22 @@ def _messages(source: Any) -> list[dict[str, Any]]:
                 known_calls.add(call["id"])
                 calls.append(call)
                 index += 1
-            result.append({"role": "assistant", "content": None, "tool_calls": calls})
+            message = {"role": "assistant", "content": None, "tool_calls": calls}
+            if pending_reasoning:
+                message["reasoning_content"] = "\n".join(pending_reasoning)
+                pending_reasoning.clear()
+            result.append(message)
             continue
         if kind == "function_call_output":
+            if pending_reasoning:
+                raise ProtocolError("reasoning must be followed by the assistant turn that produced it")
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or call_id not in known_calls:
                 raise ProtocolError(f"function result references unknown function call: {call_id!r}")
             result.append({"role": "tool", "tool_call_id": call_id, "content": _tool_output(item.get("output"))})
             index += 1
             continue
-        if kind in {"reasoning", "item_reference", "response_reference"}:
+        if kind in {"item_reference", "response_reference"}:
             raise UnsupportedFeatureError(f"{kind} history cannot be translated without Responses provider state")
         if kind != "message":
             raise UnsupportedFeatureError(f"unsupported Responses history item: {kind!r}")
@@ -193,8 +218,15 @@ def _messages(source: Any) -> list[dict[str, Any]]:
         if role not in {"user", "assistant", "system", "developer"}:
             raise ProtocolError(f"unsupported message role: {role!r}")
         message: dict[str, Any] = {"role": role, "content": _text_parts(item.get("content"), context="message")}
+        if pending_reasoning:
+            if role != "assistant":
+                raise ProtocolError("reasoning must be followed by the assistant turn that produced it")
+            message["reasoning_content"] = "\n".join(pending_reasoning)
+            pending_reasoning.clear()
         result.append(message)
         index += 1
+    if pending_reasoning:
+        raise ProtocolError("reasoning history is missing its assistant turn")
     return result
 
 
@@ -307,6 +339,23 @@ def _call_item(call: Mapping[str, Any], *, status: str = "completed") -> dict[st
     }
 
 
+def _reasoning_item(source: Any, response_id: str | None = None,
+                    *, status: str = "completed") -> dict[str, Any] | None:
+    if source is None:
+        return None
+    if not isinstance(source, str):
+        raise ProtocolError("assistant reasoning_content must be text")
+    if not source:
+        return None
+    item = {
+        "type": "reasoning",
+        "content": [{"type": "reasoning_text", "text": source}],
+    }
+    if response_id is not None:
+        item.update(id=f"{response_id}:reasoning:0", status=status)
+    return item
+
+
 def _base_response(response_id: str, model: str, status: str, output: list[dict[str, Any]], created: Any = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": response_id,
@@ -352,10 +401,15 @@ def _json_response(source: Mapping[str, Any], model: str) -> dict[str, Any]:
     if not isinstance(calls_source, list):
         raise ProtocolError("assistant tool_calls must be a list")
     calls = [_call_item(call) for call in calls_source]
-    if not text and not refusal and not calls:
+    if message.get("reasoning_content") is not None and _REASONING.reasoning_family(model) is None:
+        raise UnsupportedFeatureError("reasoning_content is not enabled for this model")
+    reasoning = _reasoning_item(message.get("reasoning_content"), response_id)
+    if not text and not refusal and not calls and reasoning is None:
         raise EmptyCompletionError("Chat Completions returned no text, refusal, or tool calls")
     status, incomplete = _finish_status(choice.get("finish_reason"))
     output = []
+    if reasoning is not None:
+        output.append(reasoning)
     if text or refusal:
         output.append(_message_item(response_id, text, refusal))
     output.extend(calls)
@@ -417,6 +471,9 @@ class _StreamTranslator:
         self.created = None
         self.text = ""
         self.refusal = ""
+        self.reasoning = ""
+        self.reasoning_started = False
+        self.reasoning_done = False
         self.message_started = False
         self.message_done = False
         self.calls: dict[int, dict[str, Any]] = {}
@@ -439,6 +496,15 @@ class _StreamTranslator:
         self.message_started = True
         output_index = self._output_index(("message", None))
         item = _message_item(self.response_id, "", "", status="in_progress")
+        return [_event("response.output_item.added", output_index=output_index, item=item)]
+
+    def _start_reasoning(self):
+        if self.reasoning_started:
+            return []
+        self.reasoning_started = True
+        output_index = self._output_index(("reasoning", None))
+        item = _reasoning_item("pending", self.response_id, status="in_progress")
+        item["content"] = []
         return [_event("response.output_item.added", output_index=output_index, item=item)]
 
     def _start_call(self, call_index: int, delta: Mapping[str, Any]):
@@ -496,6 +562,19 @@ class _StreamTranslator:
                 output_index = self._output_index(("message", None))
                 output.append(_event("response.output_text.delta", item_id=f"{self.response_id}:message:0",
                                      output_index=output_index, content_index=0, delta=text))
+        reasoning = delta.get("reasoning_content")
+        if reasoning is not None:
+            if _REASONING.reasoning_family(self.model) is None:
+                raise UnsupportedFeatureError("reasoning_content is not enabled for this model")
+            if not isinstance(reasoning, str):
+                raise ProtocolError("streamed reasoning_content delta must be text")
+            if reasoning:
+                output.extend(self._start_reasoning())
+                self.reasoning += reasoning
+                output_index = self._output_index(("reasoning", None))
+                output.append(_event("response.reasoning_text.delta",
+                                     item_id=f"{self.response_id}:reasoning:0",
+                                     output_index=output_index, content_index=0, delta=reasoning))
         refusal = delta.get("refusal")
         if refusal is not None:
             if not isinstance(refusal, str):
@@ -542,6 +621,14 @@ class _StreamTranslator:
 
     def _finalize_items(self):
         output = []
+        if self.reasoning_started and not self.reasoning_done:
+            output_index = self._output_index(("reasoning", None))
+            output.append(_event("response.reasoning_text.done",
+                                 item_id=f"{self.response_id}:reasoning:0",
+                                 output_index=output_index, content_index=0, text=self.reasoning))
+            item = _reasoning_item(self.reasoning, self.response_id)
+            output.append(_event("response.output_item.done", output_index=output_index, item=item))
+            self.reasoning_done = True
         if self.message_started and not self.message_done:
             output_index = self._output_index(("message", None))
             if self.text:
@@ -570,6 +657,8 @@ class _StreamTranslator:
 
     def _completed_output(self):
         items: dict[tuple[str, int | None], dict[str, Any]] = {}
+        if self.reasoning_started:
+            items[("reasoning", None)] = _reasoning_item(self.reasoning, self.response_id)
         if self.message_started:
             items[("message", None)] = _message_item(self.response_id, self.text, self.refusal)
         for call_index, call in self.calls.items():
@@ -583,7 +672,7 @@ class _StreamTranslator:
         if self.finish_reason is None:
             return [_failure_event(self.response_id, self.model, "premature_eof",
                                    "Chat Completions stream ended before a finish_reason")]
-        if not self.text and not self.refusal and not self.calls:
+        if not self.text and not self.refusal and not self.calls and not self.reasoning:
             return [_failure_event(self.response_id, self.model, "empty_completion",
                                    "Chat Completions returned no text, refusal, or tool calls")]
         output = self._finalize_items()
@@ -649,13 +738,13 @@ def translate_request(source: Mapping[str, Any], *, transport: Mapping[str, Any]
     """Translate one Responses request without sending it anywhere."""
     if not isinstance(source, Mapping):
         raise ProtocolError("Responses request must be an object")
-    _reject_lossy_semantics(source)
     unknown = set(source) - _REQUEST_FIELDS
     if unknown:
         raise UnsupportedFeatureError(f"unsupported Responses request field: {sorted(unknown)[0]}")
     model = source.get("model")
     if not isinstance(model, str) or not model:
         raise ProtocolError("Responses request requires an exact non-empty model string")
+    _reject_lossy_semantics(source, allow_reasoning=_REASONING.reasoning_family(model) is not None)
     if "input" not in source:
         raise ProtocolError("Responses request requires inline input history")
 
@@ -665,7 +754,7 @@ def translate_request(source: Mapping[str, Any], *, transport: Mapping[str, Any]
         if not isinstance(instructions, str):
             raise ProtocolError("instructions must be text")
         body["messages"].append({"role": "developer", "content": instructions})
-    body["messages"].extend(_messages(source["input"]))
+    body["messages"].extend(_messages(source["input"], model))
 
     if "tools" in source:
         body["tools"] = _tools(source["tools"])

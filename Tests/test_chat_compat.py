@@ -132,6 +132,80 @@ class ChatCompatibilityTests(unittest.TestCase):
             {"role": "user", "content": "Summarize it"},
         ])
 
+    def test_thinking_model_replays_reasoning_on_its_assistant_turn(self):
+        source = {
+            "model": "zai-org/GLM-5.3",
+            "input": [
+                {"role": "user", "content": "Inspect it"},
+                {"type": "reasoning", "content": [
+                    {"type": "reasoning_text", "text": "first"},
+                    {"type": "reasoning_text", "text": " second"},
+                ]},
+                {"type": "function_call", "call_id": "c1", "name": "inspect", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "done"},
+            ],
+        }
+        original = copy.deepcopy(source)
+        messages = compat.translate_request(source).body["messages"]
+        self.assertEqual(messages[1], {
+            "role": "assistant", "content": None, "reasoning_content": "first second",
+            "tool_calls": [{"id": "c1", "type": "function",
+                            "function": {"name": "inspect", "arguments": "{}"}}],
+        })
+        self.assertEqual(source, original)
+
+    def test_thinking_model_maps_chat_reasoning_back_to_nonvisible_history(self):
+        translated = compat.translate_request({
+            "model": "moonshotai/Kimi-K3", "input": [{"role": "user", "content": "Answer"}],
+        })
+        response = translated.response({
+            "id": "chatcmpl-reasoning",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "reasoning_content": "private thought", "content": "answer",
+            }}],
+        })
+        self.assertEqual(response["output"][0], {
+            "id": "chatcmpl-reasoning:reasoning:0", "type": "reasoning", "status": "completed",
+            "content": [{"type": "reasoning_text", "text": "private thought"}],
+        })
+        self.assertEqual(response["output"][1]["content"][0]["text"], "answer")
+
+    def test_unlisted_and_encrypted_reasoning_still_fail_closed(self):
+        with self.assertRaisesRegex(compat.UnsupportedFeatureError, "reasoning items"):
+            compat.translate_request({"model": "plain-model", "input": [
+                {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "PRIVATE"}]},
+                {"role": "assistant", "content": "answer"},
+            ]})
+        with self.assertRaisesRegex(compat.UnsupportedFeatureError, "encrypted reasoning"):
+            compat.translate_request({"model": "zai-org/GLM-5.3", "input": [
+                {"type": "reasoning", "encrypted_content": "PRIVATE"},
+            ]})
+        translated = compat.translate_request({"model": "plain-model", "input": []})
+        with self.assertRaisesRegex(compat.UnsupportedFeatureError, "reasoning_content"):
+            translated.response({"choices": [{"finish_reason": "stop", "message": {
+                "role": "assistant", "reasoning_content": "PRIVATE", "content": "answer",
+            }}]})
+
+    def test_stream_maps_chat_reasoning_without_exposing_it_as_answer_text(self):
+        translated = compat.translate_request({
+            "model": "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "input": [{"role": "user", "content": "Answer"}], "stream": True,
+        })
+        output = events(translated.stream([
+            sse({"id": "chatcmpl-reasoning-stream", "choices": [{"index": 0, "delta": {
+                "reasoning_content": "private "}, "finish_reason": None}]}),
+            sse({"id": "chatcmpl-reasoning-stream", "choices": [{"index": 0, "delta": {
+                "reasoning_content": "thought", "content": "answer"}, "finish_reason": None}]}),
+            sse({"id": "chatcmpl-reasoning-stream", "choices": [{"index": 0, "delta": {},
+                 "finish_reason": "stop"}]}),
+            sse("[DONE]"),
+        ]))
+        completed = output[-1]["response"]
+        self.assertEqual(completed["output"][0]["content"][0]["text"], "private thought")
+        self.assertEqual(completed["output"][1]["content"][0]["text"], "answer")
+        visible = [event.get("delta") for event in output if event["type"] == "response.output_text.delta"]
+        self.assertEqual(visible, ["answer"])
+
     def test_multiple_json_function_calls_stay_distinct(self):
         _, _, translated = self.translation()
         result = translated.response({

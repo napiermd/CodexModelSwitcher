@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import importlib.util
 from pathlib import Path
 import unittest
@@ -26,7 +27,8 @@ class ToolResultAgingTests(unittest.TestCase):
         report = aging.estimate(items)
         self.assertEqual(report['eligible'], 1)
         self.assertGreater(report['receipt_savings'], 30000)
-        self.assertEqual(report['results'][0]['call_id'], 'c1')
+        self.assertEqual(report['results'][0]['index'], 0)
+        self.assertEqual(report['results'][0]['sha256'], hashlib.sha256(b'x' * 40000).hexdigest())
 
     def test_floor_and_frontier_protect(self):
         items = [result_item(31000), {'type': 'message', 'role': 'assistant', 'content': 'ok'}]
@@ -56,6 +58,24 @@ class ToolResultAgingTests(unittest.TestCase):
         self.assertIn('progress 30%', shaped)
         self.assertIn('error: failed here', shaped)
 
+    def test_deeply_indented_boilerplate_collapses_but_keeps_errors(self):
+        value = '\n'.join(['        boilerplate ' + str(i) for i in range(10)] +
+                          ['        error: keep me'] +
+                          ['        tail ' + str(i) for i in range(10)])
+        shaped = aging._dense_shaped(value)
+        self.assertIn('deeply indented lines omitted', shaped)
+        self.assertIn('error: keep me', shaped)
+
+    def test_dense_shaping_is_separate_from_aging_and_includes_frontier(self):
+        repeated = '\n'.join(['same line'] * 2000)
+        report = aging.estimate([{
+            'type': 'function_call_output', 'call_id': 'fresh', 'output': repeated,
+        }])
+        self.assertEqual(report['eligible'], 0)
+        self.assertEqual(report['receipt_savings'], 0)
+        self.assertEqual(report['shaping_eligible'], 1)
+        self.assertGreater(report['shaping_savings'], 1000)
+
     def test_input_is_never_mutated(self):
         items = [result_item(40000), {'type': 'message', 'role': 'assistant', 'content': 'ok'}]
         before = copy.deepcopy(items)
@@ -63,7 +83,8 @@ class ToolResultAgingTests(unittest.TestCase):
         self.assertEqual(items, before)
 
     def test_report_contains_no_content(self):
-        items = acted_history({'type': 'function_call_output', 'call_id': 'c1', 'output': 'PRIVATE ' * 10000})
+        items = acted_history({'type': 'function_call_output', 'call_id': 'PRIVATE CALL ID',
+                               'output': 'PRIVATE ' * 10000})
         report = aging.estimate(items)
         import json
         self.assertNotIn('PRIVATE', json.dumps(report))

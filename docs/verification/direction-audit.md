@@ -26,16 +26,16 @@ The last round is where direction was lost. Ten features landed as one undiffere
 - Fail-closed invalid tool-call arguments (`7e529c8`). A completed call with unparseable JSON is a real corruption class; failing the turn is cheaper than poisoning history.
 - Transport failure classification (`transport.py`). "The response connection was interrupted" was unanswerable partly because Harbor had no named failure classes. This closes that.
 
-**Justified but currently inert:**
+**Justified but inactive or isolated:**
 
 - Metrics rollup persistence (`f3051a0`). Only active when `MODEL_HARBOR_REQUEST_METRICS=1`.
 - Deferred app-tool merge (`da38238`). Gated behind `MODEL_HARBOR_CODEX_APP_TOOLS=1`. The snapshot was built from an observed session's tool-registration record, not a codex capture. Until a real deferred-load capture validates the schema, the flag must stay off.
-- Reasoning replay table (`chat_reasoning.py`). Currently a pure table with no Baseten Chat route calling it. It becomes real when a thinking model is actually routed through Chat Completions.
+- Reasoning replay (`chat_reasoning.py`). The isolated Chat compatibility pilot now applies the table in both request and response translation. Production Baseten routing still uses Responses, so no live route activates it.
 
 **Speculative, isolated, lowest cost to carry:**
 
 - Chat-compat image strip-to-notice (`533502c`). Touches only `experiments/chat_compat.py`, which is not wired to production.
-- Tool-result aging estimator (`tool_result_aging.py`). Read-only advisory; the proven 86% figure is a benchmark best case, not a workload expectation.
+- Tool-result aging estimator (`tool_result_aging.py`). Read-only advisory with an explicit `scripts/audit-context.py --tool-result-aging` mode. The proven 86% figure is a benchmark best case, not a workload expectation.
 
 ## Root issue
 
@@ -50,8 +50,8 @@ The merge question and the activation question are separate. Merging to `main` i
 - [x] Establish that origin/main is an ancestor and the stack fast-forwards cleanly.
 - [x] Sort the ten adoption features by evidence of need.
 - [x] Identify which features are inert behind flags and which are live.
-- [ ] Create one Linear issue: merge the adoption stack to main as inactive code.
-- [ ] Create one Linear issue: validate the app-tool snapshot against a real deferred-load capture before any enablement.
-- [ ] Create one Linear issue: wire `chat_reasoning.py` into the Baseten Chat path only when a thinking model is actually routed there.
+- [x] Create one Linear issue: merge the adoption stack to main as inactive code ([SAY-3380](https://linear.app/sayvant/issue/SAY-3380)).
+- [x] Create one Linear issue: validate the app-tool snapshot against a real deferred-load capture before any enablement ([SAY-3382](https://linear.app/sayvant/issue/SAY-3382)).
+- [x] Create one Linear issue: promote the tested Chat compatibility pilot into routing only when a concrete Chat-only thinking model requires it; keep the model-family replay contract at that boundary ([SAY-3381](https://linear.app/sayvant/issue/SAY-3381)).
 - [ ] Close out the remaining SAY-3370–3379 bookkeeping so issue state matches reality.
 - [ ] Do not enable any environment flag in the shared runtime during this work.

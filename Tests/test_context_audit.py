@@ -326,3 +326,37 @@ class ContextAuditTests(unittest.TestCase):
         self.assertEqual(result['compactions'], 1)
         self.assertEqual(result['latest_observed_context'], {'model_epoch': 0, 'effective_window': None})
         self.assertIn('cycles', result)
+
+    def test_tool_result_aging_mode_samples_boundaries_without_content(self):
+        large = {'type': 'function_call_output', 'call_id': 'PRIVATE CALL',
+                 'output': 'PRIVATE ' * 6000}
+        rows = [compact(), row('response_item', large),
+                row('response_item', {'type': 'message', 'role': 'assistant', 'content': 'PRIVATE'}),
+                *[row('response_item', {'type': 'function_call_output', 'call_id': str(i),
+                                        'output': 'fresh'}) for i in range(4)]]
+        module = load()
+        result = module.audit_tool_result_aging(io.BytesIO(
+            ('\n'.join(json.dumps(item) for item in rows) + '\n').encode()))
+        rendered = json.dumps(result)
+        self.assertEqual(result['mode'], 'tool_result_aging')
+        self.assertEqual(result['latest']['eligible'], 1)
+        self.assertGreater(result['latest']['receipt_savings'], 30000)
+        self.assertNotIn('PRIVATE', rendered)
+        self.assertNotIn('call_id', rendered)
+
+    def test_tool_result_aging_cli_is_explicit_read_only_and_content_free(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'PRIVATE-aging.jsonl'
+            rows = [compact(), row('response_item', {
+                'type': 'function_call_output', 'call_id': 'PRIVATE CALL', 'output': 'PRIVATE ' * 6000}),
+                row('response_item', {'type': 'reasoning'}),
+                *[row('response_item', {'type': 'function_call_output', 'call_id': str(i),
+                                        'output': 'fresh'}) for i in range(4)]]
+            source.write_text('\n'.join(json.dumps(item) for item in rows) + '\n')
+            before = hashlib.sha256(source.read_bytes()).digest()
+            run = subprocess.run([sys.executable, str(SCRIPT), str(source), '--tool-result-aging'],
+                                 capture_output=True, check=True)
+            self.assertEqual(before, hashlib.sha256(source.read_bytes()).digest())
+        result = json.loads(run.stdout)
+        self.assertEqual(result['mode'], 'tool_result_aging')
+        self.assertNotIn('PRIVATE', run.stdout.decode())

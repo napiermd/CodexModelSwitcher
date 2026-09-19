@@ -75,7 +75,27 @@ def _dense_shaped(value):
         else:
             out.extend(collapsed[index:end])
         index = end
-    return '\n'.join(out)
+    collapsed = []
+    index = 0
+    while index < len(out):
+        if _indent(out[index]) < 8 or _important(out[index]):
+            collapsed.append(out[index])
+            index += 1
+            continue
+        end = index + 1
+        while end < len(out) and _indent(out[end]) >= 8 and not _important(out[end]):
+            end += 1
+        count = end - index
+        if count >= 8:
+            marker = f'[{count - 2} deeply indented lines omitted]'
+            replacement = '\n'.join((out[index], marker, out[end - 1]))
+            original = '\n'.join(out[index:end])
+            collapsed.extend((out[index], marker, out[end - 1])
+                             if len(replacement) < len(original) else out[index:end])
+        else:
+            collapsed.extend(out[index:end])
+        index = end
+    return '\n'.join(collapsed)
 
 
 def _important(line):
@@ -83,37 +103,48 @@ def _important(line):
     return any(word in lowered for word in IMPORTANT)
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip(' '))
+
+
 def estimate(items):
     """Compute advisory savings for one input list. Never mutates input."""
     if not isinstance(items, list):
         return {'eligible': 0, 'bytes_before': 0, 'bytes_after_receipt': 0,
-                'bytes_after_shaping': 0, 'largest': 0, 'results': []}
+                'shaping_eligible': 0, 'bytes_before_shaping': 0,
+                'bytes_after_shaping': 0, 'largest': 0, 'results': [],
+                'receipt_savings': 0, 'shaping_savings': 0}
     output_indexes = [i for i, item in enumerate(items)
                       if isinstance(item, dict) and item.get('type') in OUTPUT_TYPES]
     protected = set(output_indexes[-FRONTIER:])
     acted = _acted_on(items)
     result = {'eligible': 0, 'bytes_before': 0, 'bytes_after_receipt': 0,
+              'shaping_eligible': 0, 'bytes_before_shaping': 0,
               'bytes_after_shaping': 0, 'largest': 0, 'results': []}
     for index, item in enumerate(items):
-        if index in protected:
-            continue
         value = _textual(item)
         if value is None:
             continue
         size = len(value.encode('utf-8'))
-        result['largest'] = max(result['largest'], size)
+        if index not in protected:
+            result['largest'] = max(result['largest'], size)
+        if size > DENSE_MIN_BYTES:
+            shaped = _dense_shaped(value)
+            shaped_size = len(shaped.encode('utf-8')) + 512
+            if size - shaped_size >= DENSE_MIN_SAVED:
+                result['shaping_eligible'] += 1
+                result['bytes_before_shaping'] += size
+                result['bytes_after_shaping'] += shaped_size
+        if index in protected:
+            continue
         if size <= MIN_BYTES or not acted[index]:
             continue
         digest = hashlib.sha256(value.encode('utf-8')).hexdigest()
         receipt_size = min(size, 2 * PREVIEW + 512)
-        shaped = _dense_shaped(value)
-        shaped_size = len(shaped.encode('utf-8')) + 512
         result['eligible'] += 1
         result['bytes_before'] += size
         result['bytes_after_receipt'] += receipt_size
-        result['bytes_after_shaping'] += shaped_size if size - shaped_size >= DENSE_MIN_SAVED else size
-        result['results'].append({'index': index, 'bytes': size, 'sha256': digest,
-                                  'call_id': item.get('call_id') if isinstance(item.get('call_id'), str) else None})
+        result['results'].append({'index': index, 'bytes': size, 'sha256': digest})
     result['receipt_savings'] = result['bytes_before'] - result['bytes_after_receipt']
-    result['shaping_savings'] = result['bytes_before'] - result['bytes_after_shaping']
+    result['shaping_savings'] = result['bytes_before_shaping'] - result['bytes_after_shaping']
     return result

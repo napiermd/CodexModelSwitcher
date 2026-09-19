@@ -8,9 +8,17 @@ import argparse
 from collections import deque
 from datetime import datetime
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
+
+
+_AGING_SPEC = importlib.util.spec_from_file_location(
+    'harbor_tool_result_aging',
+    Path(__file__).resolve().parents[1] / 'ModelHarbor/Support/tool_result_aging.py')
+_AGING = importlib.util.module_from_spec(_AGING_SPEC)
+_AGING_SPEC.loader.exec_module(_AGING)
 
 
 def number(value):
@@ -416,6 +424,71 @@ def audit(stream, limit=10, published_catalog=None, native_catalog=None,
     return result
 
 
+def audit_tool_result_aging(stream, limit=10):
+    """Estimate aging at compaction boundaries and the latest history.
+
+    The report is advisory and content-free. Input history is rebuilt from
+    explicit rollout records in memory because eligibility depends on the
+    order of prior model actions and tool results. Nothing is rewritten.
+    """
+    if type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError('limit must be between 1 and 1000')
+    history = []
+    compactions = invalid_records = 0
+    incomplete_final_line = False
+    samples = deque(maxlen=limit)
+
+    def sample(label):
+        report = _AGING.estimate(history)
+        samples.append({'label': label, 'items': len(history), **report})
+
+    for raw in stream:
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            if not raw.endswith(b'\n'):
+                incomplete_final_line = True
+            else:
+                invalid_records += 1
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get('payload'), dict):
+            invalid_records += 1
+            continue
+        payload = record['payload']
+        if record.get('type') == 'compacted':
+            if history:
+                sample(f'before_compaction_{compactions + 1}')
+            history = payload.get('replacement_history')
+            history = list(history) if isinstance(history, list) else []
+            compactions += 1
+        elif record.get('type') == 'response_item':
+            history.append(payload)
+    latest = _AGING.estimate(history)
+    latest_sample = {'label': 'latest_history', 'items': len(history), **latest}
+    samples.append(latest_sample)
+    retained = list(samples)
+    saving_samples = [entry for entry in retained if entry['receipt_savings'] > 0]
+    return {
+        'schema_version': 1,
+        'mode': 'tool_result_aging',
+        'compactions': compactions,
+        'sampled_histories': len(retained),
+        'histories_with_savings': len(saving_samples),
+        'sampled_receipt_bytes_saved': sum(entry['receipt_savings'] for entry in saving_samples),
+        'sampled_shaping_bytes_saved': sum(entry['shaping_savings'] for entry in saving_samples),
+        'invalid_records': invalid_records,
+        'incomplete_final_line': incomplete_final_line,
+        'latest': latest_sample,
+        'samples': retained,
+        'limitations': [
+            'Byte savings are deterministic estimates, not provider-reported token or billing data.',
+            'Only retained samples contribute to aggregate savings when limit truncates older samples.',
+            'The mode reads replacement history and response items without rewriting the rollout.',
+            'Result indexes and SHA-256 digests identify candidates without exposing content or call IDs.',
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('rollout', help='Explicit local JSONL path; opened read-only.')
@@ -426,12 +499,15 @@ def main():
                         help='Optional explicit native catalog JSON path; opened read-only.')
     parser.add_argument('--current-client-version-file', type=Path, metavar='PATH',
                         help='Optional explicit path containing the current client version.')
+    parser.add_argument('--tool-result-aging', action='store_true',
+                        help='Estimate reclaimable tool-result bytes at compaction boundaries.')
     args = parser.parse_args()
     try:
         with open(args.rollout, 'rb') as source:
-            report = audit(source, args.limit, published_catalog=args.published_catalog,
-                           native_catalog=args.native_catalog,
-                           current_client_version=args.current_client_version_file)
+            report = audit_tool_result_aging(source, args.limit) if args.tool_result_aging else audit(
+                source, args.limit, published_catalog=args.published_catalog,
+                native_catalog=args.native_catalog,
+                current_client_version=args.current_client_version_file)
     except (OSError, ValueError):
         print('Cannot audit input. Check that it is readable and limit is between 1 and 1000.', file=sys.stderr)
         return 2

@@ -50,6 +50,13 @@ class ChatReasoningTests(unittest.TestCase):
         item = {'type': 'reasoning', 'encrypted_content': 'PRIVATE cipher'}
         self.assertEqual(reasoning.replay_reasoning([item], 'glm-5.3'), [])
 
+    def test_reasoning_text_distinguishes_unlisted_and_empty_items(self):
+        item = reasoning_item('thought')
+        self.assertIsNone(reasoning.reasoning_text(item, 'plain-model'))
+        self.assertEqual(reasoning.reasoning_text(item, 'glm-5.3'), 'thought')
+        self.assertEqual(reasoning.reasoning_text(
+            {'type': 'reasoning', 'encrypted_content': 'PRIVATE'}, 'glm-5.3'), '')
+
 
 if __name__ == '__main__':
     unittest.main()

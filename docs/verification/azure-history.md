@@ -44,4 +44,24 @@ The first request after this upgrade conservatively drops encrypted items produc
 - The complete retained-entrypoint Bifrost composition case passed with the new unknown-history removal policy.
 - `git diff --check` and Python bytecode compilation passed.
 
-Installed-runtime evidence is recorded after build, staging, activation, and live verification.
+## Installed-runtime results
+
+Commit `aa5e63fda247a8223b5b50bd0b78a57277a1237d` was built as a signed app and staged at `build/staged-updates/cross-provider-encrypted-history-20260918`.
+
+- The stage contains 31 entries and has inventory SHA-256 `3565bf84bf6fe396033c9c5d228f75cf457bff77c27a26508f54ca6f7baf0925`.
+- The signature verified with team identifier `U7FYRC56QD` and CDHash `0369b5bb822d70a0857e0c273f550fa0a13cb309`.
+- The installed interface exactly matched that staged inventory. Its installation record is `~/Library/Application Support/Model Harbor/updates/cross-provider-encrypted-history-20260918-ui-09828c92/installation.json`.
+- The interface update preserved the existing independent gateway, boot identity, and configuration. Its rollback app remains in the private installation-record directory.
+
+The coordinated maintenance transaction at `~/Library/Application Support/Model Harbor/updates/gateway-6680eb9c-db6a-48cf-9f22-0b34c28d7448/maintenance.json` completed with phase `resumed` after active tasks reached a transport-free instant. The controller paused and resumed three local issuer processes. It preserved turn ownership and shared configuration, and it verified Azure and OpenRouter before resuming them.
+
+- Active runtime: `37c5a7c595b84fbfaaddecd2ef186393a03f54d55f9c4564e6b0e2b1af4fbc7b`
+- Boot ID: `66d88129-0159-47b8-89e1-ec12c8060142`
+- Configuration revision: `b94994faae2e17661639dc1f2b65aa3d67588ec705e9cbff9dbbf9d44a38a0a3`
+- Maintenance gate: clear
+- Azure `gpt-5.6-sol`: ready and verified
+- OpenRouter `anthropic/claude-fable-5.1`: ready and verified
+
+`scripts/verify-azure-history.py --live --installed --deployment gpt-5.6-sol --effort xhigh` then sent five requests through the installed gateway using unique synthetic task and turn identifiers. The JSON and streamed tool continuations both returned the expected marker with same-binding encrypted reasoning retained. A continuation containing modified, unknown ciphertext completed with HTTP 200 after Harbor removed the foreign encrypted item. No credential, prompt, ciphertext, or response content was printed.
+
+After the live proof, the private `opaque-history.sqlite` registry contained 20 rows. Its mode was `0600`, schema version was 1, and every binding and item value was a 64-character lowercase hexadecimal digest.

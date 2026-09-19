@@ -28,7 +28,6 @@ from collections import OrderedDict, deque
 
 ADDRESS = ('127.0.0.1', int(os.environ.get('MODEL_HARBOR_PORT', '48118')))
 RECENT_FAILURES = deque(maxlen=32)
-MAX_BODY = 32 * 1024 * 1024
 BASETEN_WAIT_SECONDS = 600
 BASETEN_ATTEMPTS = 10
 AZURE_REQUEST_SECONDS = 180
@@ -1663,8 +1662,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         require_inference_admission()
         headers = codex_headers(self.headers)
         length = int(self.headers.get('Content-Length', '0'))
-        if not 0 < length <= MAX_BODY:
-            return self.error(413, 'Request body exceeds the adapter limit')
+        if length <= 0:
+            return self.error(400, 'Image request body is required')
         headers['Content-Type'] = self.headers.get('Content-Type', 'application/json')
         headers['Accept'] = self.headers.get('Accept', 'application/json')
         for name in ('Content-Encoding', 'x-codex-imagegen-request-id'):
@@ -1866,17 +1865,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.error(401, 'Local authorization required')
             require_inference_admission()
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= MAX_BODY:
-                return self.error(413, 'Request body exceeds the adapter limit')
+            if length <= 0:
+                return self.error(400, 'Request body is required')
             raw = self.rfile.read(length)
+            if len(raw) != length:
+                return self.error(400, 'Incomplete request body')
             encoding = self.headers.get('Content-Encoding', 'identity')
             if encoding == 'zstd':
                 from compression import zstd
-                raw = zstd.ZstdDecompressor().decompress(raw, max_length=MAX_BODY + 1)
+                raw = zstd.ZstdDecompressor().decompress(raw)
             elif encoding != 'identity':
                 return self.error(415, 'Unsupported content encoding')
-            if len(raw) > MAX_BODY:
-                return self.error(413, 'Decoded body exceeds the adapter limit')
             source = json.loads(raw)
             route = None
             if routed:

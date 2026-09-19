@@ -150,6 +150,81 @@ class NativeImagesTests(unittest.TestCase):
                 self.assertNotIn('X-model-harbor-token', request.headers)
                 self.assertEqual(opener.return_value.open.call_count, 1)
 
+    def test_inference_routes_forward_payloads_larger_than_the_removed_adapter_ceiling(self):
+        bridge.OPENROUTER_KEY = 'synthetic-key'
+        legacy_ceiling = 32 * 1024 * 1024
+        raw = json.dumps({'model': 'harbor/openrouter/fixture/coder', 'stream': False,
+                          'input': 'x' * legacy_ceiling}, separators=(',', ':')).encode()
+        self.assertGreater(len(raw), legacy_ceiling)
+        requests = []
+
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+
+        def open_request(request, **_):
+            requests.append(request)
+            if '/images/' in request.full_url:
+                return Response(b'{"data":[{"b64_json":"fixture"}]}')
+            return Response(b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = open_request
+            conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=15)
+            try:
+                conn.request('POST', '/harbor/v1/responses', body=raw,
+                             headers={'Authorization': 'Bearer synthetic-owner-token'})
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.read())['status'], 'completed')
+            finally:
+                conn.close()
+
+            conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=15)
+            try:
+                conn.request('POST', '/harbor/v1/images/generations', body=raw, headers={
+                    'X-Model-Harbor-Token': 'synthetic-owner-token',
+                    'Authorization': 'Bearer synthetic.jwt.token',
+                    'ChatGPT-Account-ID': 'fixture-account',
+                    'Content-Type': 'application/json'})
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.read())['data'][0]['b64_json'], 'fixture')
+            finally:
+                conn.close()
+
+        self.assertEqual(len(requests), 2)
+        self.assertGreater(len(requests[0].data), legacy_ceiling)
+        self.assertEqual(requests[1].data, raw)
+
+    def test_compressed_response_has_no_decoded_payload_ceiling(self):
+        from compression import zstd
+        bridge.OPENROUTER_KEY = 'synthetic-key'
+        legacy_ceiling = 32 * 1024 * 1024
+        source = json.dumps({'model': 'harbor/openrouter/fixture/coder', 'stream': False,
+                             'input': 'x' * legacy_ceiling}, separators=(',', ':')).encode()
+        compressed = zstd.compress(source)
+        self.assertLess(len(compressed), legacy_ceiling)
+
+        class Response(io.BytesIO):
+            status = 200
+            headers = {'Content-Type': 'application/json'}
+
+        with patch.object(bridge.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.return_value = Response(
+                b'{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}')
+            conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=15)
+            try:
+                conn.request('POST', '/harbor/v1/responses', body=compressed, headers={
+                    'Authorization': 'Bearer synthetic-owner-token', 'Content-Encoding': 'zstd'})
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.read())['status'], 'completed')
+            finally:
+                conn.close()
+
+        self.assertGreater(len(opener.return_value.open.call_args.args[0].data), legacy_ceiling)
+
     def test_image_request_requires_both_local_and_subscription_auth(self):
         for headers in [ {}, {'Authorization': 'Bearer synthetic-owner-token'},
                          {'X-Model-Harbor-Token': 'synthetic-owner-token', 'Authorization': 'Bearer sk-fixture'} ]:

@@ -12,6 +12,7 @@ import http.client
 import http.server
 import importlib.util
 import json
+import re
 from pathlib import Path
 import secrets
 import sys
@@ -24,6 +25,24 @@ class VerificationError(Exception):
     pass
 
 
+def load_gateway_control(support):
+    control_spec = importlib.util.spec_from_file_location(
+        'history_probe_control', support.with_name('gateway_control.py'))
+    control = importlib.util.module_from_spec(control_spec)
+    control_spec.loader.exec_module(control)
+    return control
+
+
+def installed_runtime_matches(control, port, token_path, expected_runtime_id):
+    _, runtime = control.owner_request('GET', '/harbor/status', b'', port, token_path)
+    runtime_id = runtime.get('runtime_id') if isinstance(runtime, dict) else None
+    if not isinstance(runtime_id, str) or not re.fullmatch('[0-9a-f]{64}', runtime_id):
+        raise VerificationError('Installed gateway did not provide a valid runtime identity.')
+    if runtime_id != expected_runtime_id:
+        raise VerificationError('Installed gateway runtime does not match the expected activation.')
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', required=True)
@@ -31,9 +50,14 @@ def main():
     parser.add_argument('--endpoint')
     parser.add_argument('--deployment', required=True)
     parser.add_argument('--effort', choices=['low', 'medium', 'high', 'xhigh'], required=True)
+    parser.add_argument('--expected-runtime-id')
     args = parser.parse_args()
     if not args.installed and not args.endpoint:
         parser.error('--endpoint is required unless --installed is used')
+    if args.expected_runtime_id and not args.installed:
+        parser.error('--expected-runtime-id requires --installed')
+    if args.expected_runtime_id and not re.fullmatch('[0-9a-f]{64}', args.expected_runtime_id):
+        parser.error('--expected-runtime-id must be a 64-character lowercase hexadecimal runtime ID')
     key = None
     if not args.installed:
         key = sys.stdin.buffer.read(4097).decode().strip()
@@ -45,7 +69,7 @@ def main():
     spec.loader.exec_module(bridge)
     endpoint = bridge.azure_endpoint(args.endpoint) if args.endpoint else None
     evidence = {'isolated': not args.installed, 'installed': args.installed,
-                'installed_runtime_changed': False,
+                'installed_runtime_matches_expected': None,
                 'deployment': args.deployment, 'effort': args.effort, 'cases': []}
     upstream_requests = []
     real_build_opener = bridge.urllib.request.build_opener
@@ -63,8 +87,12 @@ def main():
         root = Path(directory)
         server = thread = None
         if args.installed:
-            token = (Path.home() / '.codex/model-harbor-bridge-token').read_text().strip()
+            token_path = Path.home() / '.codex/model-harbor-bridge-token'
+            token = token_path.read_text().strip()
             port = 48118
+            if args.expected_runtime_id:
+                evidence['installed_runtime_matches_expected'] = installed_runtime_matches(
+                    load_gateway_control(support), port, token_path, args.expected_runtime_id)
         else:
             bridge.CONFIG_DIR = root
             bridge.TOKEN_PATH = root / 'token'

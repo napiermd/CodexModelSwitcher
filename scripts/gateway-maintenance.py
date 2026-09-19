@@ -33,6 +33,10 @@ class MaintenanceError(Exception):
     pass
 
 
+TRANSFERABLE_PROVIDERS = frozenset(('azure', 'openrouter', 'codex-subscription', 'baseten', 'grok-oauth'))
+PREFLIGHTED_PROVIDERS = frozenset(('azure', 'openrouter'))
+
+
 def atomic_json(path, value):
     path = Path(path)
     fd, temporary = tempfile.mkstemp(prefix='.maintenance-', dir=path.parent)
@@ -203,20 +207,24 @@ class Maintenance:
             if provider == 'azure':
                 connections[provider]['endpoint'] = item['baseURL']
             models.append('harbor/' + provider + '/' + item['models'][0]['id'])
+        preserved = []
         for row in self.record['ownership']['turns']:
             route = json.loads(row[1])
-            if route['provider'] not in ('azure', 'openrouter', 'codex-subscription'):
+            if route['provider'] not in TRANSFERABLE_PROVIDERS:
                 raise MaintenanceError('This maintenance version cannot transfer that provider safely.')
-            if route['provider'] in ('azure', 'openrouter'):
+            model = 'harbor/' + route['provider'] + '/' + route['model']
+            if route['provider'] in PREFLIGHTED_PROVIDERS:
                 if route['provider'] not in connections:
                     raise MaintenanceError('An owned route has no saved connection.')
-                model = 'harbor/' + route['provider'] + '/' + route['model']
                 if model not in models:
                     models.append(model)
+            elif model not in preserved:
+                preserved.append(model)
         if not connections:
             raise MaintenanceError('No saved API connection is available for candidate verification.')
         self.connections = connections
         self.record['required_models'] = models
+        self.record['preserved_unprobed_models'] = preserved
 
     def restore(self, port=None):
         status, identity = self.status(port)
@@ -353,10 +361,10 @@ class Maintenance:
         snapshot = journal_snapshot(self.state / 'ownership.sqlite')
         for row in snapshot['turns']:
             route = json.loads(row[1])
-            if route['provider'] not in ('azure', 'openrouter', 'codex-subscription'):
-                raise MaintenanceError('A newly owned provider was not covered by preflight.')
+            if route['provider'] not in TRANSFERABLE_PROVIDERS:
+                raise MaintenanceError('A newly owned provider cannot be transferred safely.')
             model = 'harbor/' + route['provider'] + '/' + route['model']
-            if route['provider'] != 'codex-subscription' and model not in self.record['required_models']:
+            if route['provider'] in PREFLIGHTED_PROVIDERS and model not in self.record['required_models']:
                 raise MaintenanceError('A newly owned API route was not verified during preflight.')
         self.save('paused', ownership=snapshot)
 

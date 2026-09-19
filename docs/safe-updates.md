@@ -69,7 +69,7 @@ Records and retained binaries live in `~/Library/Application Support/Model Harbo
 python3 -B scripts/gateway-maintenance.py --recover /absolute/path/to/maintenance.json
 ```
 
-Current scope is same-account Azure, OpenRouter, and Codex-subscription ownership. Other providers, changed binding algorithms, raced requests, pre-stopped clients, or incomplete route coverage abort before service replacement. This procedure preserves ongoing turns by pausing their request issuers; it does not infer that those turns have finished. Existing uncertain deliveries remain uncertain and are never replayed.
+Current scope transfers same-account Azure, OpenRouter, Codex-subscription, Baseten, and Grok OAuth ownership when the account-binding algorithm is unchanged. Azure and OpenRouter connections receive live preflight and restoration probes. Codex subscription, Baseten, and Grok OAuth keep their exact saved route/account binding but are not called during maintenance because their credentials arrive per request or through their existing external sign-in helpers. Unknown providers, changed binding algorithms, raced requests, pre-stopped clients, or incomplete Azure/OpenRouter route coverage abort before service replacement. This procedure preserves ongoing turns by pausing their request issuers; it does not infer that those turns have finished. Existing uncertain deliveries remain uncertain and are never replayed.
 
 ## Required runtime design
 

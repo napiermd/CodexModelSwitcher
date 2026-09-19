@@ -41,6 +41,8 @@ AUTH_LOCK = threading.Lock()
 CONFIG_DIR = pathlib.Path(os.environ.get('MODEL_HARBOR_CONFIG_DIR', str(pathlib.Path.home() / '.codex')))
 ROUTE_LOCK = threading.RLock()
 TURN_ROUTES = OrderedDict()
+OPAQUE_HISTORY = OrderedDict()
+OPAQUE_HISTORY_LIMIT = 100000
 LAST_ROUTE = None
 TASK_REPAIRS = None
 PROVIDER_ACTIVITY = {}
@@ -169,6 +171,46 @@ def reject_provider_credentials(route, headers):
         elif route['provider'] == 'azure' and AZURE_CONNECTION and headers.get('api-key') == AZURE_CONNECTION['key']:
             AZURE_CONNECTION = None
             READINESS.invalidate('azure')
+
+
+def azure_history_binding(route, base):
+    value = json.dumps([route['provider'], route['model'], base], separators=(',', ':')).encode()
+    return hashlib.sha256(value).hexdigest()
+
+
+def opaque_history_digest(item):
+    if not isinstance(item, dict) or not isinstance(item.get('encrypted_content'), str):
+        return None
+    value = json.dumps([item.get('type'), item['encrypted_content']],
+                       ensure_ascii=False, separators=(',', ':')).encode()
+    return hashlib.sha256(value).hexdigest()
+
+
+def knows_opaque_history(binding, item):
+    digest = opaque_history_digest(item)
+    if digest is None or binding is None:
+        return False
+    runtime = RUNTIME
+    if runtime is not None:
+        return runtime.knows_opaque_history(binding, digest)
+    with ROUTE_LOCK:
+        return (binding, digest) in OPAQUE_HISTORY
+
+
+def remember_opaque_history(binding, item):
+    digest = opaque_history_digest(item)
+    if digest is None or binding is None:
+        return
+    runtime = RUNTIME
+    if runtime is not None:
+        runtime.remember_opaque_history(binding, digest)
+        return
+    with ROUTE_LOCK:
+        key = (binding, digest)
+        OPAQUE_HISTORY[key] = True
+        OPAQUE_HISTORY.move_to_end(key)
+        while len(OPAQUE_HISTORY) > OPAQUE_HISTORY_LIMIT:
+            OPAQUE_HISTORY.popitem(last=False)
 
 
 def request_binding(route, headers, base, request):
@@ -764,7 +806,8 @@ def routed_request(source, headers, *, track_turn=True):
     else:
         upstream_headers = oauth_headers()
         base = OAUTH_BASE
-    translation = (AzureTranslation(source) if route['provider'] == 'azure' else
+    translation = (AzureTranslation(source, history_binding=azure_history_binding(route, base))
+                   if route['provider'] == 'azure' else
                    Translation(source, native_tools=route['provider'] == 'codex-subscription'))
     return translation, upstream_headers, base, route
 
@@ -1288,9 +1331,22 @@ class Translation:
 
 
 class AzureTranslation(Translation):
+    def __init__(self, source, native_tools=False, history_binding=None):
+        self.history_binding = history_binding
+        super().__init__(source, native_tools=native_tools)
+
     def history_items(self, source):
-        # Ciphertext origin is unknown locally. Azure validates it; never repair a rejection by dropping history.
-        return copy.deepcopy(source)
+        result = []
+        for item in source:
+            protected = item.get('type') in ('reasoning', 'compaction') or opaque_history_digest(item) is not None
+            if protected and not knows_opaque_history(self.history_binding, item):
+                continue
+            result.append(copy.deepcopy(item))
+        return result
+
+    def output_item(self, item):
+        remember_opaque_history(self.history_binding, item)
+        return super().output_item(item)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

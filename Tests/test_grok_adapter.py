@@ -75,7 +75,9 @@ class TranslationTests(unittest.TestCase):
         source = {'tools': [], 'tool_choice': {'type': 'function', 'name': 'exec'}, 'input': [
             reasoning, {'type': 'custom_tool_call_output', 'id': 'ctco_fixture',
                         'call_id': 'call_fixture', 'output': 'synthetic-result'}]}
-        translated = module.AzureTranslation(source).request
+        binding = 'a' * 64
+        module.remember_opaque_history(binding, reasoning)
+        translated = module.AzureTranslation(source, history_binding=binding).request
         self.assertNotIn('tool_choice', translated)
         self.assertEqual(translated['input'], [reasoning, {'type': 'function_call_output',
                          'call_id': 'call_fixture', 'output': 'synthetic-result'}])

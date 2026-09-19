@@ -89,8 +89,67 @@ class RouteReadiness:
             return records
 
 
+class OpaqueHistoryRegistry:
+    """Bounded private provenance for provider-encrypted response items."""
+    def __init__(self, directory, max_items=100000):
+        if type(max_items) is not int or max_items < 1:
+            raise ValueError('Opaque history registry requires a positive item limit')
+        self.path = Path(directory) / 'opaque-history.sqlite'
+        self.max_items = max_items
+        self.lock = threading.RLock()
+        self.db = None
+        for suffix in ('', '-wal', '-shm', '-journal'):
+            if Path(str(self.path) + suffix).is_symlink():
+                raise ValueError('Opaque history registry must not be a symlink')
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
+        self.path.chmod(0o600)
+        self.db.execute('PRAGMA synchronous=FULL')
+        version = self.db.execute('PRAGMA user_version').fetchone()[0]
+        if version not in (0, 1):
+            self.close()
+            raise ValueError('Unsupported opaque history registry version')
+        with self.db:
+            self.db.executescript('''
+              CREATE TABLE IF NOT EXISTS items (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding TEXT NOT NULL, digest TEXT NOT NULL,
+                UNIQUE(binding, digest));
+              PRAGMA user_version=1;
+            ''')
+
+    @staticmethod
+    def validate(binding, digest):
+        if (not isinstance(binding, str) or not re.fullmatch('[a-f0-9]{64}', binding)
+                or not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest)):
+            raise ValueError('Opaque history provenance must use digests')
+
+    def contains(self, binding, digest):
+        self.validate(binding, digest)
+        with self.lock:
+            return self.db.execute(
+                'SELECT 1 FROM items WHERE binding=? AND digest=?',
+                (binding, digest)).fetchone() is not None
+
+    def remember(self, binding, digest):
+        self.validate(binding, digest)
+        with self.lock, self.db:
+            self.db.execute('INSERT OR IGNORE INTO items(binding,digest) VALUES(?,?)',
+                            (binding, digest))
+            count = self.db.execute('SELECT COUNT(*) FROM items').fetchone()[0]
+            overflow = count - self.max_items
+            if overflow > 0:
+                self.db.execute('DELETE FROM items WHERE sequence IN '
+                                '(SELECT sequence FROM items ORDER BY sequence LIMIT ?)',
+                                (overflow,))
+
+    def close(self):
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+
+
 class GatewayRuntime:
-    def __init__(self, directory, runtime_id, boot_id, max_turns=100000):
+    def __init__(self, directory, runtime_id, boot_id, max_turns=100000, max_history_items=100000):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.directory.is_symlink() or self.directory.stat().st_mode & 0o077:
@@ -98,6 +157,7 @@ class GatewayRuntime:
         self.runtime_id, self.boot_id = runtime_id, boot_id
         self.max_turns = max_turns
         self.lock = threading.RLock()
+        self.history = None
         self.lease = os.open(self.directory / 'gateway.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -128,6 +188,7 @@ class GatewayRuntime:
             with self.db:
                 self.db.execute('UPDATE turns SET uncertain=1 WHERE id IN (SELECT turn_id FROM requests WHERE finished=0)')
                 self.db.execute('UPDATE requests SET finished=1 WHERE finished=0')
+            self.history = OpaqueHistoryRegistry(self.directory, max_items=max_history_items)
         except BaseException:
             self.close()
             raise
@@ -255,6 +316,12 @@ class GatewayRuntime:
             if untracked:
                 raise ValueError('Saved credentials cannot be restored after untracked admissions. Their original account binding is unavailable; existing ownership was preserved.')
 
+    def knows_opaque_history(self, binding, digest):
+        return self.history.contains(binding, digest)
+
+    def remember_opaque_history(self, binding, digest):
+        self.history.remember(binding, digest)
+
     def status(self):
         with self.lock:
             return {'protocol_version': PROTOCOL_VERSION, 'runtime_id': self.runtime_id,
@@ -268,6 +335,9 @@ class GatewayRuntime:
                     'retirement_allowed': False, 'update_block_reason': LIFECYCLE_GATE}
 
     def close(self):
+        if self.history is not None:
+            self.history.close()
+            self.history = None
         if self.db is not None:
             self.db.close()
             self.db = None

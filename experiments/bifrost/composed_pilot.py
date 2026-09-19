@@ -490,7 +490,9 @@ def single_case(case, gateway, control, baseline):
         checks['retry_after_forwarded'] = {k.lower(): v for k, v in result.get('headers', {}).items()}.get('retry-after') == '7'
     records = control.snapshot()['requests'][baseline:]
     if case == 'invalid_encrypted':
-        checks['invalid_history_sent_intact'] = len(records) == 1 and records[0]['body']['input'] == body['input']
+        portable = [item for item in body['input'] if item.get('type') not in ('reasoning', 'compaction')
+                    and 'encrypted_content' not in item]
+        checks['unknown_history_removed'] = len(records) == 1 and records[0]['body']['input'] == portable
     return evidence(case, checks, [body], results, records, {key: 1})
 
 

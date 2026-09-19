@@ -75,6 +75,10 @@ _ledger_spec = importlib.util.spec_from_file_location('harbor_usage_ledger', pat
 _ledger_module = importlib.util.module_from_spec(_ledger_spec)
 _ledger_spec.loader.exec_module(_ledger_module)
 USAGE_LEDGER = _ledger_module
+_estimate_spec = importlib.util.spec_from_file_location('harbor_usage_estimate', pathlib.Path(__file__).with_name('usage_estimate.py'))
+_estimate_module = importlib.util.module_from_spec(_estimate_spec)
+_estimate_spec.loader.exec_module(_estimate_module)
+USAGE_ESTIMATE = _estimate_module
 
 
 _CATALOG_VERSION = None
@@ -2150,12 +2154,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         'at': time.time()})
             if activity_started:
                 provider_activity_finish(route, activity_status, activity_http_status)
+                usage = translation.usage
+                usage_input = None
+                if isinstance(usage, dict):
+                    usage_input = usage.get('input_tokens')
+                estimated = None
+                if activity_status == 'completed' and (not isinstance(usage, dict) or not usage_input):
+                    estimated = USAGE_ESTIMATE.estimate_input_tokens(
+                        translation.request if hasattr(translation, 'request') else None,
+                        model=route['model'])
                 USAGE_LEDGER.record({'provider': route['provider'], 'model': route['model'],
                     'status': activity_status, 'http_status': activity_http_status,
                     'failure_class': failure_kind or (azure_budget.stop_reason if azure_budget else None),
                     'stream': bool(translation.request.get('stream')) if hasattr(translation, 'request') else None,
                     'duration_seconds': time.monotonic() - request_started_at,
-                    'usage': translation.usage})
+                    'usage': usage, 'estimated': estimated})
             if metrics_handle is not None:
                 metric_state = ('completed' if activity_status == 'completed' else
                                 'cancelled' if activity_status == 'cancelled' else

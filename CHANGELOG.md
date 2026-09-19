@@ -4,6 +4,7 @@ This tracks changes to the source preview. It does not announce a notarized inst
 
 ## Unreleased
 
+- Azure now forwards encrypted reasoning only to the exact Azure resource and deployment that produced it. Cross-provider ciphertext is removed before JSON or streamed dispatch, while portable messages and tool-result links remain.
 - Fixed OpenRouter Fable 5.1 tool-request 404s by using normal endpoint selection in inference and saved-connection verification. Added a live synthetic tool round trip and HTTP regression coverage. See [verification](docs/verification/openrouter-tools.md).
 - Task-repair batches now report loaded and invalid tasks individually and continue repairing other eligible tasks. Added a Codex 0.150.1 end-to-end check for the unsupported Harbor model error during remote compaction, followed by provider repair, successful compaction, and continuation. README and recovery docs distinguish this saved-provider mismatch from tool-choice validation failures.
 

@@ -59,7 +59,11 @@ Azure inference keys do not provide a Harbor billing integration. Usage shows th
 
 ## Continuing a task from another provider
 
-Harbor replays the conversation text, tool calls, and tool results when you switch to Azure. It removes provider-owned item IDs from inline history while preserving each `call_id` that links a tool result to its call. This also applies when Codex custom tool results are converted to standard function results; a `ctco_` ID must not be forwarded on the converted item. No saved task history is rewritten.
+Harbor replays portable conversation text, tool calls, and tool results when you switch to Azure. It removes provider-owned item IDs from inline history while preserving each `call_id` that links a tool result to its call. This also applies when Codex custom tool results are converted to standard function results; a `ctco_` ID must not be forwarded on the converted item.
+
+Encrypted reasoning is provider-owned. Harbor forwards it only when it was previously returned by the same Azure resource and deployment. Encrypted items from Codex subscription, another provider, another Azure resource, or another Azure deployment are removed before dispatch. Same-binding Azure encrypted reasoning is retained unchanged so tool continuations can use it. The registry stores only bounded SHA-256 provenance digests, not ciphertext or conversation content, and survives gateway restarts. API-key rotation on the same resource does not invalidate that provenance.
+
+No saved task history is rewritten. The first request after an upgrade that introduces provenance tracking drops older unregistered encrypted items conservatively while retaining the portable history.
 
 
 ## Staged stream admission candidate

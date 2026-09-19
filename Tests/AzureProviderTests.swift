@@ -135,7 +135,13 @@ final class AzureProviderTests: XCTestCase {
         var data = AppData.empty
         data.services = [CodexService(id: "azure", name: "Azure OpenAI", baseURL: "https://fixture.openai.azure.com/openai/v1",
                                      envKey: "AZURE_OPENAI_API_KEY", apiKey: "fixture-secret", models: [.init(id: model.name, name: model.name)], catalogPath: temp.path)]
-        let raw = try LiveRouting.catalog(in: data)
+        let native = Data(#"{"models":[{"slug":"gpt-5.6-sol","context_window":272000,"max_context_window":272000}]}"#.utf8)
+        func catalog() throws -> Data {
+            try LiveRouting.catalogCandidate(in: data) { url in
+                url.lastPathComponent == "models_cache.json" ? native : try Data(contentsOf: url)
+            }.data
+        }
+        let raw = try catalog()
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
         let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
         XCTAssertEqual(entries.first?["slug"] as? String, "harbor/azure/coding-deploy")
@@ -166,7 +172,13 @@ final class AzureProviderTests: XCTestCase {
                          envKey: "", apiKey: "", models: [.init(id: "other-model", name: "Other")], catalogPath: temp.path)
         ], selectedModel: nil, legacyModel: .init(serviceID: "azure", modelID: "gpt-5.6-sol"))
         data.modelPicker.hiddenModels.insert("harbor/azure/custom-deployment")
-        let raw = try LiveRouting.catalog(in: data)
+        let native = Data(#"{"models":[{"slug":"gpt-5.6-sol","context_window":272000,"max_context_window":272000}]}"#.utf8)
+        func catalog() throws -> Data {
+            try LiveRouting.catalogCandidate(in: data) { url in
+                url.lastPathComponent == "models_cache.json" ? native : try Data(contentsOf: url)
+            }.data
+        }
+        let raw = try catalog()
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
         let entries = try XCTUnwrap(object["models"] as? [[String: Any]])
         XCTAssertEqual(entries.count, 4)
@@ -184,6 +196,6 @@ final class AzureProviderTests: XCTestCase {
                        "harbor/azure/gpt-5.6-sol")
         XCTAssertEqual(entries.first { $0["slug"] as? String == "harbor/baseten/other-model" }?["auto_review_model_override"] as? String,
                        "provider-review-model")
-        XCTAssertEqual(try LiveRouting.catalog(in: data), raw)
+        XCTAssertEqual(try catalog(), raw)
     }
 }

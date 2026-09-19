@@ -17,7 +17,12 @@ final class ModelPickerTests: XCTestCase {
     }
 
     private func entries(_ data: AppData) throws -> [[String: Any]] {
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: LiveRouting.catalog(in: data)) as? [String: Any])
+        let native = Data(#"{"models":[]}"#.utf8)
+        let candidate = try LiveRouting.catalogCandidate(in: data) { url in
+            XCTAssertEqual(url.lastPathComponent, "models_cache.json")
+            return native
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: candidate.data) as? [String: Any])
         return try XCTUnwrap(json["models"] as? [[String: Any]])
     }
 

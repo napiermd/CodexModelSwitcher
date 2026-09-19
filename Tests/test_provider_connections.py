@@ -24,7 +24,7 @@ class ProviderConnectionsTests(unittest.TestCase):
         token = self.root / 'token'
         token.write_text('synthetic-owner-token')
         (self.root / 'model-switcher.json').write_text(json.dumps({'services': [{'id': 'openrouter', 'models': [{'id': 'fixture/coder'}]}]}))
-        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {}), ('READINESS', bridge._runtime_module.RouteReadiness()), ('REQUEST_METRICS', bridge._metrics_module.Recorder()), ('REQUEST_METRICS_ENABLED', True)]:
+        for name, value in [('TOKEN_PATH', token), ('CONFIG_DIR', self.root), ('OPENROUTER_KEY', ''), ('PROVIDER_ACTIVITY', {}), ('TURN_ROUTES', {}), ('OPAQUE_HISTORY', bridge.OrderedDict()), ('READINESS', bridge._runtime_module.RouteReadiness()), ('REQUEST_METRICS', bridge._metrics_module.Recorder()), ('REQUEST_METRICS_ENABLED', True)]:
             patcher = patch.object(bridge, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
